@@ -88,12 +88,23 @@ export interface SpeechOutputOptions {
   lang?: string; // Default: 'ru-RU'
   style?: string; // Style prompt for Gemini TTS
   model?: string; // Specific TTS model
+  timbreId?: PixelTimbreId;
+  forceRefresh?: boolean;
   messageId?: string;
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (err: Error) => void;
   /** Invoked if execution fell back to browser TTS */
   onFallbackUsed?: (reason: string) => void;
+  /** Invoked when audio metadata and provider resolution is confirmed */
+  onMetaResolved?: (meta: {
+    provider: 'gemini' | 'browser';
+    voice: string;
+    model?: string;
+    timbre?: string;
+    fromCache?: boolean;
+    isFallback?: boolean;
+  }) => void;
 }
 
 /**

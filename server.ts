@@ -2465,17 +2465,19 @@ async function startServer() {
     mimeType: string;
     model: string;
     voice: string;
+    timbre?: string;
     serviceTier: string;
     createdAt: number;
   }
 
   const ttsAudioCache = new Map<string, TtsCacheItem>();
-  const MAX_TTS_CACHE_ITEMS = 150;
+  const MAX_TTS_CACHE_ITEMS = 200;
   const TTS_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
   app.post('/api/voice/tts', async (req: Request, res: Response) => {
     try {
-      const { text, voice, style, model } = req.body || {};
+      const { text, voice, style, model, timbreId, forceRefresh, noCache } =
+        req.body || {};
       const cleanText = typeof text === 'string' ? text.trim() : '';
       if (!cleanText) {
         return res.status(400).json({ error: 'Текст для синтеза речи пуст' });
@@ -2493,21 +2495,28 @@ async function startServer() {
         typeof model === 'string' && model.trim()
           ? model.trim()
           : 'gemini-3.8-flash-lite-tts';
+      const requestedTimbre =
+        typeof timbreId === 'string' && timbreId.trim()
+          ? timbreId.trim()
+          : 'bright';
       const requestedStyle =
         typeof style === 'string' && style.trim()
           ? style.trim()
           : 'Естественная русская разговорная речь. Чуть более высокий, светлый, лёгкий и мягкий регистр. Приветливый, открытый, воодушевляющий тон, без искусственности и без писклявости.';
 
-      // Generate robust SHA-256 cache key including text, model, voice and style
+      const bypassCache = Boolean(noCache || forceRefresh);
+      const CACHE_GENERATION_VERSION = 'v4_real_prosody';
+
+      // Generate robust SHA-256 cache key including version, text, model, voice, timbreId and style
       const cacheKey = crypto
         .createHash('sha256')
         .update(
-          `${cleanText}::${requestedModel}::${requestedVoice}::${requestedStyle}::audio/wav`
+          `${CACHE_GENERATION_VERSION}::${cleanText}::${requestedModel}::${requestedVoice}::${requestedTimbre}::${requestedStyle}::audio/wav`
         )
         .digest('hex');
 
-      // Check cache first (saves quota, eliminates latency, zero quota burn)
-      const cached = ttsAudioCache.get(cacheKey);
+      // Check cache first if not explicitly bypassing (saves quota, eliminates latency, zero quota burn)
+      const cached = !bypassCache ? ttsAudioCache.get(cacheKey) : null;
       const now = Date.now();
       if (cached) {
         if (now - cached.createdAt < TTS_CACHE_TTL_MS) {
@@ -2517,6 +2526,7 @@ async function startServer() {
             mimeType: cached.mimeType,
             model: cached.model,
             voice: cached.voice,
+            timbre: cached.timbre || requestedTimbre,
             serviceTier: cached.serviceTier,
             fromCache: true,
           });
@@ -2568,6 +2578,7 @@ async function startServer() {
         mimeType: audio.mime_type || 'audio/wav',
         model: interaction.model || requestedModel,
         voice: requestedVoice,
+        timbre: requestedTimbre,
         serviceTier: interaction.service_tier || 'standard',
         createdAt: now,
       };
@@ -2591,6 +2602,7 @@ async function startServer() {
       res.json({
         success: true,
         ...payload,
+        fromCache: false,
       });
     } catch (err: unknown) {
       const rawMsg = err instanceof Error ? err.message : String(err || '');
@@ -2607,8 +2619,10 @@ async function startServer() {
           `[TTS Rate Limit] Gemini TTS quota reached: ${rawMsg}`
         );
         return res.status(429).json({
-          error: rawMsg || 'Лимит запросов к Gemini TTS API исчерпан. Используется встроенный синтез браузера.',
+          error:
+            'Бесплатная квота Gemini TTS (10 запросов/день) исчерпана. Используется встроенный синтез речи браузера.',
           code: 'RATE_LIMIT',
+          fallbackAvailable: true,
         });
       }
 

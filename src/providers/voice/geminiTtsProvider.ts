@@ -72,6 +72,8 @@ export class GeminiTtsOutputProvider implements ISpeechOutputProvider {
           voice: voiceId,
           style,
           model,
+          timbreId: options?.timbreId,
+          forceRefresh: Boolean(options?.forceRefresh),
         }),
       });
 
@@ -95,6 +97,15 @@ export class GeminiTtsOutputProvider implements ISpeechOutputProvider {
       if (controller.signal.aborted) {
         return;
       }
+
+      options?.onMetaResolved?.({
+        provider: 'gemini',
+        voice: data.voice || voiceId,
+        model: data.model || model,
+        timbre: data.timbre || options?.timbreId,
+        fromCache: Boolean(data.fromCache),
+        isFallback: false,
+      });
 
       const mimeType = data.mimeType || 'audio/wav';
       const audioUrl = `data:${mimeType};base64,${data.audioBase64}`;

@@ -79,6 +79,10 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
   const [selectedVoice, setSelectedVoice] = useState<string>(() => {
     return voiceManager.getSettings().selectedLiveVoice || 'Kore';
   });
+  const [connectedVoice, setConnectedVoice] = useState<string>(() => {
+    return voiceManager.getSettings().selectedLiveVoice || 'Kore';
+  });
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [sessionElapsedSec, setSessionElapsedSec] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -111,21 +115,7 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
     return () => clearInterval(timer);
   }, [isOpen, liveState, sessionStartTime]);
 
-  // Initialize live session when modal opens
-  useEffect(() => {
-    if (!isOpen) return;
-
-    // Immediately pause standby wake word listener to free the audio input device cleanly
-    wakeWordManager.pauseForLiveMode();
-
-    let isMounted = true;
-    initialTurnsCountRef.current = 0;
-    setErrorMessage(null);
-    setSessionStartTime(Date.now());
-    setSessionElapsedSec(0);
-    setIsMicMuted(false);
-    setIsPaused(false);
-
+  const startLiveSession = async (voiceToUse: string, isReconnection = false) => {
     // Filter relevant memories for the active school or shared personal preferences
     const relevantMemories = companionMemory
       .filter((m) => !m.schoolId || m.schoolId === activeSchool)
@@ -149,55 +139,87 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
         status: t.status,
       }));
 
-    // Start Live Client session with initial greeting if triggered by wake word
-    geminiLiveClient
-      .startSession({
-        schoolId: activeSchool,
-        voiceName: selectedVoice,
-        initialWakeGreeting: Boolean(triggeredByWakeWord),
-        pixelContext: {
-          activeSchool,
-          schoolName: schoolConfig.name,
-          relevantMemories,
-          activeTasks,
+    await geminiLiveClient.startSession({
+      schoolId: activeSchool,
+      voiceName: voiceToUse,
+      initialWakeGreeting: isReconnection ? false : Boolean(triggeredByWakeWord),
+      pixelContext: {
+        activeSchool,
+        schoolName: schoolConfig.name,
+        relevantMemories,
+        activeTasks,
+      },
+      callbacks: {
+        onStateChange: (newState, meta) => {
+          setLiveState(newState);
+          setStateDetail(meta?.detail || '');
+          if (newState === 'error' && meta?.detail) {
+            setErrorMessage(meta.detail);
+          }
         },
-        callbacks: {
-          onStateChange: (newState, meta) => {
-            if (!isMounted) return;
-            setLiveState(newState);
-            setStateDetail(meta?.detail || '');
-            if (newState === 'error' && meta?.detail) {
-              setErrorMessage(meta.detail);
-            }
-          },
-          onTranscriptUpdate: (updated) => {
-            if (!isMounted) return;
-            setTranscripts(updated);
-          },
-          onInterrupted: () => {
-            if (!isMounted) return;
-            setLiveState('interrupted');
-          },
-          onError: (err) => {
-            if (!isMounted) return;
-            setErrorMessage(err.message);
-          },
+        onTranscriptUpdate: (updated) => {
+          setTranscripts(updated);
         },
-      })
-      .catch((err) => {
-        if (!isMounted) return;
-        setErrorMessage(err.message);
-      });
+        onInterrupted: () => {
+          setLiveState('interrupted');
+        },
+        onError: (err) => {
+          setErrorMessage(err.message);
+        },
+      },
+    });
+
+    setConnectedVoice(voiceToUse);
+  };
+
+  // Initialize live session when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+
+    // Immediately pause standby wake word listener to free the audio input device cleanly
+    wakeWordManager.pauseForLiveMode();
+
+    initialTurnsCountRef.current = 0;
+    setErrorMessage(null);
+    setSessionStartTime(Date.now());
+    setSessionElapsedSec(0);
+    setIsMicMuted(false);
+    setIsPaused(false);
+
+    const freshVoice = voiceManager.getSettings().selectedLiveVoice || 'Kore';
+    setSelectedVoice(freshVoice);
+
+    startLiveSession(freshVoice, false).catch((err) => {
+      setErrorMessage(err.message);
+    });
 
     return () => {
-      isMounted = false;
       geminiLiveClient.stopSession();
       // Resume standby listening cleanly after live mode closes
       wakeWordManager.resumeAfterLiveMode();
     };
-  }, [isOpen, activeSchool, selectedVoice, triggeredByWakeWord]);
+  }, [isOpen, activeSchool, triggeredByWakeWord]);
 
   if (!isOpen) return null;
+
+  const handleSelectLiveVoice = (newVoice: string) => {
+    setSelectedVoice(newVoice);
+    voiceManager.updateSettings({ selectedLiveVoice: newVoice });
+  };
+
+  const handleReconnectWithNewVoice = async (voiceToUse: string) => {
+    setIsReconnecting(true);
+    setErrorMessage(null);
+    try {
+      geminiLiveClient.stopSession();
+      await startLiveSession(voiceToUse, true);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(`Ошибка переподключения с голосом ${voiceToUse}: ${msg}`);
+    } finally {
+      setIsReconnecting(false);
+    }
+  };
 
   const handleToggleMute = () => {
     const next = !isMicMuted;
@@ -294,10 +316,23 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
                   </span>
                 )}
               </div>
-              <div className="text-[11px] text-slate-400 flex items-center gap-2">
-                <span>Gemini Live 16/24 кГц</span>
+              <div className="text-[11px] text-slate-400 flex items-center gap-2 flex-wrap">
+                <span>Gemini Live</span>
                 <span>·</span>
-                <span>Голос: {selectedVoice}</span>
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <span className="text-slate-400">Голос:</span>
+                  <select
+                    value={selectedVoice}
+                    onChange={(e) => handleSelectLiveVoice(e.target.value)}
+                    className="bg-slate-800 text-cyan-300 text-[11px] font-bold rounded px-1.5 py-0.5 border border-slate-700 hover:border-slate-600 focus:outline-none focus:border-[#00A8B5] cursor-pointer"
+                  >
+                    {GEMINI_LIVE_VOICES.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} ({v.toneRu})
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <span>·</span>
                 <span className="font-mono-tabular font-medium text-emerald-400">
                   {formatTimer(sessionElapsedSec)}
@@ -325,6 +360,36 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Voice Change Notice Banner with Reconnection Action */}
+        {connectedVoice !== selectedVoice && (
+          <div className="px-5 py-2.5 bg-amber-500/15 border-b border-amber-500/30 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3 animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <Info className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                Выбран новый голос: <b>{selectedVoice}</b>. В активном соединении звучит: <b>{connectedVoice}</b>. Новый голос применится при следующем звонке или переподключении.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleReconnectWithNewVoice(selectedVoice)}
+              disabled={isReconnecting}
+              className="px-3 py-1 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors shrink-0 shadow-xs"
+            >
+              {isReconnecting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Переподключение...</span>
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Переподключить сейчас</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
 
         {/* 2. Central Visualizer Sphere Area */}
         <div className="relative py-8 px-6 flex flex-col items-center justify-center border-b border-slate-800/60 bg-gradient-to-b from-slate-900 via-slate-900/90 to-slate-950">

@@ -27,7 +27,10 @@ import {
   PixelVoiceSettings,
   SpeechVoiceOption,
 } from '../types/voice';
-import { voiceManager } from '../providers/voice/voiceManager';
+import {
+  resolveBrowserPitchForTimbre,
+  voiceManager,
+} from '../providers/voice/voiceManager';
 
 interface PixelVoiceSettingsModalProps {
   isOpen: boolean;
@@ -48,6 +51,15 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
   // Live on-demand generation state
   const [isGeneratingLive, setIsGeneratingLive] = useState(false);
   const [liveTestError, setLiveTestError] = useState<string | null>(null);
+  const [liveTestResult, setLiveTestResult] = useState<{
+    provider: 'gemini' | 'browser_fallback';
+    voice: string;
+    timbre: string;
+    fromCache?: boolean;
+    model?: string;
+    adaptedPitch?: number;
+    notice?: string;
+  } | null>(null);
 
   // Audio player ref for auditioning comparison samples & live audio
   const sampleAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -144,6 +156,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
     voiceManager.stopSpeaking();
     setIsGeneratingLive(true);
     setLiveTestError(null);
+    setLiveTestResult(null);
 
     const activeTimbre =
       PIXEL_TIMBRE_OPTIONS.find((t) => t.id === settings.selectedTimbreId) ||
@@ -157,7 +170,9 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
           text: PIXEL_COMPARISON_PHRASE,
           voice: settings.selectedGeminiVoice || 'Aoede',
           style: activeTimbre.stylePrompt,
+          timbreId: activeTimbre.id,
           model: 'gemini-3.8-flash-lite-tts',
+          forceRefresh: true,
         }),
       });
 
@@ -169,6 +184,39 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
         } catch {
           // ignore json error
         }
+
+        // If fallback allowed and quota or server error occurred, use browser speech with adapted timbre pitch
+        if (
+          settings.allowBrowserFallback &&
+          voiceManager.getBrowserOutputProvider().isSupported()
+        ) {
+          const adaptedPitch = resolveBrowserPitchForTimbre(
+            settings.selectedTimbreId,
+            settings.pitch
+          );
+          setPlayingVoiceId('live_test');
+          setLiveTestResult({
+            provider: 'browser_fallback',
+            voice: settings.voiceURI ? 'Системный (выбранный)' : 'Системный (по умолчанию)',
+            timbre: activeTimbre.name,
+            adaptedPitch,
+            notice:
+              response.status === 429
+                ? 'Квота Gemini TTS (10 запросов/день на Free Tier) исчерпана. Сработал резервный браузерный синтез с адаптированной тональностью тембра.'
+                : `Сервер Gemini TTS вернул ошибку (${response.status}). Воспроизведён резервный браузерный синтез.`,
+          });
+
+          await voiceManager.getBrowserOutputProvider().speak(PIXEL_COMPARISON_PHRASE, {
+            voiceURI: settings.voiceURI,
+            rate: settings.rate,
+            pitch: adaptedPitch,
+            volume: settings.volume,
+            onEnd: () => setPlayingVoiceId(null),
+            onError: () => setPlayingVoiceId(null),
+          });
+          return;
+        }
+
         throw new Error(errMessage);
       }
 
@@ -176,6 +224,14 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
       if (!data?.audioBase64) {
         throw new Error('Пустой аудио-ответ от сервера');
       }
+
+      setLiveTestResult({
+        provider: 'gemini',
+        voice: data.voice || settings.selectedGeminiVoice || 'Aoede',
+        timbre: data.timbre || activeTimbre.name,
+        fromCache: Boolean(data.fromCache),
+        model: data.model || 'gemini-3.8-flash-lite-tts',
+      });
 
       const audioUrl = `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`;
       const audio = new Audio(audioUrl);
@@ -235,6 +291,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
     });
     setSettings(reset);
     setLiveTestError(null);
+    setLiveTestResult(null);
   };
 
   const ruBrowserVoices = browserVoices.filter((v) => v.isRussian);
@@ -401,6 +458,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
                           <button
                             type="button"
                             onClick={() => handlePlayTimbreSample(timbre)}
+                            title="Прослушать эталонную запись тембра"
                             className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors ${
                               isPlaying
                                 ? 'bg-amber-500 text-white hover:bg-amber-600'
@@ -415,7 +473,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
                             ) : (
                               <>
                                 <Play className="w-3 h-3 fill-current text-[#FFD700]" />
-                                <span>Образец</span>
+                                <span>Эталон тембра</span>
                               </>
                             )}
                           </button>
@@ -493,6 +551,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
                           <button
                             type="button"
                             onClick={() => handlePlayVoiceSample(v)}
+                            title="Прослушать эталонную запись студийного голоса"
                             className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
                               isPlaying
                                 ? 'bg-amber-500 text-white hover:bg-amber-600'
@@ -507,7 +566,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
                             ) : (
                               <>
                                 <Play className="w-3 h-3 fill-current text-[#FFD700]" />
-                                <span>Прослушать</span>
+                                <span>Эталон голоса</span>
                               </>
                             )}
                           </button>
@@ -528,16 +587,16 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
                 </div>
               </div>
 
-              {/* Part 3: Live API Test Generation (Explicit On-Demand) */}
+              {/* Part 3: Live API Test Generation (Explicit On-Demand with Cache Bypass) */}
               <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                       <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                      Живой тест через API на сервере
+                      Тестирование текущей связки (API)
                     </div>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Сгенерировать контрольную фразу с выбранным голосом (
+                      Синтезирует контрольную фразу с выбранным голосом (
                       <span className="font-semibold text-slate-700">
                         {settings.selectedGeminiVoice || 'Aoede'}
                       </span>
@@ -545,7 +604,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
                       <span className="font-semibold text-slate-700">
                         {activeTimbre.name}
                       </span>
-                      )
+                      ) с принудительным обходом кэша.
                     </p>
                   </div>
 
@@ -558,7 +617,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
                     {isGeneratingLive ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Генерация...</span>
+                        <span>Синтез...</span>
                       </>
                     ) : playingVoiceId === 'live_test' ? (
                       <>
@@ -568,18 +627,77 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
                     ) : (
                       <>
                         <Play className="w-3.5 h-3.5 fill-current text-amber-300" />
-                        <span>Тест через API</span>
+                        <span>Тест связки</span>
                       </>
                     )}
                   </button>
                 </div>
 
+                {/* Real-time Status Card showing what engine/voice/timbre is actually playing */}
+                {liveTestResult && (
+                  <div
+                    className={`p-2.5 rounded-lg border text-[11px] space-y-1 ${
+                      liveTestResult.provider === 'gemini'
+                        ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950'
+                        : 'bg-amber-50/80 border-amber-200 text-amber-950'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-bold flex items-center gap-1.5">
+                        <CheckCircle2
+                          className={`w-3.5 h-3.5 ${
+                            liveTestResult.provider === 'gemini'
+                              ? 'text-emerald-600'
+                              : 'text-amber-600'
+                          }`}
+                        />
+                        <span>
+                          {liveTestResult.provider === 'gemini'
+                            ? `Gemini Cloud TTS (${liveTestResult.model})`
+                            : 'Резервный синтез (Web SpeechSynthesis)'}
+                        </span>
+                      </div>
+                      <span
+                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                          liveTestResult.fromCache
+                            ? 'bg-slate-200 text-slate-700'
+                            : 'bg-emerald-100 text-emerald-800'
+                        }`}
+                      >
+                        {liveTestResult.fromCache
+                          ? 'Кэш TTS'
+                          : 'Свежий синтез (без кэша)'}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] opacity-90">
+                      <span>
+                        Голос: <b>{liveTestResult.voice}</b>
+                      </span>
+                      <span>
+                        Тембр: <b>{liveTestResult.timbre}</b>
+                      </span>
+                      {liveTestResult.adaptedPitch && (
+                        <span>
+                          Pitch браузера: <b>{liveTestResult.adaptedPitch.toFixed(2)}x</b>
+                        </span>
+                      )}
+                    </div>
+
+                    {liveTestResult.notice && (
+                      <p className="text-[10px] text-amber-800 pt-0.5 leading-snug">
+                        {liveTestResult.notice}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {liveTestError && (
-                  <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                  <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900 text-[11px] flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
                     <div>
-                      <div className="font-semibold">Ответ Gemini TTS API:</div>
-                      <div className="text-[10px] text-amber-800 mt-0.5">{liveTestError}</div>
+                      <div className="font-semibold">Ответ синтезатора речи:</div>
+                      <div className="text-[10px] text-rose-800 mt-0.5">{liveTestError}</div>
                     </div>
                   </div>
                 )}

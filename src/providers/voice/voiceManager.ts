@@ -24,6 +24,22 @@ import { cleanTextForSpeech } from '../../utils/speechTextCleaner';
 
 const VOICE_SETTINGS_STORAGE_KEY = 'kiber_renderia_pixel_voice_settings_v3';
 
+export function resolveBrowserPitchForTimbre(
+  timbreId: PixelVoiceSettings['selectedTimbreId'],
+  basePitch: number
+): number {
+  if (timbreId === 'natural') {
+    return Math.max(0.7, Math.min(1.2, basePitch * 0.95));
+  }
+  if (timbreId === 'bright') {
+    return Math.max(0.8, Math.min(1.4, basePitch * 1.1));
+  }
+  if (timbreId === 'high') {
+    return Math.max(0.9, Math.min(1.6, basePitch * 1.25));
+  }
+  return basePitch;
+}
+
 export class VoiceManager {
   private activeInputProvider: ISpeechInputProvider = browserSpeechInput;
   private currentSettings: PixelVoiceSettings;
@@ -183,6 +199,7 @@ export class VoiceManager {
           voiceURI,
           volume: s.volume,
           style: selectedTimbre.stylePrompt,
+          timbreId: s.selectedTimbreId,
           onStart: () => {
             this.updatePlaybackState({
               messageId,
@@ -230,7 +247,7 @@ export class VoiceManager {
                 messageId,
                 voiceURI: s.voiceURI,
                 rate: s.rate,
-                pitch: s.pitch,
+                pitch: resolveBrowserPitchForTimbre(s.selectedTimbreId, s.pitch),
                 volume: s.volume,
                 lang: 'ru-RU',
                 onStart: () => {
@@ -305,7 +322,7 @@ export class VoiceManager {
             messageId,
             voiceURI: s.voiceURI,
             rate: s.rate,
-            pitch: s.pitch,
+            pitch: resolveBrowserPitchForTimbre(s.selectedTimbreId, s.pitch),
             volume: s.volume,
             lang: 'ru-RU',
             onStart: () => {
@@ -355,7 +372,7 @@ export class VoiceManager {
         messageId,
         voiceURI: s.voiceURI,
         rate: s.rate,
-        pitch: s.pitch,
+        pitch: resolveBrowserPitchForTimbre(s.selectedTimbreId, s.pitch),
         volume: s.volume,
         lang: 'ru-RU',
         onStart: () => {
@@ -452,6 +469,10 @@ export class VoiceManager {
       status: 'idle',
       errorMessage: undefined,
     });
+  }
+
+  public stopAll(): void {
+    this.stopSpeaking();
   }
 
   public isSpeaking(): boolean {

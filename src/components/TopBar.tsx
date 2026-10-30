@@ -1,19 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertCircle,
   BookOpen,
-  CheckCircle2,
-  Headphones,
-  Info,
   Menu,
   MessageSquareText,
   Mic,
-  MicOff,
   PanelRight,
   Sliders,
-  Sparkles,
-  Volume2,
-  X,
 } from 'lucide-react';
 import { NavSection, SchoolId } from '../types/assistant';
 import { AGENT_MODES, SCHOOLS } from '../config/schoolsAndModes';
@@ -65,12 +57,68 @@ export const TopBar: React.FC<TopBarProps> = ({
   onToggleWakeWord,
 }) => {
   const [showMicInfo, setShowMicInfo] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const school = SCHOOLS[activeSchool];
   const isChatMode = isAgentModeSection(activeSection);
 
   const resolvedState: WakeWordState =
     wakeWordState || (isWakeWordListening ? 'standby_listening' : 'mic_muted');
   const currentWakeMeta = WAKE_WORD_STATE_META[resolvedState];
+
+  const isListeningActive =
+    resolvedState === 'standby_listening' || resolvedState === 'hearing_speech';
+
+  const statusMeta = useMemo(() => {
+    if (resolvedState === 'error' || resolvedState === 'unsupported') {
+      return {
+        label: 'Микрофон недоступен',
+        dotClass: 'bg-rose-500',
+        badgeClass: 'text-rose-700 bg-rose-50 border-rose-200',
+      };
+    }
+    if (isListeningActive) {
+      return {
+        label: 'Ожидает вызова',
+        dotClass: 'bg-emerald-500 animate-pulse',
+        badgeClass: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+      };
+    }
+    if (
+      resolvedState === 'wake_word_triggered' ||
+      resolvedState === 'connecting_live'
+    ) {
+      return {
+        label: 'Подключение...',
+        dotClass: 'bg-cyan-500 animate-ping',
+        badgeClass: 'text-cyan-700 bg-cyan-50 border-cyan-200',
+      };
+    }
+    return {
+      label: 'Ожидание выключено',
+      dotClass: 'bg-slate-400',
+      badgeClass: 'text-slate-600 bg-slate-100 border-slate-200',
+    };
+  }, [resolvedState, isListeningActive]);
+
+  useEffect(() => {
+    if (!showMicInfo) return;
+
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      if (
+        popoverRef.current &&
+        !popoverRef.current.contains(event.target as Node)
+      ) {
+        setShowMicInfo(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [showMicInfo]);
 
   return (
     <header className="sticky top-0 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6 py-2.5">
@@ -143,16 +191,113 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Zone 3: Quick Voice Actions & Right Panel Toggle */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Rich Standby Wake Word Indicator Pill */}
-          <button
-            type="button"
-            onClick={() => setShowMicInfo(true)}
-            title={`${currentWakeMeta.labelRu}: ${currentWakeMeta.descriptionRu}. Нажмите для управления.`}
-            className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${currentWakeMeta.badgeClass}`}
-          >
-            <span className={`w-2 h-2 rounded-full ${currentWakeMeta.dotClass}`} />
-            <span>{currentWakeMeta.labelRu}</span>
-          </button>
+          {/* Rich Standby Wake Word Indicator Pill with compact popover */}
+          <div className="relative" ref={popoverRef}>
+            <button
+              type="button"
+              onClick={() => setShowMicInfo((prev) => !prev)}
+              aria-expanded={showMicInfo}
+              title={`${statusMeta.label}. Нажмите для управления.`}
+              className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${currentWakeMeta.badgeClass}`}
+            >
+              <span className={`w-2 h-2 rounded-full ${currentWakeMeta.dotClass}`} />
+              <span>{statusMeta.label}</span>
+            </button>
+
+            {/* Compact Popover */}
+            {showMicInfo && (
+              <div
+                className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 p-3.5 z-50 text-slate-800 animate-in fade-in zoom-in-95 duration-100"
+              >
+                {/* 1. Status row */}
+                <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-lg bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+                      <Mic className="w-3.5 h-3.5" />
+                    </div>
+                    <span className="text-xs font-bold text-slate-800">
+                      Голосовой вызов
+                    </span>
+                  </div>
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusMeta.badgeClass}`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${statusMeta.dotClass}`} />
+                    <span>{statusMeta.label}</span>
+                  </span>
+                </div>
+
+                {/* 2. Switch row */}
+                <div className="flex items-center justify-between py-2.5 border-b border-slate-100">
+                  <div className="min-w-0 pr-2">
+                    <div className="text-xs font-semibold text-slate-700">
+                      Ожидание фразы «Пиксель»
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {isListeningActive
+                        ? 'Микрофон слушает ключевое слово'
+                        : 'Фоновое распознавание отключено'}
+                    </div>
+                  </div>
+                  {onToggleWakeWord && (
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={isListeningActive}
+                      onClick={onToggleWakeWord}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                        isListeningActive ? 'bg-emerald-600' : 'bg-slate-300'
+                      }`}
+                      title={
+                        isListeningActive
+                          ? 'Выключить ожидание'
+                          : 'Включить ожидание'
+                      }
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out mt-0.5 ml-0.5 ${
+                          isListeningActive ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  )}
+                </div>
+
+                {/* 3. Actions */}
+                <div className="pt-2.5 space-y-2">
+                  {onOpenLiveVoice && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMicInfo(false);
+                        onOpenLiveVoice();
+                      }}
+                      className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] transition-colors shadow-2xs cursor-pointer"
+                    >
+                      <Mic className="w-3.5 h-3.5 text-[#FFD700]" />
+                      <span>Поговорить</span>
+                    </button>
+                  )}
+
+                  {onOpenVoiceSettings && (
+                    <div className="flex justify-center pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMicInfo(false);
+                          onOpenVoiceSettings();
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                      >
+                        <Sliders className="w-3 h-3" />
+                        <span>Настройки голоса</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Prominent Live Voice Button: «Поговорить с Пикселем» */}
           {onOpenLiveVoice && (
@@ -232,153 +377,6 @@ export const TopBar: React.FC<TopBarProps> = ({
           )}
         </div>
       </div>
-
-      {/* Interactive Wake Word & Mic Status Dialog */}
-      {showMicInfo && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150"
-          onClick={() => setShowMicInfo(false)}
-        >
-          <div
-            className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden text-slate-800"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
-                  <Mic className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-white">
-                    Голосовой вызов Пикселя («Пиксель»)
-                  </h4>
-                  <p className="text-[10px] text-slate-400">
-                    Статус режима ожидания и микрофона
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowMicInfo(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="p-4 space-y-3.5 text-xs">
-              {/* Current Status Pill Card */}
-              <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-slate-500">
-                    Текущее состояние:
-                  </span>
-                  <span
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border ${currentWakeMeta.badgeClass}`}
-                  >
-                    <span
-                      className={`w-2 h-2 rounded-full ${currentWakeMeta.dotClass}`}
-                    />
-                    <span>{currentWakeMeta.labelRu}</span>
-                  </span>
-                </div>
-                <p className="text-xs text-slate-700 leading-relaxed">
-                  {wakeWordDetail || currentWakeMeta.descriptionRu}
-                </p>
-              </div>
-
-              {/* Trigger instructions */}
-              <div className="p-3 rounded-xl bg-cyan-50/70 border border-cyan-200/80 space-y-1.5">
-                <div className="text-[11px] font-bold text-cyan-950 flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5 text-[#00A8B5]" />
-                  <span>Как вызвать Пикселя голосом:</span>
-                </div>
-                <div className="text-xs text-cyan-900 leading-relaxed">
-                  Произнесите вслух в любой момент:{' '}
-                  <span className="font-bold font-mono text-cyan-950">
-                    «Пиксель»
-                  </span>
-                  .
-                </div>
-                <div className="text-[11px] text-cyan-800 leading-snug">
-                  Пиксель мгновенно откликнется: <strong>«Я тут, Анна!»</strong>{' '}
-                  и откроет живой диалог без нажатия лишних кнопок.
-                </div>
-                <div className="text-[10px] text-cyan-700 pt-1 border-t border-cyan-200/60">
-                  Также распознаются варианты: «Пиксель, ты тут?», «Пиксель,
-                  привет», «Пиксель, слушай», «Эй, Пиксель».
-                </div>
-              </div>
-
-              {/* Engine & Privacy Audit notice */}
-              <div className="p-2.5 rounded-xl bg-slate-100 border border-slate-200 text-[11px] text-slate-600 space-y-1">
-                <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                  <Info className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Движок распознавания речи (Audit):</span>
-                </div>
-                <p className="text-[10px] text-slate-500 leading-relaxed">
-                  Используется Web Speech API браузера (модель ru-RU Google Cloud).
-                  Фоновое аудио не сохраняется на сервере и не записывается.
-                  При сворачивании вкладки браузера микрофон автоматически
-                  деактивируется.
-                </p>
-              </div>
-            </div>
-
-            {/* Footer Buttons */}
-            <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2">
-              {onToggleWakeWord && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onToggleWakeWord();
-                  }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${
-                    resolvedState === 'standby_listening' ||
-                    resolvedState === 'hearing_speech'
-                      ? 'border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100'
-                      : 'border-emerald-300 bg-emerald-600 text-white hover:bg-emerald-700 shadow-2xs'
-                  }`}
-                >
-                  {resolvedState === 'standby_listening' ||
-                  resolvedState === 'hearing_speech'
-                    ? 'Отключить ожидание'
-                    : 'Включить ожидание'}
-                </button>
-              )}
-
-              <div className="flex items-center gap-2">
-                {onOpenVoiceSettings && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowMicInfo(false);
-                      onOpenVoiceSettings();
-                    }}
-                    className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 transition-colors"
-                  >
-                    Все настройки
-                  </button>
-                )}
-                {onOpenLiveVoice && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowMicInfo(false);
-                      onOpenLiveVoice();
-                    }}
-                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-[#00A8B5] text-white hover:bg-[#00929d] transition-colors shadow-2xs"
-                  >
-                    Открыть диалог
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </header>
   );
 };
