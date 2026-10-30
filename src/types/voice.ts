@@ -139,6 +139,7 @@ export interface PixelVoiceSettings {
   ttsProviderId: PixelTtsProviderId;
   selectedGeminiVoice: string; // 'Aoede' | 'Achernar' | 'Sulafat' | 'Vindemiatrix'
   selectedTimbreId: PixelTimbreId; // 'natural' | 'bright' | 'high'
+  selectedLiveVoice: string; // 'Kore' | 'Puck' | 'Zephyr' | 'Charon' | 'Fenrir'
   allowBrowserFallback: boolean; // whether to allow system speech fallback on quota/timeout
   autoSpeakNewReplies: boolean;
   voiceURI?: string;
@@ -146,6 +147,8 @@ export interface PixelVoiceSettings {
   rate: number; // 0.8 - 1.5
   pitch: number; // 0.8 - 1.2
   volume: number; // 0.1 - 1.0
+  wakeWordEnabled: boolean; // local wake word detection in browser
+  wakeWordSensitivity: 'normal' | 'high';
 }
 
 export const PIXEL_TIMBRE_OPTIONS: PixelTimbreOption[] = [
@@ -206,6 +209,130 @@ export const GEMINI_TTS_VOICES: GeminiVoiceSampleOption[] = [
   },
 ];
 
+export interface GeminiLiveVoiceOption {
+  id: string; // 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr'
+  name: string;
+  gender: 'female' | 'male' | 'neutral';
+  toneRu: string;
+  descriptionRu: string;
+}
+
+export const GEMINI_LIVE_VOICES: GeminiLiveVoiceOption[] = [
+  {
+    id: 'Kore',
+    name: 'Kore (Рекомендуется)',
+    gender: 'female',
+    toneRu: 'Тёплый, чистый, доброжелательный',
+    descriptionRu: 'Наиболее близок к живому тёплому стилю Пикселя для диалога на русском языке',
+  },
+  {
+    id: 'Puck',
+    name: 'Puck',
+    gender: 'neutral',
+    toneRu: 'Энергичный, лёгкий, подвижный',
+    descriptionRu: 'Живая, быстрая и непосредственная подача',
+  },
+  {
+    id: 'Zephyr',
+    name: 'Zephyr',
+    gender: 'female',
+    toneRu: 'Мягкий, спокойный, доверительный',
+    descriptionRu: 'Плавный, размеренный тон для комфортной рабочей беседы',
+  },
+  {
+    id: 'Charon',
+    name: 'Charon',
+    gender: 'male',
+    toneRu: 'Глубокий, авторитетный, спокойный',
+    descriptionRu: 'Низкий, уверенный мужской регистр',
+  },
+  {
+    id: 'Fenrir',
+    name: 'Fenrir',
+    gender: 'male',
+    toneRu: 'Чёткий, деловой, структурированный',
+    descriptionRu: 'Строгий и ясный тон для быстрого решения вопросов',
+  },
+];
+
+export type LiveVoiceState =
+  | 'idle'
+  | 'connecting'
+  | 'listening'
+  | 'thinking'
+  | 'speaking'
+  | 'paused'
+  | 'interrupted'
+  | 'error';
+
+export interface LiveVoiceStateMeta {
+  state: LiveVoiceState;
+  labelRu: string;
+  descriptionRu: string;
+  colorScheme: 'cyan' | 'emerald' | 'amber' | 'indigo' | 'rose' | 'slate';
+}
+
+export const LIVE_VOICE_STATE_META: Record<LiveVoiceState, LiveVoiceStateMeta> = {
+  idle: {
+    state: 'idle',
+    labelRu: 'Готов к разговору',
+    descriptionRu: 'Нажмите «Начать разговор» для прямого голосового диалога',
+    colorScheme: 'slate',
+  },
+  connecting: {
+    state: 'connecting',
+    labelRu: 'Подключение...',
+    descriptionRu: 'Инициализация WebSocket и аудиопотока Gemini Live 16 кГц',
+    colorScheme: 'indigo',
+  },
+  listening: {
+    state: 'listening',
+    labelRu: 'Слушаю вас, Анна...',
+    descriptionRu: 'Говорите свободно в естественном темпе. Паузы и перебивания поддерживаются',
+    colorScheme: 'emerald',
+  },
+  thinking: {
+    state: 'thinking',
+    labelRu: 'Пиксель думает...',
+    descriptionRu: 'Обработка запроса и формирование аудиоответа',
+    colorScheme: 'amber',
+  },
+  speaking: {
+    state: 'speaking',
+    labelRu: 'Пиксель говорит',
+    descriptionRu: 'Вы можете перебить Пикселя в любой момент — он сразу замолчит',
+    colorScheme: 'cyan',
+  },
+  paused: {
+    state: 'paused',
+    labelRu: 'Разговор на паузе',
+    descriptionRu: 'Микрофон временно отключён. Нажмите «Продолжить», чтобы возобновить',
+    colorScheme: 'amber',
+  },
+  interrupted: {
+    state: 'interrupted',
+    labelRu: 'Перебивание зафиксировано',
+    descriptionRu: 'Воспроизведение мгновенно остановлено, Пиксель снова слушает вас',
+    colorScheme: 'rose',
+  },
+  error: {
+    state: 'error',
+    labelRu: 'Ошибка соединения',
+    descriptionRu: 'Проверьте доступность сети или микрофона',
+    colorScheme: 'rose',
+  },
+};
+
+export type MessagePlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
+
+export interface MessagePlaybackState {
+  messageId: string | null;
+  status: MessagePlaybackStatus;
+  provider: 'gemini' | 'browser';
+  errorMessage?: string;
+  fallbackReason?: string;
+}
+
 export const PIXEL_COMPARISON_PHRASE =
   'Привет! Я Пиксель. Давай посмотрим, какие задачи сегодня самые важные, и решим, с чего лучше начать.';
 
@@ -215,16 +342,108 @@ export const GEMINI_TTS_COMPARISON_PHRASE =
 export const GEMINI_TTS_STANDARD_STYLE =
   'Естественная русская разговорная речь. Чуть более высокий, светлый, лёгкий и мягкий регистр. Приветливый, открытый, воодушевляющий тон, без искусственности и без писклявости.';
 
+/**
+ * Unified Standby Wake Word state machine
+ */
+export type WakeWordState =
+  | 'standby_listening'
+  | 'hearing_speech'
+  | 'wake_word_triggered'
+  | 'connecting_live'
+  | 'live_active'
+  | 'mic_muted'
+  | 'permission_denied'
+  | 'unsupported'
+  | 'error';
+
+export interface WakeWordStateMeta {
+  state: WakeWordState;
+  labelRu: string;
+  descriptionRu: string;
+  badgeClass: string;
+  dotClass: string;
+}
+
+export const WAKE_WORD_STATE_META: Record<WakeWordState, WakeWordStateMeta> = {
+  standby_listening: {
+    state: 'standby_listening',
+    labelRu: 'Ожидание: «Пиксель»',
+    descriptionRu: 'Фоновое распознавание активно. Скажите «Пиксель» в любом разделе для мгновенного вызова.',
+    badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-300',
+    dotClass: 'bg-emerald-500 animate-pulse',
+  },
+  hearing_speech: {
+    state: 'hearing_speech',
+    labelRu: 'Слышу речь...',
+    descriptionRu: 'Микрофон улавливает голос, идёт проверка ключевого слова...',
+    badgeClass: 'bg-teal-50 text-teal-800 border-teal-300',
+    dotClass: 'bg-teal-500 animate-ping',
+  },
+  wake_word_triggered: {
+    state: 'wake_word_triggered',
+    labelRu: 'Пиксель услышал!',
+    descriptionRu: 'Ключевое слово распознано. Открытие живого голосового диалога...',
+    badgeClass: 'bg-amber-50 text-amber-900 border-amber-300',
+    dotClass: 'bg-amber-500 animate-bounce',
+  },
+  connecting_live: {
+    state: 'connecting_live',
+    labelRu: 'Подключение к Live API...',
+    descriptionRu: 'Инициализация микрофона и прямого аудиопотока 16 кГц...',
+    badgeClass: 'bg-indigo-50 text-indigo-900 border-indigo-300',
+    dotClass: 'bg-indigo-500 animate-spin',
+  },
+  live_active: {
+    state: 'live_active',
+    labelRu: 'Живой разговор',
+    descriptionRu: 'Идёт прямой голосовой диалог с Пикселем.',
+    badgeClass: 'bg-cyan-50 text-cyan-900 border-cyan-300',
+    dotClass: 'bg-cyan-500 animate-pulse',
+  },
+  mic_muted: {
+    state: 'mic_muted',
+    labelRu: 'Ожидание выкл.',
+    descriptionRu: 'Фоновый микрофон ожидания выключен. Нажмите, чтобы включить вызов Пикселя голосом.',
+    badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
+    dotClass: 'bg-slate-400',
+  },
+  permission_denied: {
+    state: 'permission_denied',
+    labelRu: 'Микрофон заблокирован',
+    descriptionRu: 'В браузере заблокирован доступ к микрофону. Нажмите на значок замка в адресной строке и разрешите микрофон.',
+    badgeClass: 'bg-rose-50 text-rose-800 border-rose-300',
+    dotClass: 'bg-rose-500',
+  },
+  unsupported: {
+    state: 'unsupported',
+    labelRu: 'STT не поддерживается',
+    descriptionRu: 'В вашем браузере не найден Web Speech API для распознавания речи.',
+    badgeClass: 'bg-slate-100 text-slate-600 border-slate-300',
+    dotClass: 'bg-slate-400',
+  },
+  error: {
+    state: 'error',
+    labelRu: 'Сбой микрофона',
+    descriptionRu: 'Произошла ошибка распознавания речи.',
+    badgeClass: 'bg-rose-50 text-rose-800 border-rose-300',
+    dotClass: 'bg-rose-500',
+  },
+};
+
 export const DEFAULT_PIXEL_VOICE_SETTINGS: PixelVoiceSettings = {
   ttsProviderId: 'gemini',
   selectedGeminiVoice: 'Aoede',
   selectedTimbreId: 'bright',
+  selectedLiveVoice: 'Kore',
   allowBrowserFallback: true,
   autoSpeakNewReplies: false,
   rate: 1.0,
   pitch: 1.05,
   volume: 1.0,
+  wakeWordEnabled: true,
+  wakeWordSensitivity: 'normal',
 };
 
 export const DEMO_SPEECH_PHRASE =
   'Привет, Анна! Я Пиксель — ваш персональный помощник по KIBERONE и RENDERIA. Готов помочь вам с задачами и напомнить о важных делах!';
+

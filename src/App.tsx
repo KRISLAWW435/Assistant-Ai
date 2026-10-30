@@ -83,6 +83,11 @@ import {
   RightWorkspacePanel,
 } from './components/RightWorkspacePanel';
 import { PixelCompanion } from './components/PixelCompanion';
+import { PixelLiveVoiceModal } from './components/PixelLiveVoiceModal';
+import { PixelVoiceSettingsModal } from './components/PixelVoiceSettingsModal';
+import { wakeWordManager } from './providers/voice/wakeWordManager';
+import { voiceManager } from './providers/voice/voiceManager';
+import { WakeWordState } from './types/voice';
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'kiber_renderia_sidebar_collapsed';
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'kiber_renderia_right_panel_collapsed';
@@ -140,6 +145,16 @@ function writeActiveSchoolToStorage(school: SchoolId): void {
 
 function formatTimeNow(date: Date = new Date()): string {
   return date.toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatDateTimeShort(date: Date = new Date()): string {
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   });
@@ -317,6 +332,50 @@ export default function App() {
     id: number;
     text: string;
   } | null>(null);
+
+  // Live Voice Mode & Voice Settings Modal state (Part B & C)
+  const [isLiveVoiceOpen, setIsLiveVoiceOpen] = useState(false);
+  const [isLiveVoiceFromWakeWord, setIsLiveVoiceFromWakeWord] = useState(false);
+  const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
+  const [wakeWordState, setWakeWordState] = useState<WakeWordState>(() =>
+    wakeWordManager.getState()
+  );
+  const [wakeWordDetail, setWakeWordDetail] = useState<string>('');
+
+  useEffect(() => {
+    wakeWordManager.init({
+      onTriggered: (phrase) => {
+        console.log('[App] Wake word triggered:', phrase);
+        voiceManager.stopAll();
+        setIsLiveVoiceFromWakeWord(true);
+        setIsLiveVoiceOpen(true);
+      },
+      onStateChange: (state, detail) => {
+        setWakeWordState(state);
+        if (detail) setWakeWordDetail(detail);
+      },
+      onError: (err) => {
+        console.warn('[App] Wake word manager error:', err.message);
+      },
+    });
+
+    return () => {
+      wakeWordManager.stop();
+    };
+  }, []);
+
+  const handleToggleWakeWord = async () => {
+    const current = voiceManager.getSettings();
+    const nextEnabled = !current.wakeWordEnabled;
+    await voiceManager.updateSettings({ wakeWordEnabled: nextEnabled });
+    wakeWordManager.setEnabled(nextEnabled);
+  };
+
+  const handleAppendLiveCompanionMessages = async (
+    newMessages: CompanionMessage[]
+  ) => {
+    await handleSaveCompanionMessages([...companionMessages, ...newMessages]);
+  };
   const lastRetryPayloadRef = useRef<
     Record<
       string,
@@ -1920,6 +1979,19 @@ export default function App() {
           }}
           rightPanelOpen={!rightPanelCollapsed}
           dialogueFilesCount={currentDialogueFilesCount}
+          onOpenLiveVoice={() => {
+            voiceManager.stopAll();
+            setIsLiveVoiceFromWakeWord(false);
+            setIsLiveVoiceOpen(true);
+          }}
+          onOpenVoiceSettings={() => setIsVoiceSettingsOpen(true)}
+          isWakeWordListening={
+            wakeWordState === 'standby_listening' ||
+            wakeWordState === 'hearing_speech'
+          }
+          wakeWordState={wakeWordState}
+          wakeWordDetail={wakeWordDetail}
+          onToggleWakeWord={handleToggleWakeWord}
         />
 
         {/* IndexedDB / Validation Error Notification Banner */}
@@ -2027,6 +2099,7 @@ export default function App() {
                       ? documentProvider.getStatusLabel(chatParsingStatus)
                       : null
                   }
+                  onOpenVoiceSettings={() => setIsVoiceSettingsOpen(true)}
                 />
               )}
 
@@ -2129,6 +2202,7 @@ export default function App() {
         onSaveCompanionTask={handleSaveCompanionTask}
         onDeleteCompanionTask={handleDeleteCompanionTask}
         onSaveCompanionPreferences={handleSaveCompanionPreferences}
+        onOpenLiveVoice={() => setIsLiveVoiceOpen(true)}
       />
 
       {/* MODAL 1: Chat File Preview & Manager Confirmation Modal */}
@@ -2459,6 +2533,28 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* MODAL: Pixel Live Voice Mode (Gemini Live API) */}
+      <PixelLiveVoiceModal
+        isOpen={isLiveVoiceOpen}
+        triggeredByWakeWord={isLiveVoiceFromWakeWord}
+        onClose={() => {
+          setIsLiveVoiceOpen(false);
+          setIsLiveVoiceFromWakeWord(false);
+        }}
+        activeSchool={activeSchool}
+        companionMemory={companionMemory}
+        companionTasks={companionTasks}
+        companionMessages={companionMessages}
+        onAppendCompanionMessages={handleAppendLiveCompanionMessages}
+        onOpenSettings={() => setIsVoiceSettingsOpen(true)}
+      />
+
+      {/* MODAL: Global Voice & Live API Settings Modal */}
+      <PixelVoiceSettingsModal
+        isOpen={isVoiceSettingsOpen}
+        onClose={() => setIsVoiceSettingsOpen(false)}
+      />
     </div>
   );
 }

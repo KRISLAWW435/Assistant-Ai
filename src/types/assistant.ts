@@ -313,6 +313,7 @@ export interface CompanionMessage {
   content: string;
   createdAt: string;
   createdAtMs: number;
+  schoolId?: SchoolId | 'both';
   usedContextLabels?: string[];
   proposedTask?: ProposedCompanionTaskDraft;
   proposedMemory?: ProposedCompanionMemoryDraft;

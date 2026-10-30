@@ -13,6 +13,8 @@ import {
   MessageCircleHeart,
   Mic,
   MicOff,
+  Pause,
+  Play,
   Plus,
   RotateCcw,
   Send,
@@ -87,6 +89,7 @@ interface PixelCompanionProps {
   onSaveCompanionPreferences: (
     prefs: CompanionPreferencesRecord
   ) => Promise<void>;
+  onOpenLiveVoice?: () => void;
 }
 
 type CompanionPanelTab = 'chat' | 'tasks' | 'memory';
@@ -242,6 +245,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   onSaveCompanionTask,
   onDeleteCompanionTask,
   onSaveCompanionPreferences,
+  onOpenLiveVoice,
 }) => {
   // Speech bubble state (separate from character)
   const [speechBubble, setSpeechBubble] = useState<{
@@ -357,6 +361,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     string | null
   >(null);
   const [isSpeakingActive, setIsSpeakingActive] = useState(false);
+  const [playbackState, setPlaybackState] = useState(() =>
+    voiceManager.getPlaybackState()
+  );
 
   // Store pre-speech text to avoid ever duplicating/accumulating interim recognition chunks
   const speechSessionBaseTextRef = useRef<string>('');
@@ -400,26 +407,17 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       }
     );
 
-    const unsubGemini = voiceManager
-      .getGeminiOutputProvider()
-      .onStateChange((speaking, messageId) => {
-        setIsSpeakingActive(speaking);
-        setCurrentlySpeakingMsgId(messageId);
-      });
-
-    const unsubBrowser = voiceManager
-      .getBrowserOutputProvider()
-      .onStateChange((speaking, messageId) => {
-        setIsSpeakingActive(speaking);
-        setCurrentlySpeakingMsgId(messageId);
-      });
+    const unsubPlayback = voiceManager.onPlaybackStateChange((st) => {
+      setPlaybackState(st);
+      setIsSpeakingActive(st.status === 'playing' || st.status === 'loading');
+      setCurrentlySpeakingMsgId(st.messageId);
+    });
 
     return () => {
       unsubStatus();
       unsubError();
       unsubResult();
-      unsubGemini();
-      unsubBrowser();
+      unsubPlayback();
     };
   }, []);
 
@@ -443,12 +441,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   };
 
   const handleToggleSpeakMessage = async (msgId: string, content: string) => {
-    if (currentlySpeakingMsgId === msgId && isSpeakingActive) {
-      voiceManager.stopSpeaking();
+    if (playbackState.messageId === msgId && playbackState.status === 'playing') {
+      voiceManager.pauseMessage(msgId);
+      return;
+    }
+    if (playbackState.messageId === msgId && playbackState.status === 'paused') {
+      voiceManager.resumeMessage(msgId);
       return;
     }
     try {
-      await voiceManager.speakReply(content, msgId, {
+      await voiceManager.playMessage(msgId, content, {
         onFallbackUsed: (reason) => {
           setSpeechBubble({
             text: reason,
@@ -1489,6 +1491,20 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   <span>В угол</span>
                 </button>
               )}
+              {onOpenLiveVoice && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    voiceManager.stopSpeaking();
+                    onOpenLiveVoice();
+                  }}
+                  title="Открыть живой голосовой диалог с Пикселем (Gemini Live API)"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] text-white text-[10px] font-extrabold shadow-2xs transition-all"
+                >
+                  <Mic className="w-3 h-3 text-[#FFD700] animate-pulse" />
+                  <span>Поговорить</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setIsVoiceSettingsOpen(true)}
@@ -1872,34 +1888,86 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                             </span>
                           )}
 
-                          {/* Speak button for Pixel response */}
+                          {/* Voice playback controls for Pixel response (Part A: Listen, Pause, Resume, Stop) */}
                           {!msg.isStreaming && !msg.isError && msg.content.trim() && (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleSpeakMessage(msg.id, msg.content)}
-                              title={
-                                currentlySpeakingMsgId === msg.id && isSpeakingActive
-                                  ? 'Остановить воспроизведение'
-                                  : 'Озвучить ответ Пикселя'
-                              }
-                              className={`inline-flex items-center gap-1 font-mono-tabular px-1.5 py-0.5 rounded font-medium border transition-colors ${
-                                currentlySpeakingMsgId === msg.id && isSpeakingActive
-                                  ? 'bg-amber-100 text-amber-900 border-amber-300 font-bold animate-pulse'
-                                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
-                              }`}
-                            >
-                              {currentlySpeakingMsgId === msg.id && isSpeakingActive ? (
-                                <>
-                                  <Square className="w-2.5 h-2.5 fill-current text-amber-900" />
-                                  <span>Стоп</span>
-                                </>
+                            <div className="inline-flex items-center gap-1">
+                              {playbackState.messageId === msg.id && playbackState.status === 'loading' ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-900 border border-amber-200">
+                                  <Loader2 className="w-2.5 h-2.5 animate-spin text-[#00A8B5]" />
+                                  <span>Загрузка...</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => voiceManager.stopMessage(msg.id)}
+                                    title="Отмена"
+                                    className="p-0.5 text-slate-500 hover:text-slate-900"
+                                  >
+                                    <Square className="w-2 h-2 fill-current" />
+                                  </button>
+                                </span>
+                              ) : playbackState.messageId === msg.id && playbackState.status === 'playing' ? (
+                                <div className="inline-flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => voiceManager.pauseMessage(msg.id)}
+                                    title="Приостановить воспроизведение"
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-[#00A8B5] text-white hover:bg-[#00929d] transition-colors"
+                                  >
+                                    <Pause className="w-2.5 h-2.5 fill-current" />
+                                    <span>Пауза</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => voiceManager.stopMessage(msg.id)}
+                                    title="Остановить воспроизведение"
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-200 hover:bg-slate-300 text-slate-800 transition-colors"
+                                  >
+                                    <Square className="w-2.5 h-2.5 fill-current" />
+                                    <span>Остановить</span>
+                                  </button>
+                                  <span className="flex items-center gap-0.5 px-0.5 text-[#00A8B5]">
+                                    <span className="w-0.5 h-2 bg-[#00A8B5] rounded-full animate-pulse" />
+                                    <span className="w-0.5 h-3 bg-[#00A8B5] rounded-full animate-bounce" />
+                                    <span className="w-0.5 h-1.5 bg-[#00A8B5] rounded-full animate-pulse" />
+                                  </span>
+                                </div>
+                              ) : playbackState.messageId === msg.id && playbackState.status === 'paused' ? (
+                                <div className="inline-flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => voiceManager.resumeMessage(msg.id)}
+                                    title="Продолжить воспроизведение"
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                                  >
+                                    <Play className="w-2.5 h-2.5 fill-current" />
+                                    <span>Продолжить</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => voiceManager.stopMessage(msg.id)}
+                                    title="Остановить воспроизведение"
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-200 hover:bg-slate-300 text-slate-800 transition-colors"
+                                  >
+                                    <Square className="w-2.5 h-2.5 fill-current" />
+                                    <span>Остановить</span>
+                                  </button>
+                                </div>
                               ) : (
-                                <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleSpeakMessage(msg.id, msg.content)}
+                                  title="Прослушать ответ Пикселя"
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
+                                >
                                   <Volume2 className="w-2.5 h-2.5 text-[#00A8B5]" />
-                                  <span>Озвучить</span>
-                                </>
+                                  <span>Прослушать</span>
+                                </button>
                               )}
-                            </button>
+                              {playbackState.messageId === msg.id && playbackState.fallbackReason && (
+                                <span className="text-[10px] text-amber-900 bg-amber-100/90 border border-amber-300/80 px-1 py-0.5 rounded font-medium">
+                                  {playbackState.fallbackReason}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </>
                       )}

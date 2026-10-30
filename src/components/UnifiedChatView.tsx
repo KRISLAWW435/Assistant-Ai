@@ -12,17 +12,24 @@ import {
   Loader2,
   MessageSquarePlus,
   Paperclip,
+  Pause,
   PenLine,
   Pin,
   PinOff,
+  Play,
   RotateCcw,
   Send,
   ShieldAlert,
+  Sliders,
   Sparkles,
   Square,
   Trash2,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
+import { voiceManager } from '../providers/voice/voiceManager';
+import { MessagePlaybackState } from '../types/voice';
 import {
   AgentMode,
   AIProviderId,
@@ -117,6 +124,7 @@ interface UnifiedChatViewProps {
   highlightedMessageId: string | null;
   isParsingFile?: boolean;
   parsingStatusLabel?: string | null;
+  onOpenVoiceSettings?: () => void;
 }
 
 const STAGE_ORDER: GenerationStage[] = [
@@ -167,6 +175,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   highlightedMessageId,
   isParsingFile = false,
   parsingStatusLabel = null,
+  onOpenVoiceSettings,
 }) => {
   const [draftPrompt, setDraftPrompt] = useState('');
   const [selectedQuickPromptId, setSelectedQuickPromptId] = useState<
@@ -174,6 +183,17 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   >(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
+
+  // Playback state for specialist and assistant messages
+  const [playbackState, setPlaybackState] = useState<MessagePlaybackState>(() =>
+    voiceManager.getPlaybackState()
+  );
+
+  useEffect(() => {
+    return voiceManager.onPlaybackStateChange((st) => {
+      setPlaybackState(st);
+    });
+  }, []);
 
   // Selective context & per-provider document consent state (Stage 3.1 & Stage 3.3 Part 7)
   const [includeKnowledgeBase, setIncludeKnowledgeBase] = useState(true);
@@ -1029,6 +1049,135 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                           </div>
                         </div>
                       )}
+
+                      {/* Voice Playback Toolbar for all Specialists (Marketer, Manager, Methodist, Analyst) */}
+                      {!isUser &&
+                        !msg.isStreaming &&
+                        !msg.isError &&
+                        msg.content.trim() && (
+                          <div className="mt-2.5 pt-2 border-t border-slate-100/90 flex flex-wrap items-center justify-between gap-2 bg-slate-50/80 -mx-4 -mb-3.5 px-4 py-2 rounded-b-2xl">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {playbackState.messageId === msg.id &&
+                              playbackState.status === 'loading' ? (
+                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-200">
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00A8B5]" />
+                                  <span>Загрузка аудио...</span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      voiceManager.stopMessage(msg.id)
+                                    }
+                                    title="Отмена"
+                                    className="ml-1 p-0.5 text-slate-500 hover:text-slate-900"
+                                  >
+                                    <Square className="w-2.5 h-2.5 fill-current" />
+                                  </button>
+                                </div>
+                              ) : playbackState.messageId === msg.id &&
+                                playbackState.status === 'playing' ? (
+                                <div className="inline-flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      voiceManager.pauseMessage(msg.id)
+                                    }
+                                    title="Приостановить воспроизведение"
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-[#00A8B5] text-white hover:bg-[#00929d] transition-colors shadow-2xs"
+                                  >
+                                    <Pause className="w-3.5 h-3.5 fill-current" />
+                                    <span>Пауза</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      voiceManager.stopMessage(msg.id)
+                                    }
+                                    title="Остановить воспроизведение"
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-200 hover:bg-slate-300 text-slate-800 transition-colors"
+                                  >
+                                    <Square className="w-3 h-3 fill-current" />
+                                    <span>Остановить</span>
+                                  </button>
+                                  <span className="flex items-center gap-0.5 px-1 text-[#00A8B5]">
+                                    <span className="w-1 h-3 bg-[#00A8B5] rounded-full animate-pulse" />
+                                    <span className="w-1 h-4 bg-[#00A8B5] rounded-full animate-bounce" />
+                                    <span className="w-1 h-2 bg-[#00A8B5] rounded-full animate-pulse" />
+                                  </span>
+                                </div>
+                              ) : playbackState.messageId === msg.id &&
+                                playbackState.status === 'paused' ? (
+                                <div className="inline-flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      voiceManager.resumeMessage(msg.id)
+                                    }
+                                    title="Продолжить воспроизведение"
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors shadow-2xs"
+                                  >
+                                    <Play className="w-3.5 h-3.5 fill-current" />
+                                    <span>Продолжить</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      voiceManager.stopMessage(msg.id)
+                                    }
+                                    title="Остановить"
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-200 hover:bg-slate-300 text-slate-800 transition-colors"
+                                  >
+                                    <Square className="w-3 h-3 fill-current" />
+                                    <span>Остановить</span>
+                                  </button>
+                                  <span className="text-[11px] text-amber-700 font-medium">
+                                    На паузе
+                                  </span>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    voiceManager.playMessage(
+                                      msg.id,
+                                      msg.content
+                                    )
+                                  }
+                                  title="Прослушать ответ специалиста голосом"
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200/90 transition-colors shadow-2xs"
+                                >
+                                  <Volume2 className="w-3.5 h-3.5 text-[#00A8B5]" />
+                                  <span>Прослушать</span>
+                                </button>
+                              )}
+
+                              {playbackState.messageId === msg.id &&
+                                playbackState.fallbackReason && (
+                                  <span className="text-[10px] text-amber-900 bg-amber-100/90 border border-amber-300/80 px-2 py-0.5 rounded-md font-medium">
+                                    {playbackState.fallbackReason}
+                                  </span>
+                                )}
+
+                              {playbackState.messageId === msg.id &&
+                                playbackState.status === 'error' && (
+                                  <span className="text-[10px] text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
+                                    {playbackState.errorMessage ||
+                                      'Ошибка озвучки'}
+                                  </span>
+                                )}
+                            </div>
+
+                            {onOpenVoiceSettings && (
+                              <button
+                                type="button"
+                                onClick={onOpenVoiceSettings}
+                                title="Настройки голоса и озвучивания (скорость, тембр, резерв)"
+                                className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
+                              >
+                                <Sliders className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        )}
                     </div>
                   </div>
                 );

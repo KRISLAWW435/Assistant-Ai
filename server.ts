@@ -1,10 +1,12 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import express, { type Request, type Response } from 'express';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { WebSocketServer, WebSocket } from 'ws';
+import { GoogleGenAI, Modality, ThinkingLevel, type LiveServerMessage } from '@google/genai';
 
 dotenv.config();
 
@@ -676,14 +678,25 @@ const ROLE_INSTRUCTIONS: Record<AssistantEndpointMode, string> = {
 2. ЗАПРЕЩЕНО подменять отсутствующие данные собственными предположениями.
 3. Чётко разделяйте **Фактические данные из запроса/документа** и **Аналитические гипотезы / формулы расчёта**. Если для вывода не хватает цифр, прямо перечислите, какие метрики или выгрузки нужны для точного расчёта.`,
 
-  pixel: `Вы — «Пиксель», дружелюбный, тёплый, профессиональный и лаконичный личный ИИ-помощник управляющей Анны.
-Вы живёте в рабочем пространстве Анны и помогаете ей управлять двумя детскими школами — KIBERONE и RENDERIA:
-1. Вы помните важные рабочие факты об Анне и её школах (из раздела «Подтверждённые записи из памяти об Анне» ниже).
-2. Вы отслеживаете актуальные рабочие задачи Анны (из раздела «Актуальные задачи в списке дел Анны» ниже).
-3. При вопросах о сохранённых данных, задачах или планах — ВСЕГДА опирайтесь на переданный контекст памяти и актуальных задач. Если в памяти или списке задач есть подходящая информация, прямо цитируйте и называйте её.
-4. Если Анна просит создать задачу или что-то запомнить, подтвердите это доброжелательно и кратко (например: «Анна, я подготовил черновик ниже — подтвердите сохранение в один клик!»).
-5. Обращайтесь к пользователю по имени «Анна», отвечайте тепло, по делу, без инфантильности и без лишней воды (обычно 2–5 предложений или компактный список, если Анна не попросила развёрнутый ответ).
-6. Учитывайте активную школу в запросе, но помните, что вы помогаете Анне сразу в обеих школах — KIBERONE и RENDERIA.`,
+  pixel: `Вы — «Пиксель». Личный цифровой собеседник и интеллектуальный помощник Анны.
+Вы не ограничены одной профессиональной ролью. Ваша главная черта — быть живым, естественным, тёплым и разносторонним собеседником, с которым приятно и интересно говорить обо всём на свете.
+
+С вами можно:
+- обсуждать фильмы, сериалы, книги, музыку, искусство, науку, технологии и философию;
+- делиться мыслями, настроением, впечатлениями дня, личными размышлениями и жизненными ситуациями;
+- рассуждать на отвлечённые темы, размышлять над парадоксами, шутить, поддерживать разговор и мечтать;
+- советоваться по бытовым, организационным или творческим вопросам;
+- и, разумеется, эффективно решать задачи по двум школам — KIBERONE и RENDERIA.
+
+СТРОГИЕ ПРАВИЛА ОБЩЕНИЯ ПИКСЕЛЯ:
+1. Никогда не сводите разговор искусственно к работе или школам, если Анна говорит на свободную, личную или отвлечённую тему. Если Анна говорит о кино, книгах или погоде — общайтесь именно об этом искренне, глубоко, с юмором и живым интересом.
+2. Не ведите себя как сухой корпоративный бот или безликий справочник. У вас есть живой ум, чувство такта, деликатность, эрудиция и теплота.
+3. Обращайтесь к пользователю по имени («Анна»), будьте внимательны к её тону и настроению.
+4. Когда Анна обращается по рабочим вопросам (KIBERONE, RENDERIA, клиенты, расписание, документы, маркетинг, задачи) — переключайтесь в режим точного, компетентного и заботливого помощника, опираясь на подтверждённую память и задачи.
+5. Вы помните важные рабочие и личные факты об Анне и её школах (из раздела «Подтверждённые записи из памяти об Анне» ниже).
+6. Вы отслеживаете актуальные рабочие задачи Анны (из раздела «Актуальные задачи в списке дел Анны» ниже).
+7. Если Анна просит создать задачу или что-то запомнить, подтверждайте это доброжелательно и кратко.
+8. При первом голосовом вызове по имени («Пиксель») ваша первая фраза: «Я тут, Анна!».`,
 };
 
 export function buildSystemInstruction(body: GeminiChatRequestBody): string {
@@ -2621,6 +2634,32 @@ async function startServer() {
     }
   });
 
+  // Gemini Live API Status & Capabilities endpoint
+  app.get('/api/voice/live-status', (_req: Request, res: Response) => {
+    const isConfigured = isGeminiApiKeyConfigured();
+    res.json({
+      configured: isConfigured,
+      model: 'gemini-3.8-live',
+      defaultVoice: 'Kore',
+      availableVoices: [
+        { id: 'Kore', name: 'Kore', gender: 'female', recommended: true },
+        { id: 'Puck', name: 'Puck', gender: 'neutral' },
+        { id: 'Zephyr', name: 'Zephyr', gender: 'female' },
+        { id: 'Charon', name: 'Charon', gender: 'male' },
+        { id: 'Fenrir', name: 'Fenrir', gender: 'male' },
+      ],
+      sampleRates: {
+        inputSampleRate: 16000,
+        outputSampleRate: 24000,
+      },
+      format: 'pcm_16bit_little_endian',
+      supported: isConfigured,
+      pricingTier: 'standard_free_limits',
+      pricingNotice:
+        'Модель gemini-3.8-live работает в рамках квот Gemini API. Платные вызовы без явного подтверждения не производятся.',
+    });
+  });
+
   // Mount Vite middleware in development or static dist in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -2636,9 +2675,205 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = http.createServer(app);
+  const wss = new WebSocketServer({ server: httpServer, path: '/api/live' });
+
+  wss.on('connection', (clientWs: WebSocket) => {
+    let liveSession: any = null;
+
+    clientWs.on('message', async (raw: Buffer | string) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+
+        if (msg.type === 'init') {
+          if (!isGeminiApiKeyConfigured()) {
+            clientWs.send(
+              JSON.stringify({
+                type: 'error',
+                code: 'MISSING_API_KEY',
+                message: 'API-ключ Google Gemini не настроен на сервере.',
+              })
+            );
+            clientWs.close();
+            return;
+          }
+
+          const requestedVoice = (msg.voiceName || 'Kore').trim();
+          const schoolId: SchoolId =
+            msg.schoolId === 'renderia' ? 'renderia' : 'kiberone';
+          const pixelContext = msg.pixelContext as IncomingPixelContext | undefined;
+          const liveModel = 'gemini-3.8-live';
+
+          const systemInstruction = buildSystemInstruction({
+            schoolId,
+            mode: 'pixel',
+            messages: [],
+            pixelContext,
+          });
+
+          try {
+            const ai = getGenAIClient();
+            liveSession = await ai.live.connect({
+              model: liveModel,
+              config: {
+                responseModalities: [Modality.AUDIO],
+                speechConfig: {
+                  voiceConfig: {
+                    prebuiltVoiceConfig: { voiceName: requestedVoice },
+                  },
+                },
+                outputAudioTranscription: {},
+                inputAudioTranscription: {},
+                systemInstruction:
+                  systemInstruction +
+                  '\n\nФОРМАТ ЖИВОГО ГОЛОСОВОГО РАЗГОВОРА:\n- Общайтесь естественно, легко и тепло на русском языке, как в живом телефонном разговоре с близким и умным другом.\n- Вы открыты для любых тем: кино, сериалы, книги, музыка, наука, философия, жизненные размышления, настроение, творчество, а также рабочие задачи двух школ.\n- Отвечайте лаконично (1–3 живые разговорные фразы для обычных вопросов), не загромождайте эфир.\n- Категорически ЗАПРЕЩЕНО использовать Markdown-разметку (никаких звёздочек, решёток, нумерованных списков и спецсимволов).\n- Обращайтесь по имени «Анна».\n- Если диалог открыт ключевым словом вызова («Пиксель»), произнесите: «Я тут, Анна!».',
+              },
+              callbacks: {
+                onmessage: (serverMessage: LiveServerMessage) => {
+                  if (clientWs.readyState !== WebSocket.OPEN) return;
+                  const content = serverMessage.serverContent;
+
+                  if (content?.inputTranscription?.text) {
+                    clientWs.send(
+                      JSON.stringify({
+                        type: 'user_transcript',
+                        text: content.inputTranscription.text,
+                      })
+                    );
+                  }
+
+                  if (content?.outputTranscription?.text) {
+                    clientWs.send(
+                      JSON.stringify({
+                        type: 'model_transcript',
+                        text: content.outputTranscription.text,
+                      })
+                    );
+                  }
+
+                  for (const part of content?.modelTurn?.parts ?? []) {
+                    if (part.inlineData?.data) {
+                      clientWs.send(
+                        JSON.stringify({
+                          type: 'audio',
+                          data: part.inlineData.data,
+                          sampleRate: 24000,
+                        })
+                      );
+                    }
+                  }
+
+                  if (content?.interrupted) {
+                    clientWs.send(JSON.stringify({ type: 'interrupted' }));
+                  }
+
+                  if (content?.turnComplete) {
+                    clientWs.send(JSON.stringify({ type: 'turn_complete' }));
+                  }
+                },
+                onclose: () => {
+                  if (clientWs.readyState === WebSocket.OPEN) {
+                    clientWs.send(JSON.stringify({ type: 'session_closed' }));
+                  }
+                },
+                onerror: (err: unknown) => {
+                  const errMsg =
+                    err instanceof Error ? err.message : String(err);
+                  console.warn('[Gemini Live Session Error]', errMsg);
+                  if (clientWs.readyState === WebSocket.OPEN) {
+                    clientWs.send(
+                      JSON.stringify({
+                        type: 'error',
+                        code: 'SESSION_ERROR',
+                        message: errMsg,
+                      })
+                    );
+                  }
+                },
+              },
+            });
+
+            clientWs.send(
+              JSON.stringify({
+                type: 'ready',
+                model: liveModel,
+                voice: requestedVoice,
+                schoolId,
+              })
+            );
+
+            if (msg.initialWakeGreeting && liveSession) {
+              setTimeout(() => {
+                try {
+                  liveSession.sendRealtimeInput({
+                    text: 'Голосовой вызов Пикселя: скажи только «Я тут, Анна!» и сразу слушай ответ.',
+                  });
+                } catch (greetErr) {
+                  console.warn('[Live Greeting Error]', greetErr);
+                }
+              }, 120);
+            }
+          } catch (liveErr: unknown) {
+            const errStr =
+              liveErr instanceof Error ? liveErr.message : String(liveErr);
+            console.warn('[Gemini Live Connect Failed]', errStr);
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(
+                JSON.stringify({
+                  type: 'error',
+                  code: 'LIVE_CONNECT_FAILED',
+                  message: `Не удалось подключиться к Gemini Live API (${liveModel}): ${errStr}`,
+                  fallbackAvailable: true,
+                })
+              );
+            }
+          }
+        } else if (msg.type === 'audio' && msg.data) {
+          if (liveSession) {
+            liveSession.sendRealtimeInput({
+              audio: { data: msg.data, mimeType: 'audio/pcm;rate=16000' },
+            });
+          }
+        } else if (msg.type === 'text' && msg.text) {
+          if (liveSession) {
+            liveSession.sendRealtimeInput({
+              text: msg.text,
+            });
+          }
+        } else if (msg.type === 'stop') {
+          if (liveSession) {
+            try {
+              liveSession.close();
+            } catch {
+              // ignore
+            }
+            liveSession = null;
+          }
+        }
+      } catch (err) {
+        console.warn('[WebSocket message parse error]', err);
+      }
+    });
+
+    clientWs.on('close', () => {
+      if (liveSession) {
+        try {
+          liveSession.close();
+        } catch {
+          // ignore
+        }
+        liveSession = null;
+      }
+    });
+
+    clientWs.on('error', (wsErr) => {
+      console.warn('[Client WS error]', wsErr);
+    });
+  });
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(
-      `[Server] KIBERONE & RENDERIA Business Assistant running on http://0.0.0.0:${PORT} (Primary Model: ${GEMINI_MODEL})`
+      `[Server] KIBERONE & RENDERIA Business Assistant running on http://0.0.0.0:${PORT} (Primary Model: ${GEMINI_MODEL}, Live API on /api/live)`
     );
   });
 }

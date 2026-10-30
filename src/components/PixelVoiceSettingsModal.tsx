@@ -730,6 +730,145 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
             </div>
           </div>
 
+          {/* Section 4: Live Voice Model & Persona Settings */}
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-slate-900 text-xs flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-[#00A8B5]" />
+                  <span>Голос для живого разговора (Gemini Live API)</span>
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  В Live-режиме модель gemini-3.8-live использует специализированные голоса реального времени
+                </div>
+              </div>
+              <span className="px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-semibold">
+                gemini-3.8-live
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {[
+                {
+                  id: 'Kore',
+                  name: 'Kore (Рекомендуется)',
+                  desc: 'Тёплый, чистый, женский регистр. Максимально близок к постоянному голосу Пикселя',
+                },
+                {
+                  id: 'Puck',
+                  name: 'Puck',
+                  desc: 'Энергичный, лёгкий, нейтральный тембр',
+                },
+                {
+                  id: 'Zephyr',
+                  name: 'Zephyr',
+                  desc: 'Мягкий, доверительный, спокойный тон',
+                },
+                {
+                  id: 'Charon',
+                  name: 'Charon',
+                  desc: 'Глубокий, низкий мужской регистр',
+                },
+                {
+                  id: 'Fenrir',
+                  name: 'Fenrir',
+                  desc: 'Чёткий, деловой, структурированный мужской тембр',
+                },
+              ].map((liveV) => {
+                const isSelected = (settings.selectedLiveVoice || 'Kore') === liveV.id;
+                return (
+                  <button
+                    key={liveV.id}
+                    type="button"
+                    onClick={() => handleUpdate({ selectedLiveVoice: liveV.id })}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      isSelected
+                        ? 'bg-[#00A8B5]/10 border-[#00A8B5] ring-1 ring-[#00A8B5]/30'
+                        : 'bg-white hover:bg-slate-50 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-semibold text-xs text-slate-900">
+                      <span>{liveV.name}</span>
+                      {isSelected && (
+                        <Check className="w-3.5 h-3.5 text-[#00A8B5]" />
+                      )}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      {liveV.desc}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Section 5: Standby Mode & Wake Word Detection */}
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-semibold text-slate-900 text-xs flex items-center gap-1.5">
+                  <Mic className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Режим ожидания по ключевой фразе («Пиксель, ты тут?»)</span>
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  Локальное обнаружение фразы в активной вкладке браузера без передачи фонового звука в облако.
+                </div>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={settings.wakeWordEnabled}
+                  onChange={(e) =>
+                    handleUpdate({ wakeWordEnabled: e.target.checked })
+                  }
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600" />
+              </label>
+            </div>
+
+            {settings.wakeWordEnabled && (
+              <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/80 space-y-2 animate-in fade-in">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-emerald-950">Чувствительность обнаружения</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleUpdate({ wakeWordSensitivity: 'normal' })}
+                      className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors ${
+                        settings.wakeWordSensitivity !== 'high'
+                          ? 'bg-emerald-700 text-white shadow-2xs'
+                          : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
+                      }`}
+                    >
+                      Обычная
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdate({ wakeWordSensitivity: 'high' })}
+                      className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors ${
+                        settings.wakeWordSensitivity === 'high'
+                          ? 'bg-emerald-700 text-white shadow-2xs'
+                          : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
+                      }`}
+                    >
+                      Высокая
+                    </button>
+                  </div>
+                </div>
+                <div className="text-[11px] text-emerald-900 leading-relaxed">
+                  Основное слово вызова: <span className="font-bold font-mono">«Пиксель»</span>. Дополнительно срабатывают: <span className="font-mono">«Пиксель, ты тут?»</span>, <span className="font-mono">«Пиксель, слушай»</span>, <span className="font-mono">«Пиксель, привет»</span>, <span className="font-mono">«Эй, Пиксель»</span>.
+                </div>
+                <div className="text-[10px] text-emerald-800 flex items-start gap-1.5 pt-1 border-t border-emerald-200/60">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Аудит движка:</strong> в браузере Chrome для русского языка (ru-RU) Web Speech API использует защищённый облачный сервис распознавания речи Google. Фоновые данные не сохраняются и не передаются третьим лицам. При сворачивании вкладки микрофон автоматически отключается.
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Microphone Status Info Card */}
           <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] space-y-1 text-slate-600">
             <div className="font-semibold text-slate-800 flex items-center gap-1.5">

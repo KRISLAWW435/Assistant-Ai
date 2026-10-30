@@ -148,6 +148,8 @@ export class GeminiTtsOutputProvider implements ISpeechOutputProvider {
     }
   }
 
+  private isPausedState = false;
+
   public stop(): void {
     if (this.abortController) {
       try {
@@ -166,12 +168,14 @@ export class GeminiTtsOutputProvider implements ISpeechOutputProvider {
       }
       this.currentAudio = null;
     }
+    this.isPausedState = false;
     this.updateSpeaking(false, null);
   }
 
   public pause(): void {
     if (this.currentAudio && !this.currentAudio.paused) {
       this.currentAudio.pause();
+      this.isPausedState = true;
       this.updateSpeaking(false, this.currentMessageId);
     }
   }
@@ -179,12 +183,17 @@ export class GeminiTtsOutputProvider implements ISpeechOutputProvider {
   public resume(): void {
     if (this.currentAudio && this.currentAudio.paused) {
       this.currentAudio.play().catch(() => {});
+      this.isPausedState = false;
       this.updateSpeaking(true, this.currentMessageId);
     }
   }
 
   public isSpeaking(): boolean {
     return this.speaking;
+  }
+
+  public isPaused(): boolean {
+    return this.isPausedState;
   }
 
   public getCurrentMessageId(): string | null {
