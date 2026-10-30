@@ -11,10 +11,13 @@ import {
   ListTodo,
   Loader2,
   MessageCircleHeart,
+  Mic,
+  MicOff,
   Plus,
   RotateCcw,
   Send,
   ShieldCheck,
+  Sliders,
   Square,
   Trash2,
   Volume2,
@@ -56,6 +59,10 @@ import {
   readStoredProviderSelection,
 } from '../providers/aiProviderManager';
 import { MarkdownMessageContent } from './MarkdownMessageContent';
+import { browserSpeechInput } from '../providers/voice/browserSpeechInputProvider';
+import { voiceManager } from '../providers/voice/voiceManager';
+import { SpeechInputStatus } from '../types/voice';
+import { PixelVoiceSettingsModal } from './PixelVoiceSettingsModal';
 
 interface PixelCompanionProps {
   activeSchool: SchoolId;
@@ -336,6 +343,89 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const [editMemTitle, setEditMemTitle] = useState('');
   const [editMemContent, setEditMemContent] = useState('');
   const [confirmClearAllMemory, setConfirmClearAllMemory] = useState(false);
+
+  // Voice (STT & TTS) state (Stage 5.3)
+  const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
+  const [speechInputStatus, setSpeechInputStatus] = useState<SpeechInputStatus>(
+    () => browserSpeechInput.getStatus()
+  );
+  const [speechInputError, setSpeechInputError] = useState<string | null>(null);
+  const [currentlySpeakingMsgId, setCurrentlySpeakingMsgId] = useState<
+    string | null
+  >(null);
+  const [isSpeakingActive, setIsSpeakingActive] = useState(false);
+
+  const isMicSupported = useMemo(() => browserSpeechInput.isSupported(), []);
+  const isRemoteSpeechService = useMemo(
+    () => browserSpeechInput.isRemoteService(),
+    []
+  );
+
+  // Subscribe to speech recognition and speech synthesis events
+  useEffect(() => {
+    const unsubStatus = browserSpeechInput.onStatusChange((status) => {
+      setSpeechInputStatus(status);
+      if (status !== 'error') {
+        setSpeechInputError(null);
+      }
+    });
+
+    const unsubError = browserSpeechInput.onError((err) => {
+      setSpeechInputError(err.message);
+    });
+
+    const unsubResult = browserSpeechInput.onResult((transcript, isFinal) => {
+      setChatInput((prev) => {
+        const base = prev.trim();
+        if (!base) return transcript;
+        if (base.endsWith(transcript)) return base;
+        return `${base} ${transcript}`;
+      });
+    });
+
+    const unsubTts = voiceManager
+      .getOutputProvider()
+      .onStateChange((speaking, messageId) => {
+        setIsSpeakingActive(speaking);
+        setCurrentlySpeakingMsgId(messageId);
+      });
+
+    return () => {
+      unsubStatus();
+      unsubError();
+      unsubResult();
+      unsubTts();
+    };
+  }, []);
+
+  const handleToggleVoiceRecord = async () => {
+    if (speechInputStatus === 'listening' || speechInputStatus === 'recognizing') {
+      browserSpeechInput.stop();
+      return;
+    }
+    setSpeechInputError(null);
+    voiceManager.stopSpeaking();
+    await browserSpeechInput.start({
+      lang: 'ru-RU',
+      continuous: true,
+      interimResults: true,
+    });
+  };
+
+  const handleToggleSpeakMessage = async (msgId: string, content: string) => {
+    if (currentlySpeakingMsgId === msgId && isSpeakingActive) {
+      voiceManager.stopSpeaking();
+      return;
+    }
+    try {
+      await voiceManager.speakReply(content, msgId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSpeechBubble({
+        text: `Озвучивание: ${msg}`,
+      });
+    }
+  };
 
   // Refs for accurate active time tracking & autonomous behavior
   const prefsRef = useRef<CompanionPreferencesRecord>(companionPreferences);
@@ -851,6 +941,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     if (!text || isPixelGenerating) return;
 
     setChatInput('');
+    voiceManager.stopSpeaking();
+    browserSpeechInput.stop();
     const now = new Date();
     const nowMs = now.getTime();
 
@@ -973,6 +1065,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         setLastFailedPixelText(null);
       }
 
+      const durationMs = result.metrics?.durationMs || (Date.now() - nowMs);
+      const selectedProvider = readStoredProviderSelection();
+
       const finalList = baseList.map((m) =>
         m.id === pixelMsgId
           ? {
@@ -987,6 +1082,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
               providerId: result.providerId,
               providerLabel: result.providerLabel,
               failoverNotice: result.failoverNotice,
+              durationMs,
+              selectedProvider,
             }
           : m
       );
@@ -994,16 +1091,28 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       updatePreferences({
         mood: proposedTask || proposedMemory ? 'thinking' : 'happy',
       });
+
+      if (
+        voiceManager.getSettings().autoSpeakNewReplies &&
+        !quietMode &&
+        !result.aborted &&
+        finalText.trim()
+      ) {
+        voiceManager.speakReply(finalText, pixelMsgId).catch(() => {});
+      }
     } catch (err) {
       const errMessage =
         err instanceof Error
           ? err.message
-          : 'Не удалось получить ответ от серверного маршрута Gemini API.';
+          : 'Не удалось получить ответ от серверного маршрута ИИ-провайдера.';
       const fallbackNote = proposedTask
         ? `\n\nЧерновик задачи «${proposedTask.title}» подготовлен локально — вы можете подтвердить его сохранение ниже.`
         : proposedMemory
           ? `\n\nЧерновик заметки в память подготовлен локально — вы можете подтвердить его сохранение ниже.`
           : '';
+
+      const durationMs = Date.now() - nowMs;
+      const selectedProvider = readStoredProviderSelection();
 
       setLastFailedPixelText(text);
       setChatInput((prev) => (prev.trim().length === 0 ? text : prev));
@@ -1012,9 +1121,12 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         m.id === pixelMsgId
           ? {
               ...m,
-              content: `Не удалось получить ответ Gemini API: ${errMessage}${fallbackNote}`,
+              content: `Не удалось получить ответ: ${errMessage}${fallbackNote}`,
               isStreaming: false,
               isError: true,
+              errorReason: errMessage,
+              durationMs,
+              selectedProvider,
             }
           : m
       );
@@ -1209,11 +1321,19 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     setEditingMemoryId(null);
   };
 
-  // Computed task counters & due reminders
+  // Computed task counters & due reminders strictly isolated by active school
   const todayIso = toIsoDateString(new Date());
+  const schoolTasks = useMemo(
+    () =>
+      companionTasks.filter(
+        (t) =>
+          !t.schoolId || t.schoolId === activeSchool || t.schoolId === 'both'
+      ),
+    [companionTasks, activeSchool]
+  );
   const activeTasksList = useMemo(
-    () => companionTasks.filter((t) => t.status !== 'done'),
-    [companionTasks]
+    () => schoolTasks.filter((t) => t.status !== 'done'),
+    [schoolTasks]
   );
   const dueOrOverdueTasks = useMemo(
     () =>
@@ -1222,15 +1342,23 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   );
   const filteredTasks = useMemo(() => {
     if (taskFilter === 'today') {
-      return companionTasks.filter((t) => t.dueDate === todayIso);
+      return schoolTasks.filter((t) => t.dueDate === todayIso);
     }
-    return companionTasks;
-  }, [companionTasks, taskFilter, todayIso]);
+    return schoolTasks;
+  }, [schoolTasks, taskFilter, todayIso]);
 
+  const schoolMemories = useMemo(
+    () =>
+      companionMemory.filter(
+        (m) =>
+          !m.schoolId || m.schoolId === activeSchool || m.schoolId === 'both'
+      ),
+    [companionMemory, activeSchool]
+  );
   const filteredMemories = useMemo(() => {
-    if (selectedMemoryCat === 'all') return companionMemory;
-    return companionMemory.filter((m) => m.category === selectedMemoryCat);
-  }, [companionMemory, selectedMemoryCat]);
+    if (selectedMemoryCat === 'all') return schoolMemories;
+    return schoolMemories.filter((m) => m.category === selectedMemoryCat);
+  }, [schoolMemories, selectedMemoryCat]);
 
   const activeMinutesCount = Math.floor(
     (companionPreferences.activeWorkElapsedMs || 0) / 60000
@@ -1303,6 +1431,17 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
+              {isSpeakingActive && (
+                <button
+                  type="button"
+                  onClick={() => voiceManager.stopSpeaking()}
+                  title="Остановить текущее озвучивание"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-xl bg-amber-500 text-white text-[10px] font-bold hover:bg-amber-600 animate-pulse transition-colors"
+                >
+                  <Square className="w-2.5 h-2.5 fill-current" />
+                  <span>Молчать</span>
+                </button>
+              )}
               {customPos && (
                 <button
                   type="button"
@@ -1314,6 +1453,15 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   <span>В угол</span>
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => setIsVoiceSettingsOpen(true)}
+                title="Настройки голоса и озвучивания (скорость, высота, авточтение)"
+                aria-label="Настройки голоса"
+                className="p-1.5 rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-colors"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+              </button>
               <button
                 type="button"
                 onClick={() => updatePreferences({ quietMode: !quietMode })}
@@ -1336,7 +1484,11 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setDialogOpen(false)}
+                onClick={() => {
+                  voiceManager.stopSpeaking();
+                  browserSpeechInput.cancel();
+                  setDialogOpen(false);
+                }}
                 title="Закрыть окно Пикселя"
                 aria-label="Закрыть окно Пикселя"
                 className="p-1.5 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors"
@@ -1401,6 +1553,19 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
           {/* TAB 1: PERSONAL CHAT WITH PIXEL */}
           {activeTab === 'chat' && (
             <div className="flex-1 flex flex-col min-h-0 max-h-[52vh]">
+              {/* Active Provider Diagnostics Bar */}
+              <div className="px-3 py-1.5 bg-slate-50/90 border-b border-slate-200/70 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <span className="truncate">
+                    ИИ-режим: <strong className="text-slate-700">Авто</strong> (Gemini 2.5-flash → Резерв: OpenRouter Free)
+                  </span>
+                </div>
+                <span className="font-mono-tabular shrink-0 text-slate-400 font-medium">
+                  {school.name}
+                </span>
+              </div>
+
               {dueOrOverdueTasks.length > 0 && (
                 <div className="px-3.5 py-2 bg-amber-50/90 border-b border-amber-200/80 flex items-center justify-between gap-2 text-[11px] text-amber-950">
                   <div className="flex items-center gap-1.5 truncate">
@@ -1630,16 +1795,79 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                     {/* Transparent Context & Provider Attribution Indicator */}
                     <div className="mt-1 px-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400">
                       <span>{msg.createdAt}</span>
-                      {msg.role === 'pixel' &&
-                        (msg.providerId || msg.modelName) && (
-                          <span className="font-mono-tabular">
-                            ·{' '}
-                            {formatMessageProviderAttribution(
-                              msg.providerId,
-                              msg.modelName
-                            )}
-                          </span>
-                        )}
+
+                      {msg.role === 'pixel' && (
+                        <>
+                          {/* Duration badge */}
+                          {typeof msg.durationMs === 'number' && msg.durationMs > 0 && (
+                            <span className="font-mono-tabular px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-medium border border-slate-200/60">
+                              ⏱️ {msg.durationMs < 1000 ? `${msg.durationMs} мс` : `${(msg.durationMs / 1000).toFixed(1)} с`}
+                            </span>
+                          )}
+
+                          {/* Provider and Model badge */}
+                          {(msg.providerId || msg.modelName) && (
+                            <span
+                              className={`inline-flex items-center gap-1 font-mono-tabular px-1.5 py-0.5 rounded font-medium border ${
+                                msg.providerId === 'openrouter'
+                                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200/70'
+                                  : msg.providerId === 'ollama'
+                                    ? 'bg-amber-50 text-amber-800 border-amber-200/70'
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200/70'
+                              }`}
+                            >
+                              <span>
+                                {msg.providerId === 'openrouter'
+                                  ? 'OpenRouter Free'
+                                  : msg.providerId === 'ollama'
+                                    ? 'Ollama'
+                                    : 'Gemini'}
+                              </span>
+                              {msg.modelName && (
+                                <span className="opacity-75">· {msg.modelName}</span>
+                              )}
+                            </span>
+                          )}
+
+                          {/* Failover notice badge */}
+                          {msg.failoverNotice && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-100/90 text-amber-900 border border-amber-300/80 font-medium">
+                              🔄 Переключение
+                            </span>
+                          )}
+
+                          {/* Speak button for Pixel response */}
+                          {!msg.isStreaming && !msg.isError && msg.content.trim() && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleSpeakMessage(msg.id, msg.content)}
+                              title={
+                                currentlySpeakingMsgId === msg.id && isSpeakingActive
+                                  ? 'Остановить воспроизведение'
+                                  : 'Озвучить ответ Пикселя'
+                              }
+                              className={`inline-flex items-center gap-1 font-mono-tabular px-1.5 py-0.5 rounded font-medium border transition-colors ${
+                                currentlySpeakingMsgId === msg.id && isSpeakingActive
+                                  ? 'bg-amber-100 text-amber-900 border-amber-300 font-bold animate-pulse'
+                                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {currentlySpeakingMsgId === msg.id && isSpeakingActive ? (
+                                <>
+                                  <Square className="w-2.5 h-2.5 fill-current text-amber-900" />
+                                  <span>Стоп</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Volume2 className="w-2.5 h-2.5 text-[#00A8B5]" />
+                                  <span>Озвучить</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </>
+                      )}
+
                       {msg.role === 'pixel' &&
                         msg.usedContextLabels &&
                         msg.usedContextLabels.length > 0 && (
@@ -1692,6 +1920,56 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   )}
                 </div>
 
+                {/* Active Speech Recognition Banner */}
+                {(speechInputStatus === 'listening' || speechInputStatus === 'recognizing') && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-900">
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="w-2 h-2 rounded-full bg-red-600 animate-ping shrink-0" />
+                      <span className="font-semibold">
+                        {speechInputStatus === 'listening' ? 'Слушаю вас... Говорите' : 'Распознавание...'}
+                      </span>
+                      {isRemoteSpeechService && (
+                        <span
+                          className="text-[10px] text-red-700 bg-red-100 px-1.5 py-0.5 rounded font-mono"
+                          title="Распознавание выполняется через службу браузера"
+                        >
+                          Браузерная служба
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => browserSpeechInput.stop()}
+                        className="px-2 py-0.5 rounded-lg bg-red-600 text-white text-[11px] font-bold hover:bg-red-700 transition-colors"
+                      >
+                        Готово
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => browserSpeechInput.cancel()}
+                        className="px-1.5 py-0.5 rounded-lg text-red-700 hover:bg-red-100 text-[11px]"
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Speech Input Error Banner */}
+                {speechInputError && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
+                    <span className="truncate">{speechInputError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSpeechInputError(null)}
+                      className="p-1 hover:bg-amber-100 rounded text-amber-700"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
                 <form
                   onSubmit={handleSendCompanionMessage}
                   className="flex items-center gap-1.5"
@@ -1708,6 +1986,32 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                     }
                     className="flex-1 min-w-0 rounded-xl border border-slate-300 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00A8B5] disabled:opacity-60"
                   />
+                  {/* Microphone STT Button */}
+                  <button
+                    type="button"
+                    onClick={handleToggleVoiceRecord}
+                    disabled={isPixelGenerating || !isMicSupported}
+                    title={
+                      !isMicSupported
+                        ? 'Голосовой ввод не поддерживается данным браузером'
+                        : speechInputStatus === 'listening' || speechInputStatus === 'recognizing'
+                          ? 'Остановить запись голоса'
+                          : 'Голосовой ввод (нажмите и говорите)'
+                    }
+                    className={`p-2 rounded-xl transition-colors shrink-0 ${
+                      speechInputStatus === 'listening' || speechInputStatus === 'recognizing'
+                        ? 'bg-red-600 text-white animate-pulse'
+                        : !isMicSupported
+                          ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                          : 'bg-slate-100 text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                    }`}
+                  >
+                    {speechInputStatus === 'listening' || speechInputStatus === 'recognizing' ? (
+                      <MicOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Mic className="w-3.5 h-3.5" />
+                    )}
+                  </button>
                   {isPixelGenerating ? (
                     <button
                       type="button"
@@ -2741,6 +3045,11 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
           </div>
         </div>
       </div>
+
+      <PixelVoiceSettingsModal
+        isOpen={isVoiceSettingsOpen}
+        onClose={() => setIsVoiceSettingsOpen(false)}
+      />
     </>
   );
 };

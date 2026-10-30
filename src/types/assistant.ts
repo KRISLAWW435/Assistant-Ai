@@ -323,6 +323,9 @@ export interface CompanionMessage {
   providerId?: AIProviderId;
   providerLabel?: string;
   failoverNotice?: string;
+  durationMs?: number;
+  selectedProvider?: AIProviderSelectionMode;
+  errorReason?: string;
 }
 
 export interface CompanionCustomPosition {

@@ -12,8 +12,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = 3000;
-export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview';
+export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 const rawEnvOpenRouterModel = (process.env.OPENROUTER_MODEL || '').trim();
 export const OPENROUTER_DEFAULT_FREE_MODEL =
   rawEnvOpenRouterModel &&
@@ -167,11 +167,11 @@ const MAX_KB_CATEGORY_CHARS = 3500;
 const STREAM_CHUNK_SIZE_CHARS = 180;
 
 // Per-attempt timeout & heartbeat interval
-const GEMINI_ATTEMPT_TIMEOUT_MS = 55000;
-const OPENROUTER_ATTEMPT_TIMEOUT_MS = 45000;
-const OLLAMA_ATTEMPT_TIMEOUT_MS = 30000;
-const HEARTBEAT_INTERVAL_MS = 2500;
-const CIRCUIT_BREAKER_COOLDOWN_MS = 60 * 1000; // 60s cooldown for temporarily failing provider
+const GEMINI_ATTEMPT_TIMEOUT_MS = 14000;
+const OPENROUTER_ATTEMPT_TIMEOUT_MS = 20000;
+const OLLAMA_ATTEMPT_TIMEOUT_MS = 10000;
+const HEARTBEAT_INTERVAL_MS = 2000;
+const CIRCUIT_BREAKER_COOLDOWN_MS = 30 * 1000; // 30s cooldown for temporarily failing provider
 
 const recentDiagnostics: SafeDiagnosticLogEntry[] = [];
 const MAX_DIAGNOSTIC_ENTRIES = 25;
@@ -318,11 +318,11 @@ let serverSpecialistModelAssignments: Record<
   string,
   { providerSelection: 'auto' | AIProviderId; specificModel?: string }
 > = {
-  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  manager: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  marketer: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
+  manager: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
+  methodist: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
+  analyst: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
+  pixel: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
 };
 
 let serverFailoverSettings = {
@@ -651,9 +651,14 @@ const ROLE_INSTRUCTIONS: Record<AssistantEndpointMode, string> = {
 2. ЗАПРЕЩЕНО подменять отсутствующие данные собственными предположениями.
 3. Чётко разделяйте **Фактические данные из запроса/документа** и **Аналитические гипотезы / формулы расчёта**. Если для вывода не хватает цифр, прямо перечислите, какие метрики или выгрузки нужны для точного расчёта.`,
 
-  pixel: `Вы — «Пиксель», дружелюбный, тёплый, но профессиональный и лаконичный личный ИИ-помощник управляющей Анны.
-Вы живёте в рабочем пространстве Анны и помогаете ей управлять двумя детскими школами — KIBERONE и RENDERIA: следить за списком задач, помнить важные рабочие факты, поддерживать комфортный рабочий ритм и быстро формулировать короткие заметки или идеи.
-Обращайтесь к пользователю по имени «Анна», отвечайте тепло, по делу, без инфантильности и без лишней воды (обычно 2–5 предложений или компактный список, если Анна не попросила развёрнутый ответ).`,
+  pixel: `Вы — «Пиксель», дружелюбный, тёплый, профессиональный и лаконичный личный ИИ-помощник управляющей Анны.
+Вы живёте в рабочем пространстве Анны и помогаете ей управлять двумя детскими школами — KIBERONE и RENDERIA:
+1. Вы помните важные рабочие факты об Анне и её школах (из раздела «Подтверждённые записи из памяти об Анне» ниже).
+2. Вы отслеживаете актуальные рабочие задачи Анны (из раздела «Актуальные задачи в списке дел Анны» ниже).
+3. При вопросах о сохранённых данных, задачах или планах — ВСЕГДА опирайтесь на переданный контекст памяти и актуальных задач. Если в памяти или списке задач есть подходящая информация, прямо цитируйте и называйте её.
+4. Если Анна просит создать задачу или что-то запомнить, подтвердите это доброжелательно и кратко (например: «Анна, я подготовил черновик ниже — подтвердите сохранение в один клик!»).
+5. Обращайтесь к пользователю по имени «Анна», отвечайте тепло, по делу, без инфантильности и без лишней воды (обычно 2–5 предложений или компактный список, если Анна не попросила развёрнутый ответ).
+6. Учитывайте активную школу в запросе, но помните, что вы помогаете Анне сразу в обеих школах — KIBERONE и RENDERIA.`,
 };
 
 export function buildSystemInstruction(body: GeminiChatRequestBody): string {
@@ -943,6 +948,23 @@ function classifyProviderError(
   };
 }
 
+function getThinkingConfigForGeminiModel(modelName: string): Record<string, unknown> | undefined {
+  const norm = (modelName || '').toLowerCase();
+  // Gemini 2.5 generation models support thinkingBudget (0 turns off thinking latency)
+  if (norm.startsWith('gemini-2.5')) {
+    return { thinkingBudget: 0 };
+  }
+  // Gemini 3.1 flash-lite supports thinkingBudget: 0 for fast responses
+  if (norm.includes('3.1-flash-lite')) {
+    return { thinkingBudget: 0 };
+  }
+  // Gemini 3.8 and Gemini 3 full models support thinkingLevel
+  if (norm.startsWith('gemini-3')) {
+    return { thinkingLevel: ThinkingLevel.LOW };
+  }
+  return undefined;
+}
+
 /**
  * Provider 1: Google Gemini Free execution
  */
@@ -960,17 +982,20 @@ async function executeGeminiGeneration(params: {
   let usedModel = GEMINI_MODEL;
   let response;
 
+  const primaryThinking = getThinkingConfigForGeminiModel(usedModel);
+  const primaryConfig: Record<string, unknown> = {
+    systemInstruction: params.systemInstruction,
+    abortSignal: params.signal,
+  };
+  if (primaryThinking) {
+    primaryConfig.thinkingConfig = primaryThinking;
+  }
+
   try {
     response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+      model: usedModel,
       contents: params.messages,
-      config: {
-        systemInstruction: params.systemInstruction,
-        thinkingConfig: {
-          thinkingLevel: ThinkingLevel.LOW,
-        },
-        abortSignal: params.signal,
-      },
+      config: primaryConfig,
     });
   } catch (primaryErr) {
     const errText =
@@ -987,16 +1012,19 @@ async function executeGeminiGeneration(params: {
 
     if (!params.signal.aborted && isQuotaOrOverload) {
       usedModel = GEMINI_QUOTA_FALLBACK_MODEL;
+      const fallbackThinking = getThinkingConfigForGeminiModel(usedModel);
+      const fallbackConfig: Record<string, unknown> = {
+        systemInstruction: params.systemInstruction,
+        abortSignal: params.signal,
+      };
+      if (fallbackThinking) {
+        fallbackConfig.thinkingConfig = fallbackThinking;
+      }
+
       response = await ai.models.generateContent({
         model: usedModel,
         contents: params.messages,
-        config: {
-          systemInstruction: params.systemInstruction,
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.LOW,
-          },
-          abortSignal: params.signal,
-        },
+        config: fallbackConfig,
       });
     } else {
       throw primaryErr;
@@ -1098,7 +1126,10 @@ async function executeOpenRouterFreeGeneration(params: {
       throw new Error(`OpenRouter Error: ${data.error.message}`);
     }
 
-    const text = String(data?.choices?.[0]?.message?.content || '').trim();
+    const rawContent = data?.choices?.[0]?.message?.content;
+    const text = typeof rawContent === 'string' ? rawContent.trim() : '';
+    // Strict requirement: Never substitute internal model reasoning for user content.
+    // If content is empty, trigger the standard controlled failover via EMPTY_MODEL_RESPONSE.
     if (!text) {
       throw new Error('EMPTY_MODEL_RESPONSE');
     }

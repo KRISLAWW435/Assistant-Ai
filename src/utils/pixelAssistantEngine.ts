@@ -294,19 +294,25 @@ export function buildSelectivePixelContext(
   const schoolCfg = SCHOOLS[activeSchool];
   const lowerQuery = query.toLowerCase();
 
-  // Select up to 4 most relevant confirmed memories
+  // Select up to 4 most relevant confirmed memories strictly matching active school or universal profile
   const confirmedMemories = memories.filter((m) => m.confirmedByAnna);
   const relevantMemories = confirmedMemories
-    .filter(
-      (m) =>
-        m.schoolId === activeSchool ||
-        m.schoolId === 'both' ||
-        m.category === 'profile' ||
-        m.category === 'preferences' ||
-        lowerQuery
-          .split(/\s+/)
-          .some((w) => w.length > 3 && m.content.toLowerCase().includes(w))
-    )
+    .filter((m) => {
+      // If memory explicitly belongs to the other school, never leak it
+      if (m.schoolId && m.schoolId !== activeSchool && m.schoolId !== 'both') {
+        return false;
+      }
+      if (m.schoolId === activeSchool || m.schoolId === 'both') {
+        return true;
+      }
+      // General profile / preferences apply universally
+      if (m.category === 'profile' || m.category === 'preferences') {
+        return true;
+      }
+      return lowerQuery
+        .split(/\s+/)
+        .some((w) => w.length > 3 && m.content.toLowerCase().includes(w));
+    })
     .slice(0, 4)
     .map((m) => ({
       id: m.id,
@@ -315,9 +321,13 @@ export function buildSelectivePixelContext(
       content: m.content,
     }));
 
-  // Select active (not done) tasks
+  // Select active (not done) tasks strictly for the active school
   const activeTasks = tasks
-    .filter((t) => t.status !== 'done')
+    .filter(
+      (t) =>
+        t.status !== 'done' &&
+        (!t.schoolId || t.schoolId === activeSchool || t.schoolId === 'both')
+    )
     .slice(0, 5)
     .map((t) => ({
       id: t.id,
