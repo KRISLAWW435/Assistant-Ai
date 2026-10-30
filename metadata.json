@@ -1,6 +1,8 @@
 {
   "name": "KIBERone & Renderia Business Assistant",
   "description": "Внутренний рабочий ИИ-кабинет для управляющей двух детских образовательных школ: KIBERone и Renderia.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "microphone"
+  ],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

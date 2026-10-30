@@ -1,6 +1,7 @@
 /**
- * Browser native Speech-to-Text provider utilizing the Web Speech Recognition API.
- * (window.SpeechRecognition || window.webkitSpeechRecognition).
+ * Browser native Speech-to-Text provider utilizing Web Speech Recognition API
+ * (window.SpeechRecognition || window.webkitSpeechRecognition) and MediaDevices diagnostic check.
+ * Strictly prevents word duplication by keeping immutable finalized segments and cleanly replacing interim clauses.
  */
 
 import {
@@ -8,9 +9,9 @@ import {
   SpeechInputError,
   SpeechInputOptions,
   SpeechInputStatus,
+  SpeechRecognitionResultEvent,
 } from '../../types/voice';
 
-// Type definitions for Web Speech API in TypeScript without dom-speech lib
 interface IWindowSpeechRecognition {
   new (): ISpeechRecognitionInstance;
 }
@@ -68,13 +69,14 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
   private recognition: ISpeechRecognitionInstance | null = null;
   private status: SpeechInputStatus = 'idle';
   private resultListeners = new Set<
-    (transcript: string, isFinal: boolean) => void
+    (event: SpeechRecognitionResultEvent) => void
   >();
   private errorListeners = new Set<(error: SpeechInputError) => void>();
   private statusListeners = new Set<(status: SpeechInputStatus) => void>();
 
   private intentionalStop = false;
   private currentOptions?: SpeechInputOptions;
+  private lastSessionFinal = '';
 
   constructor() {
     this.updateStatus(this.isSupported() ? 'idle' : 'unsupported');
@@ -91,7 +93,6 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
 
   /**
    * Chromium's webkitSpeechRecognition sends audio stream to Google's cloud speech backend.
-   * This method lets the UI transparently inform the user about speech service mode.
    */
   public isRemoteService(): boolean {
     if (typeof window === 'undefined') return false;
@@ -106,12 +107,101 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
     return this.status;
   }
 
+  /**
+   * Diagnostic permission check triggered ONLY when the user clicks the microphone button.
+   * If getUserMedia succeeds, the track is stopped immediately to release the hardware.
+   */
+  private async checkMicrophonePermissionDiagnostic(): Promise<SpeechInputError | null> {
+    if (typeof window === 'undefined') return null;
+
+    if (window.isSecureContext === false) {
+      return {
+        code: 'security-error',
+        technicalErrorName: 'InsecureContext',
+        message:
+          'Микрофон требует защищённого соединения (HTTPS / Secure Context). В небезопасном контексте браузер блокирует медиаустройства.',
+      };
+    }
+
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      return null;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Stop tracks immediately after diagnostic check to release hardware
+      stream.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {
+          // ignore track close error
+        }
+      });
+      return null;
+    } catch (err: unknown) {
+      const errorObj = err as Error;
+      const errorName = errorObj.name || '';
+      const rawMsg = errorObj.message || '';
+
+      if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
+        return {
+          code: 'not-allowed',
+          technicalErrorName: errorName,
+          message:
+            'Доступ к микрофону заблокирован в браузере (NotAllowedError). Нажмите на значок настроек/замка в адресной строке и разрешите микрофон для этого сайта.',
+          isPermissionDenied: true,
+        };
+      }
+
+      if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError') {
+        return {
+          code: 'not-found',
+          technicalErrorName: errorName,
+          message:
+            'Микрофон не обнаружен (NotFoundError). Проверьте подключение аудиоустройства или настройки входа в операционной системе.',
+        };
+      }
+
+      if (errorName === 'NotReadableError' || errorName === 'TrackStartError') {
+        return {
+          code: 'not-readable',
+          technicalErrorName: errorName,
+          message:
+            'Микрофон занят другой программой или заблокирован на уровне ОС (NotReadableError). Закройте другие приложения, использующие микрофон.',
+        };
+      }
+
+      if (errorName === 'SecurityError') {
+        return {
+          code: 'security-error',
+          technicalErrorName: errorName,
+          message:
+            'Доступ к микрофону заблокирован политикой безопасности iframe или браузера (SecurityError / Permissions Policy).',
+        };
+      }
+
+      if (errorName === 'AbortError') {
+        return {
+          code: 'aborted',
+          technicalErrorName: errorName,
+          message: 'Запрос на доступ к микрофону был прерван (AbortError).',
+        };
+      }
+
+      return {
+        code: 'unknown',
+        technicalErrorName: errorName,
+        message: `Ошибка доступа к микрофону (${errorName || 'Unknown'}): ${rawMsg}`,
+      };
+    }
+  }
+
   public async start(options?: SpeechInputOptions): Promise<void> {
     if (!this.isSupported()) {
       const err: SpeechInputError = {
         code: 'not-supported',
         message:
-          'Ваш браузер не поддерживает распознавание речи (SpeechRecognition API). Рекомендуется использовать Chrome, Edge или Safari.',
+          'Ваш браузер не поддерживает SpeechRecognition API. Рекомендуется использовать Chrome, Edge или Safari.',
       };
       this.notifyError(err);
       this.updateStatus('unsupported');
@@ -125,7 +215,16 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
 
     this.currentOptions = options;
     this.intentionalStop = false;
+    this.lastSessionFinal = '';
     this.updateStatus('requesting_permission');
+
+    // Diagnostic preflight check on user click
+    const preflightError = await this.checkMicrophonePermissionDiagnostic();
+    if (preflightError) {
+      this.updateStatus('error');
+      this.notifyError(preflightError);
+      return;
+    }
 
     try {
       const win = window as unknown as {
@@ -137,8 +236,8 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
       this.recognition = rec;
 
       rec.lang = options?.lang || 'ru-RU';
-      rec.continuous = options?.continuous !== false; // keep listening while user pauses
-      rec.interimResults = true; // live feedback
+      rec.continuous = options?.continuous !== false;
+      rec.interimResults = true;
       rec.maxAlternatives = 1;
 
       rec.onstart = () => {
@@ -150,31 +249,48 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
       };
 
       rec.onresult = (event: ISpeechRecognitionEvent) => {
-        let interimTranscript = '';
-        let finalTranscript = '';
+        let sessionFinal = '';
+        let currentInterim = '';
 
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
+        // Iterate over full results array from the beginning of this recognition session.
+        // Web Speech API keeps all isFinal chunks in results[0..n-1] and interim in results[n].
+        for (let i = 0; i < event.results.length; ++i) {
           const item = event.results[i];
-          const text = item[0]?.transcript || '';
+          const text = (item[0]?.transcript || '').trim();
+          if (!text) continue;
+
           if (item.isFinal) {
-            finalTranscript += text;
+            sessionFinal = sessionFinal ? `${sessionFinal} ${text}` : text;
           } else {
-            interimTranscript += text;
+            currentInterim = currentInterim ? `${currentInterim} ${text}` : text;
           }
         }
 
-        if (finalTranscript.trim()) {
-          this.notifyResult(finalTranscript.trim(), true);
-        } else if (interimTranscript.trim()) {
-          if (this.currentOptions?.onInterimResult) {
-            this.currentOptions.onInterimResult(interimTranscript.trim());
-          }
-          this.notifyResult(interimTranscript.trim(), false);
+        this.lastSessionFinal = sessionFinal;
+
+        const fullTranscript = sessionFinal
+          ? currentInterim
+            ? `${sessionFinal} ${currentInterim}`
+            : sessionFinal
+          : currentInterim;
+
+        const isLatestFinal =
+          event.results.length > 0 &&
+          event.results[event.results.length - 1]?.isFinal === true;
+
+        if (this.currentOptions?.onInterimResult && currentInterim) {
+          this.currentOptions.onInterimResult(currentInterim);
         }
+
+        this.notifyResult({
+          finalTranscript: sessionFinal,
+          interimTranscript: currentInterim,
+          fullTranscript,
+          isFinal: isLatestFinal,
+        });
       };
 
       rec.onerror = (event: ISpeechRecognitionErrorEvent) => {
-        // If aborted intentionally by stop() / cancel(), ignore
         if (event.error === 'aborted' && this.intentionalStop) {
           return;
         }
@@ -182,32 +298,45 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
         let friendlyMessage = 'Ошибка распознавания речи.';
         let isDenied = false;
         let isNet = false;
+        let code: SpeechInputError['code'] = 'unknown';
 
         switch (event.error) {
           case 'not-allowed':
-          case 'service-not-allowed':
+            code = 'not-allowed';
             friendlyMessage =
-              'Доступ к микрофону заблокирован в браузере. Разрешите микрофон в настройках сайта.';
+              'Доступ к микрофону заблокирован в браузере (not-allowed). Разрешите микрофон в настройках сайта.';
             isDenied = true;
             break;
-          case 'no-speech':
-            friendlyMessage = 'Речь не обнаружена. Попробуйте сказать фразу ближе к микрофону.';
-            break;
-          case 'audio-capture':
-            friendlyMessage = 'Микрофон не обнаружен или занят другой программой.';
+          case 'service-not-allowed':
+            code = 'service-not-allowed';
+            friendlyMessage =
+              'Служба распознавания речи Google отклонила запрос (service-not-allowed). Возможно, заблокирован сетевой доступ к речевым серверам.';
+            isDenied = true;
             break;
           case 'network':
+            code = 'network';
             friendlyMessage =
-              'Сетевая ошибка службы распознавания речи браузера. Проверьте интернет-соединение.';
+              'Сетевая ошибка службы распознавания речи Google (network). Проверьте подключение к интернету.';
             isNet = true;
             break;
+          case 'no-speech':
+            code = 'no-speech';
+            friendlyMessage = 'Речь не обнаружена. Говорите ближе к микрофону.';
+            break;
+          case 'audio-capture':
+            code = 'audio-capture';
+            friendlyMessage =
+              'Не удалось захватить аудиопоток: микрофон не найден или отключён (audio-capture).';
+            break;
           default:
-            friendlyMessage = event.message || `Сбой распознавания (${event.error}).`;
+            code = (event.error as SpeechInputError['code']) || 'unknown';
+            friendlyMessage = event.message || `Сбой распознавания речи (${event.error}).`;
             break;
         }
 
         const err: SpeechInputError = {
-          code: (event.error as SpeechInputError['code']) || 'unknown',
+          code,
+          technicalErrorName: event.error,
           message: friendlyMessage,
           isPermissionDenied: isDenied,
           isNetworkError: isNet,
@@ -218,6 +347,16 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
       };
 
       rec.onend = () => {
+        // Emit final state on clean recognition finish
+        if (this.lastSessionFinal) {
+          this.notifyResult({
+            finalTranscript: this.lastSessionFinal,
+            interimTranscript: '',
+            fullTranscript: this.lastSessionFinal,
+            isFinal: true,
+          });
+        }
+
         this.recognition = null;
         if (!this.intentionalStop && this.status !== 'error') {
           this.updateStatus('idle');
@@ -263,7 +402,7 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
   }
 
   public onResult(
-    callback: (transcript: string, isFinal: boolean) => void
+    callback: (event: SpeechRecognitionResultEvent) => void
   ): () => void {
     this.resultListeners.add(callback);
     return () => this.resultListeners.delete(callback);
@@ -292,10 +431,10 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
     }
   }
 
-  private notifyResult(transcript: string, isFinal: boolean): void {
+  private notifyResult(event: SpeechRecognitionResultEvent): void {
     for (const listener of this.resultListeners) {
       try {
-        listener(transcript, isFinal);
+        listener(event);
       } catch {
         // ignore callback error
       }

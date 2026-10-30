@@ -1,64 +1,103 @@
 /**
  * Text preprocessing and chunking utility for Russian Speech Synthesis (TTS).
- * Removes markdown, technical artifacts, and splits long texts into natural sentence chunks.
+ * Removes markdown, technical artifacts, emojis, code and tables without leaving
+ * orphan punctuation marks, and splits long texts into natural sentence chunks.
  */
 
-// Common emojis and unicode pictograms to filter out for cleaner natural speech
+// Common emojis and unicode pictograms to filter out for clean natural speech
 const EMOJI_REGEX =
-  /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA70}-\u{1FAFF}]/gu;
+  /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA70}-\u{1FAFF}\u{FE00}-\u{FE0F}]/gu;
 
 /**
  * Cleans a markdown-formatted assistant message into clean, natural text suitable for speech.
+ * Eliminates technical markers, tables, code blocks, duplicate dots, and expands common business abbreviations.
  */
 export function cleanTextForSpeech(rawMarkdown: string): string {
   if (!rawMarkdown) return '';
 
   let text = rawMarkdown;
 
-  // 1. Remove code blocks
-  text = text.replace(/```[\s\S]*?```/g, ' код опущен ');
+  // 1. Remove markdown code blocks completely (do not pronounce raw code or JSON)
+  text = text.replace(/```[\s\S]*?```/g, '');
   text = text.replace(/`([^`]+)`/g, '$1');
 
-  // 2. Remove markdown images and replace links with just the anchor text
+  // 2. Remove markdown tables (lines containing pipes |)
+  text = text.replace(/^\|.*\|$/gm, '');
+  text = text.replace(/^[\s]*[-|:\s]+$/gm, '');
+
+  // 3. Remove markdown images and replace links with anchor text
   text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '');
   text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+  text = text.replace(/https?:\/\/\S+/g, '');
 
-  // 3. Remove technical stop/error tags
+  // 4. Remove technical stop/error tags and UI status markers
   text = text.replace(/\[Остановлено\]/gi, '');
   text = text.replace(/\[Генерация[^\]]*\]/gi, '');
+  text = text.replace(/\[Уточнить[^\]]*\]/gi, '');
 
-  // 4. Remove headings (#, ##, ###)
-  text = text.replace(/^#{1,6}\s+/gm, '');
+  // 5. Headings: remove leading # and ensure line ends with a natural pause (period)
+  text = text.replace(/^#{1,6}\s+(.+)$/gm, (_, heading) => {
+    const trimmed = heading.trim();
+    if (!trimmed) return '';
+    return /[.!?:;]$/.test(trimmed) ? trimmed : trimmed + '.';
+  });
 
-  // 5. Remove bold and italic markers
+  // 6. Bold, italic, strikethrough markdown
   text = text.replace(/\*\*([^*]+)\*\*/g, '$1');
   text = text.replace(/\*([^*]+)\*/g, '$1');
   text = text.replace(/__([^_]+)__/g, '$1');
   text = text.replace(/_([^_]+)_/g, '$1');
   text = text.replace(/~~([^~]+)~~/g, '$1');
 
-  // 6. Clean bullet list markers
-  text = text.replace(/^[\s]*[-*+]\s+/gm, '');
-  text = text.replace(/^[\s]*\d+\.\s+/gm, '');
+  // 7. Bullet and numbered lists: clean markers, keep sentence ends
+  text = text.replace(/^[\s]*[-*+]\s+(.+)$/gm, (_, item) => {
+    const trimmed = item.trim();
+    return /[.!?;:]$/.test(trimmed) ? trimmed : trimmed + '.';
+  });
+  text = text.replace(/^[\s]*\d+\.\s+(.+)$/gm, (_, item) => {
+    const trimmed = item.trim();
+    return /[.!?;:]$/.test(trimmed) ? trimmed : trimmed + '.';
+  });
 
-  // 7. Remove blockquotes and horizontal rules
+  // 8. Blockquotes and horizontal rules
   text = text.replace(/^>\s+/gm, '');
   text = text.replace(/^[-*_]{3,}\s*$/gm, '');
 
-  // 8. Replace technical symbols, emojis, and math signs
+  // 9. Emojis and decorative symbols (remove without leaving dangling spaces before punctuation)
   text = text.replace(EMOJI_REGEX, '');
+  text = text.replace(/[•▪▫★☆▶►✔✓✕✖✅❌⚠️]/g, '');
   text = text.replace(/[«»„“]/g, '"');
   text = text.replace(/[—–]/g, ' - ');
 
-  // 9. Normalize multiple whitespaces and newlines into smooth pauses
-  text = text.replace(/\r?\n\s*\r?\n/g, '. ');
-  text = text.replace(/\r?\n/g, ' ');
-  text = text.replace(/\s{2,}/g, ' ');
+  // 10. Common Russian abbreviations expansion for natural pronunciation
+  text = text.replace(/\bт\.д\./gi, 'так далее');
+  text = text.replace(/\bт\.п\./gi, 'тому подобное');
+  text = text.replace(/\bт\.е\./gi, 'то есть');
+  text = text.replace(/\bнапр\./gi, 'например');
+  text = text.replace(/\bруб\./gi, 'рублей');
+  text = text.replace(/\bчел\./gi, 'человек');
+  text = text.replace(/\bшт\./gi, 'штук');
+  text = text.replace(/\b(\d+)\s*г\./gi, '$1 года');
+  text = text.replace(/\b(\d+)\s*руб\b/gi, '$1 рублей');
 
-  // 10. Clean up repeated punctuation
+  // 11. Normalize line breaks into natural sentence pauses without extra dots
+  text = text.replace(/([.!?:;])\s*\r?\n\s*\r?\n/g, '$1 ');
+  text = text.replace(/([^.!?:;\s])\s*\r?\n\s*\r?\n/g, '$1. ');
+  text = text.replace(/\r?\n/g, ' ');
+
+  // 12. Fix whitespace before punctuation marks: 'Анна !' -> 'Анна!'
+  text = text.replace(/\s+([.,!?;:])/g, '$1');
+
+  // 13. Fix colliding punctuation (e.g., '! .' -> '!', '? .' -> '?', ': .' -> ':', '. .' -> '.')
+  text = text.replace(/([!?])\s*\.+/g, '$1');
+  text = text.replace(/([:;,])\s*\.+/g, '$1');
+  text = text.replace(/\.+\s*([!?])/g, '$1');
   text = text.replace(/\.{2,}/g, '.');
   text = text.replace(/!{2,}/g, '!');
   text = text.replace(/\?{2,}/g, '?');
+
+  // 14. Multiple whitespaces normalization
+  text = text.replace(/\s{2,}/g, ' ');
 
   return text.trim();
 }
@@ -84,7 +123,6 @@ export function splitTextIntoSpeechChunks(
   let currentChunk = '';
 
   for (const sentence of rawSentences) {
-    // If a single sentence is already very long, split it by commas or clauses
     if (sentence.length > maxChunkChars) {
       if (currentChunk) {
         chunks.push(currentChunk.trim());

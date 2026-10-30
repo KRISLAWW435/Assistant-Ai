@@ -61,7 +61,10 @@ import {
 import { MarkdownMessageContent } from './MarkdownMessageContent';
 import { browserSpeechInput } from '../providers/voice/browserSpeechInputProvider';
 import { voiceManager } from '../providers/voice/voiceManager';
-import { SpeechInputStatus } from '../types/voice';
+import {
+  SpeechInputStatus,
+  SpeechRecognitionResultEvent,
+} from '../types/voice';
 import { PixelVoiceSettingsModal } from './PixelVoiceSettingsModal';
 
 interface PixelCompanionProps {
@@ -355,6 +358,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   >(null);
   const [isSpeakingActive, setIsSpeakingActive] = useState(false);
 
+  // Store pre-speech text to avoid ever duplicating/accumulating interim recognition chunks
+  const speechSessionBaseTextRef = useRef<string>('');
+
   const isMicSupported = useMemo(() => browserSpeechInput.isSupported(), []);
   const isRemoteSpeechService = useMemo(
     () => browserSpeechInput.isRemoteService(),
@@ -368,23 +374,41 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       if (status !== 'error') {
         setSpeechInputError(null);
       }
+      if (status === 'idle' || status === 'error') {
+        speechSessionBaseTextRef.current = '';
+      }
     });
 
     const unsubError = browserSpeechInput.onError((err) => {
       setSpeechInputError(err.message);
+      speechSessionBaseTextRef.current = '';
     });
 
-    const unsubResult = browserSpeechInput.onResult((transcript, isFinal) => {
-      setChatInput((prev) => {
-        const base = prev.trim();
-        if (!base) return transcript;
-        if (base.endsWith(transcript)) return base;
-        return `${base} ${transcript}`;
+    const unsubResult = browserSpeechInput.onResult(
+      (event: SpeechRecognitionResultEvent) => {
+        const base = speechSessionBaseTextRef.current;
+        const spoken = event.fullTranscript.trim();
+        if (!spoken) return;
+
+        // Auto-capitalize first word if inserting at beginning
+        const formattedSpoken =
+          !base && spoken.length > 0
+            ? spoken.charAt(0).toUpperCase() + spoken.slice(1)
+            : spoken;
+
+        setChatInput(base ? `${base} ${formattedSpoken}` : formattedSpoken);
+      }
+    );
+
+    const unsubGemini = voiceManager
+      .getGeminiOutputProvider()
+      .onStateChange((speaking, messageId) => {
+        setIsSpeakingActive(speaking);
+        setCurrentlySpeakingMsgId(messageId);
       });
-    });
 
-    const unsubTts = voiceManager
-      .getOutputProvider()
+    const unsubBrowser = voiceManager
+      .getBrowserOutputProvider()
       .onStateChange((speaking, messageId) => {
         setIsSpeakingActive(speaking);
         setCurrentlySpeakingMsgId(messageId);
@@ -394,17 +418,23 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       unsubStatus();
       unsubError();
       unsubResult();
-      unsubTts();
+      unsubGemini();
+      unsubBrowser();
     };
   }, []);
 
   const handleToggleVoiceRecord = async () => {
     if (speechInputStatus === 'listening' || speechInputStatus === 'recognizing') {
       browserSpeechInput.stop();
+      speechSessionBaseTextRef.current = '';
       return;
     }
     setSpeechInputError(null);
     voiceManager.stopSpeaking();
+
+    // Snapshot existing draft so speech replaces the live dictated portion cleanly
+    speechSessionBaseTextRef.current = chatInput.trim();
+
     await browserSpeechInput.start({
       lang: 'ru-RU',
       continuous: true,
@@ -418,7 +448,13 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       return;
     }
     try {
-      await voiceManager.speakReply(content, msgId);
+      await voiceManager.speakReply(content, msgId, {
+        onFallbackUsed: (reason) => {
+          setSpeechBubble({
+            text: reason,
+          });
+        },
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setSpeechBubble({
@@ -1958,12 +1994,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
                 {/* Speech Input Error Banner */}
                 {speechInputError && (
-                  <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
-                    <span className="truncate">{speechInputError}</span>
+                  <div className="flex items-start justify-between gap-2 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950">
+                    <div className="flex items-start gap-1.5 leading-snug">
+                      <MicOff className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
+                      <span>{speechInputError}</span>
+                    </div>
                     <button
                       type="button"
                       onClick={() => setSpeechInputError(null)}
-                      className="p-1 hover:bg-amber-100 rounded text-amber-700"
+                      className="p-0.5 hover:bg-amber-100 rounded text-amber-700 shrink-0"
+                      title="Закрыть уведомление"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>

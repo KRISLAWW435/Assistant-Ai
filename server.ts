@@ -518,6 +518,31 @@ function getGenAIClient(): GoogleGenAI {
   return cachedGenAIClient;
 }
 
+let cachedTtsGenAIClient: GoogleGenAI | null = null;
+let cachedTtsKeyFingerprint = '';
+
+function getGenAITtsClient(): GoogleGenAI {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    throw new Error('MISSING_GEMINI_API_KEY');
+  }
+  const fingerprint = `${apiKey.length}:${apiKey.slice(0, 3)}`;
+  if (cachedTtsGenAIClient && cachedTtsKeyFingerprint === fingerprint) {
+    return cachedTtsGenAIClient;
+  }
+  cachedTtsGenAIClient = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      timeout: 60000, // 60s timeout for audio TTS synthesis
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+  cachedTtsKeyFingerprint = fingerprint;
+  return cachedTtsGenAIClient;
+}
+
 /**
  * Part 4: OpenRouter Free Catalog Verification & Strict Zero-Price Guard.
  * Ensures we ONLY ever call `openrouter/free` or models ending with `:free`
@@ -2367,6 +2392,234 @@ async function startServer() {
 
   app.post('/api/gemini/chat', handleAiChatRequest);
   app.post('/api/ai/chat', handleAiChatRequest);
+
+  // Gemini TTS Speech Generation & Model Status endpoints
+  app.get('/api/voice/models', (_req: Request, res: Response) => {
+    const isConfigured = isGeminiApiKeyConfigured();
+    res.json({
+      configured: isConfigured,
+      models: [
+        {
+          id: 'gemini-3.8-flash-lite-tts',
+          name: 'Gemini 3.8 Flash-Lite TTS (Основная скоростная модель)',
+          tier: 'standard',
+          paidTierRequired: false,
+        },
+        {
+          id: 'gemini-3.8-flash-tts',
+          name: 'Gemini 3.8 Flash TTS (Флагманская модель Voice Design)',
+          tier: 'standard',
+          paidTierRequired: false,
+        },
+      ],
+      defaultModel: 'gemini-3.8-flash-lite-tts',
+      paidTierRequired: false,
+      samplePhrase:
+        'Здравствуйте! Я Пиксель. Я помогу вам разобраться с задачами, найти нужные документы и освободить время для действительно важных дел.',
+      sampleStyle:
+        'Естественная русская разговорная речь. Спокойный, доброжелательный, уверенный голос. Мягкая интонация, умеренный темп, чёткая дикция, естественные паузы. Без роботизированной подачи, чрезмерной эмоциональности и рекламной интонации.',
+      voices: [
+        {
+          id: 'Achernar',
+          name: 'Achernar',
+          description: 'Мягкая подача',
+          sampleUrl: '/assets/audio/pixel_sample_achernar.wav',
+        },
+        {
+          id: 'Sulafat',
+          name: 'Sulafat',
+          description: 'Тёплая подача',
+          sampleUrl: '/assets/audio/pixel_sample_sulafat.wav',
+        },
+        {
+          id: 'Vindemiatrix',
+          name: 'Vindemiatrix',
+          description: 'Деликатная подача',
+          sampleUrl: '/assets/audio/pixel_sample_vindemiatrix.wav',
+        },
+        {
+          id: 'Aoede',
+          name: 'Aoede',
+          description: 'Лёгкая, непринуждённая подача',
+          sampleUrl: '/assets/audio/pixel_sample_aoede.wav',
+        },
+      ],
+    });
+  });
+
+  interface TtsCacheItem {
+    audioBase64: string;
+    mimeType: string;
+    model: string;
+    voice: string;
+    serviceTier: string;
+    createdAt: number;
+  }
+
+  const ttsAudioCache = new Map<string, TtsCacheItem>();
+  const MAX_TTS_CACHE_ITEMS = 150;
+  const TTS_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  app.post('/api/voice/tts', async (req: Request, res: Response) => {
+    try {
+      const { text, voice, style, model } = req.body || {};
+      const cleanText = typeof text === 'string' ? text.trim() : '';
+      if (!cleanText) {
+        return res.status(400).json({ error: 'Текст для синтеза речи пуст' });
+      }
+
+      if (!isGeminiApiKeyConfigured()) {
+        return res.status(503).json({
+          error: 'Серверный ключ GEMINI_API_KEY не настроен',
+        });
+      }
+
+      const requestedVoice =
+        typeof voice === 'string' && voice.trim() ? voice.trim() : 'Aoede';
+      const requestedModel =
+        typeof model === 'string' && model.trim()
+          ? model.trim()
+          : 'gemini-3.8-flash-lite-tts';
+      const requestedStyle =
+        typeof style === 'string' && style.trim()
+          ? style.trim()
+          : 'Естественная русская разговорная речь. Чуть более высокий, светлый, лёгкий и мягкий регистр. Приветливый, открытый, воодушевляющий тон, без искусственности и без писклявости.';
+
+      // Generate robust SHA-256 cache key including text, model, voice and style
+      const cacheKey = crypto
+        .createHash('sha256')
+        .update(
+          `${cleanText}::${requestedModel}::${requestedVoice}::${requestedStyle}::audio/wav`
+        )
+        .digest('hex');
+
+      // Check cache first (saves quota, eliminates latency, zero quota burn)
+      const cached = ttsAudioCache.get(cacheKey);
+      const now = Date.now();
+      if (cached) {
+        if (now - cached.createdAt < TTS_CACHE_TTL_MS) {
+          return res.json({
+            success: true,
+            audioBase64: cached.audioBase64,
+            mimeType: cached.mimeType,
+            model: cached.model,
+            voice: cached.voice,
+            serviceTier: cached.serviceTier,
+            fromCache: true,
+          });
+        }
+        ttsAudioCache.delete(cacheKey);
+      }
+
+      const ai = getGenAITtsClient();
+      const inputItem: {
+        type: 'text';
+        text: string;
+        annotations?: Array<{ type: 'speech_metadata'; style: string }>;
+      } = {
+        type: 'text',
+        text: cleanText,
+      };
+      if (requestedStyle) {
+        inputItem.annotations = [
+          { type: 'speech_metadata', style: requestedStyle },
+        ];
+      }
+
+      const interaction = await ai.interactions.create(
+        {
+          model: requestedModel,
+          input: [inputItem],
+          response_format: { type: 'audio' },
+          generation_config: {
+            speech_config: [
+              {
+                language: 'ru-RU',
+                voice: requestedVoice,
+              },
+            ],
+          },
+        },
+        { timeout: 50000 }
+      );
+
+      const audio = interaction.output_audio;
+      if (!audio?.data) {
+        return res.status(502).json({
+          error: 'Модель Gemini TTS вернула пустой аудио-ответ',
+        });
+      }
+
+      const payload: TtsCacheItem = {
+        audioBase64: audio.data,
+        mimeType: audio.mime_type || 'audio/wav',
+        model: interaction.model || requestedModel,
+        voice: requestedVoice,
+        serviceTier: interaction.service_tier || 'standard',
+        createdAt: now,
+      };
+
+      // Evict expired or oldest items if exceeding bound
+      if (ttsAudioCache.size >= MAX_TTS_CACHE_ITEMS) {
+        let evicted = false;
+        for (const [key, item] of ttsAudioCache.entries()) {
+          if (now - item.createdAt >= TTS_CACHE_TTL_MS) {
+            ttsAudioCache.delete(key);
+            evicted = true;
+          }
+        }
+        if (!evicted) {
+          const oldestKey = ttsAudioCache.keys().next().value;
+          if (oldestKey) ttsAudioCache.delete(oldestKey);
+        }
+      }
+      ttsAudioCache.set(cacheKey, payload);
+
+      res.json({
+        success: true,
+        ...payload,
+      });
+    } catch (err: unknown) {
+      const rawMsg = err instanceof Error ? err.message : String(err || '');
+      const lower = rawMsg.toLowerCase();
+
+      if (
+        lower.includes('429') ||
+        lower.includes('resource_exhausted') ||
+        lower.includes('rate limit') ||
+        lower.includes('too_many_requests') ||
+        lower.includes('quota')
+      ) {
+        console.warn(
+          `[TTS Rate Limit] Gemini TTS quota reached: ${rawMsg}`
+        );
+        return res.status(429).json({
+          error: rawMsg || 'Лимит запросов к Gemini TTS API исчерпан. Используется встроенный синтез браузера.',
+          code: 'RATE_LIMIT',
+        });
+      }
+
+      if (
+        lower.includes('abort') ||
+        lower.includes('timeout') ||
+        lower.includes('timed out')
+      ) {
+        console.warn(
+          `[TTS Timeout] Gemini TTS generation timed out: ${rawMsg}`
+        );
+        return res.status(504).json({
+          error: 'Превышено время ожидания ответа Gemini TTS API. Используется встроенный синтез браузера.',
+          code: 'TIMEOUT',
+        });
+      }
+
+      console.warn('[TTS Error]', rawMsg);
+      res.status(500).json({
+        error: `Сбой синтеза речи Gemini TTS: ${rawMsg}`,
+        code: 'TTS_ERROR',
+      });
+    }
+  });
 
   // Mount Vite middleware in development or static dist in production
   if (process.env.NODE_ENV !== 'production') {
