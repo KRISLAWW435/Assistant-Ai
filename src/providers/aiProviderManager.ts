@@ -165,22 +165,7 @@ export function writeStoredProviderSelection(mode: AIProviderSelectionMode): voi
   }
 }
 
-/**
- * Optional Electron IPC bridge declaration for future desktop version (Part 8 & Part 9).
- */
-declare global {
-  interface Window {
-    electronAPI?: {
-      ollama?: {
-        checkTags?: () => Promise<{ models: Array<{ name: string }> }>;
-        chat?: (payload: Record<string, unknown>) => Promise<{
-          model: string;
-          message?: { content?: string };
-        }>;
-      };
-    };
-  }
-}
+// Electron IPC bridge declaration is unified in src/types/electronBridge.ts
 
 class ServerBackedProviderAdapter implements AIProvider {
   public readonly id: AIProviderId;

@@ -77,6 +77,7 @@ import {
   renderStatusBadge,
 } from './components/KnowledgeBaseView';
 import { BackupsView } from './components/BackupsView';
+import { ConnectionsView } from './components/ConnectionsView';
 import {
   formatFileSizeRu,
   RightWorkspacePanel,
@@ -2059,6 +2060,14 @@ export default function App() {
                   onTriggerImportBackup={handleTriggerImportBackup}
                   statusBanner={knowledgeBanner}
                   onDismissBanner={() => setKnowledgeBanner(null)}
+                />
+              )}
+
+              {activeSection === 'connections' && (
+                <ConnectionsView
+                  activeSchool={activeSchool}
+                  onNavigate={handleSelectSection}
+                  onRefreshProviders={handleCheckProvidersOnDemand}
                 />
               )}
             </>

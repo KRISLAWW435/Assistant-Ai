@@ -9,7 +9,8 @@ export type NavSection =
   | 'methodist'
   | 'analyst'
   | 'knowledge'
-  | 'backups';
+  | 'backups'
+  | 'connections';
 
 export type RightPanelTab = 'materials' | 'preview' | 'search' | 'context';
 
@@ -98,6 +99,70 @@ export type AIProviderHealthStatus =
   | 'quota_exceeded'
   | 'not_configured'
   | 'key_check_required';
+
+export type AIConnectionStatus =
+  | 'connected'
+  | 'available'
+  | 'error'
+  | 'not_configured'
+  | 'quota_exceeded'
+  | 'testing';
+
+export interface AIConnectionProfile {
+  id: string;
+  providerId: AIProviderId;
+  userDefinedName: string;
+  maskedKey: string;
+  encryptedCredentialReference: string;
+  selectedModel: string;
+  connectionStatus: AIConnectionStatus;
+  isDefault?: boolean;
+  lastCheckedAt?: string;
+  lastError?: string;
+  createdAt?: string;
+}
+
+export type SpecialistRoleKey =
+  | 'marketer'
+  | 'manager'
+  | 'methodist'
+  | 'analyst'
+  | 'pixel';
+
+export interface SpecialistModelSetting {
+  providerSelection: 'auto' | AIProviderId;
+  specificModel?: string;
+}
+
+export type SpecialistModelAssignments = Record<
+  SpecialistRoleKey,
+  SpecialistModelSetting
+>;
+
+export interface FailoverSequenceSettings {
+  order: AIProviderId[];
+  allowCloudFailoverForDocs: boolean;
+  requireExplicitDocConsent: boolean;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  sizeBytes?: number;
+  modifiedAt?: string;
+  parameterSize?: string;
+  format?: string;
+  family?: string;
+}
+
+export interface OllamaLocalInfo {
+  installed: boolean;
+  running: boolean;
+  version?: string;
+  apiUrl: string;
+  models: OllamaModelInfo[];
+  lastCheckedAt?: string;
+  error?: string;
+}
 
 export interface ChatMessage {
   id: string;

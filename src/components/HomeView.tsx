@@ -5,6 +5,7 @@ import {
   BarChart3,
   BookOpen,
   Clock,
+  Cpu,
   GraduationCap,
   Megaphone,
   MessageSquareHeart,
@@ -115,6 +116,14 @@ export const HomeView: React.FC<HomeViewProps> = ({
               >
                 <Archive className="w-4 h-4 text-slate-600" />
                 <span>Резервные копии</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('connections')}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold glass-button text-slate-700 hover:bg-white transition-colors"
+              >
+                <Cpu className="w-4 h-4 text-teal-600" />
+                <span>Подключения ИИ</span>
               </button>
             </div>
           </div>

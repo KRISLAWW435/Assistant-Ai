@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import express, { Request, Response } from 'express';
+import express, { type Request, type Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -14,8 +14,13 @@ const __dirname = path.dirname(__filename);
 const PORT = 3000;
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview';
+const rawEnvOpenRouterModel = (process.env.OPENROUTER_MODEL || '').trim();
 export const OPENROUTER_DEFAULT_FREE_MODEL =
-  process.env.OPENROUTER_MODEL || 'openrouter/free';
+  rawEnvOpenRouterModel &&
+  (rawEnvOpenRouterModel === 'openrouter/free' ||
+    rawEnvOpenRouterModel.endsWith(':free'))
+    ? rawEnvOpenRouterModel
+    : 'openrouter/free';
 export const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'
 ).replace(/\/+$/, '');
@@ -38,6 +43,28 @@ type AIProviderHealthStatus =
   | 'quota_exceeded'
   | 'not_configured'
   | 'key_check_required';
+
+type AIConnectionStatus =
+  | 'connected'
+  | 'available'
+  | 'error'
+  | 'not_configured'
+  | 'quota_exceeded'
+  | 'testing';
+
+interface ServerAIConnectionProfile {
+  id: string;
+  providerId: AIProviderId;
+  userDefinedName: string;
+  maskedKey: string;
+  encryptedCredentialReference: string;
+  selectedModel: string;
+  connectionStatus: AIConnectionStatus;
+  isDefault?: boolean;
+  lastCheckedAt?: string;
+  lastError?: string;
+  createdAt?: string;
+}
 
 export type ServerGenerationStage =
   | 'connecting'
@@ -179,15 +206,130 @@ interface ProviderRuntimeHealth {
   availableFreeModels?: string[];
 }
 
+const serverRawSecretsStore = new Map<string, string>();
+const serverConnectionProfiles: ServerAIConnectionProfile[] = [];
+
+function getGeminiApiKey(): string {
+  const envKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (envKey && envKey !== 'MY_GEMINI_API_KEY' && envKey.length >= 10) {
+    return envKey;
+  }
+  const defaultProfile =
+    serverConnectionProfiles.find(
+      (p) => p.providerId === 'gemini' && p.isDefault
+    ) || serverConnectionProfiles.find((p) => p.providerId === 'gemini');
+  if (defaultProfile) {
+    const stored = serverRawSecretsStore.get(defaultProfile.id);
+    if (stored && stored !== 'MY_GEMINI_API_KEY' && stored.length >= 10) {
+      return stored;
+    }
+  }
+  return '';
+}
+
 function isGeminiApiKeyConfigured(): boolean {
-  const key = (process.env.GEMINI_API_KEY || '').trim();
-  return Boolean(key && key !== 'MY_GEMINI_API_KEY' && key.length >= 10);
+  return Boolean(getGeminiApiKey());
+}
+
+function getOpenRouterApiKey(): string {
+  const envKey = (process.env.OPENROUTER_API_KEY || '').trim();
+  if (envKey && envKey !== 'MY_OPENROUTER_API_KEY' && envKey.length >= 10) {
+    return envKey;
+  }
+  const defaultProfile =
+    serverConnectionProfiles.find(
+      (p) => p.providerId === 'openrouter' && p.isDefault
+    ) || serverConnectionProfiles.find((p) => p.providerId === 'openrouter');
+  if (defaultProfile) {
+    const stored = serverRawSecretsStore.get(defaultProfile.id);
+    if (stored && stored !== 'MY_OPENROUTER_API_KEY' && stored.length >= 10) {
+      return stored;
+    }
+  }
+  return '';
 }
 
 function isOpenRouterApiKeyConfigured(): boolean {
-  const key = (process.env.OPENROUTER_API_KEY || '').trim();
-  return Boolean(key && key !== 'MY_OPENROUTER_API_KEY' && key.length >= 10);
+  return Boolean(getOpenRouterApiKey());
 }
+
+function maskApiKeyOnServer(key: string): string {
+  const trimmed = (key || '').trim();
+  if (!trimmed) return 'Не настроен';
+  if (trimmed.length <= 8) return '••••••••';
+  const prefix = trimmed.slice(0, 4);
+  const suffix = trimmed.slice(-4);
+  return `${prefix}••••${suffix}`;
+}
+
+function initializeDefaultConnectionProfiles(): void {
+  if (serverConnectionProfiles.length > 0) return;
+
+  const geminiKey = (process.env.GEMINI_API_KEY || '').trim();
+  const geminiConfigured = isGeminiApiKeyConfigured();
+  const geminiId = 'profile-gemini-primary';
+  serverConnectionProfiles.push({
+    id: geminiId,
+    providerId: 'gemini',
+    userDefinedName: 'Google Gemini (Основной API-ключ)',
+    maskedKey: geminiConfigured ? maskApiKeyOnServer(geminiKey) : 'Не настроен',
+    encryptedCredentialReference: 'ref-env-gemini-primary',
+    selectedModel: GEMINI_MODEL,
+    connectionStatus: geminiConfigured ? 'connected' : 'not_configured',
+    isDefault: true,
+    createdAt: new Date().toISOString(),
+  });
+  if (geminiConfigured) {
+    serverRawSecretsStore.set(geminiId, geminiKey);
+  }
+
+  const openrouterKey = (process.env.OPENROUTER_API_KEY || '').trim();
+  const openrouterConfigured = isOpenRouterApiKeyConfigured();
+  const openrouterId = 'profile-openrouter-free';
+  serverConnectionProfiles.push({
+    id: openrouterId,
+    providerId: 'openrouter',
+    userDefinedName: 'OpenRouter Free (Резервный профиль)',
+    maskedKey: openrouterConfigured ? maskApiKeyOnServer(openrouterKey) : 'Не настроен',
+    encryptedCredentialReference: 'ref-env-openrouter-free',
+    selectedModel: OPENROUTER_DEFAULT_FREE_MODEL,
+    connectionStatus: openrouterConfigured ? 'available' : 'not_configured',
+    isDefault: false,
+    createdAt: new Date().toISOString(),
+  });
+  if (openrouterConfigured) {
+    serverRawSecretsStore.set(openrouterId, openrouterKey);
+  }
+
+  serverConnectionProfiles.push({
+    id: 'profile-ollama-local',
+    providerId: 'ollama',
+    userDefinedName: 'Ollama (Локальный ПК 127.0.0.1:11434)',
+    maskedKey: 'Локальный API (без ключа)',
+    encryptedCredentialReference: 'ref-local-ollama',
+    selectedModel: 'llama3.2:3b',
+    connectionStatus: 'not_configured',
+    isDefault: false,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+let serverSpecialistModelAssignments: Record<
+  string,
+  { providerSelection: 'auto' | AIProviderId; specificModel?: string }
+> = {
+  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  manager: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+};
+
+let serverFailoverSettings = {
+  order: ['gemini', 'openrouter', 'ollama'] as AIProviderId[],
+  allowCloudFailoverForDocs: false,
+  requireExplicitDocConsent: true,
+};
 
 const providerHealthRegistry: Record<AIProviderId, ProviderRuntimeHealth> = {
   gemini: {
@@ -351,7 +493,7 @@ let cachedGenAIClient: GoogleGenAI | null = null;
 let cachedKeyFingerprint = '';
 
 function getGenAIClient(): GoogleGenAI {
-  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  const apiKey = getGeminiApiKey();
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     throw new Error('MISSING_GEMINI_API_KEY');
   }
@@ -658,7 +800,7 @@ function classifyProviderError(
       code: 'PAID_MODEL_FORBIDDEN',
       message:
         'Защита от платных списаний: в OpenRouter разрешены только бесплатные модели (openrouter/free или :free с нулевой стоимостью).',
-      shouldFailover: false,
+      shouldFailover: true,
       healthStatus: 'key_check_required',
       applyCooldown: false,
     };
@@ -877,25 +1019,25 @@ async function executeOpenRouterFreeGeneration(params: {
   messages: IncomingChatMessage[];
   signal: AbortSignal;
 }): Promise<{ text: string; model: string }> {
-  const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
+  const apiKey = getOpenRouterApiKey();
   if (!apiKey || apiKey === 'MY_OPENROUTER_API_KEY') {
     throw new Error('MISSING_OPENROUTER_API_KEY');
   }
 
-  const requestedModel = (
+  let requestedModel = (
     process.env.OPENROUTER_MODEL || 'openrouter/free'
   ).trim();
 
   // Strict Zero-Cost Guard (Part 4): block any model ID that is not `openrouter/free` or `:free`
   if (!isStrictlyFreeOpenRouterModelId(requestedModel)) {
-    throw new Error('PAID_MODEL_FORBIDDEN');
+    requestedModel = 'openrouter/free';
   }
 
   // If a specific `:free` model is configured, verify against live catalog that pricing is 0/0
   if (requestedModel !== 'openrouter/free') {
     const freeCatalog = await fetchOpenRouterFreeCatalog(params.signal);
     if (freeCatalog.length > 1 && !freeCatalog.includes(requestedModel)) {
-      throw new Error('PAID_MODEL_FORBIDDEN');
+      requestedModel = 'openrouter/free';
     }
   }
 
@@ -1088,6 +1230,8 @@ async function startServer() {
   // Strict payload size limit to protect the server
   app.use(express.json({ limit: '2mb' }));
 
+  initializeDefaultConnectionProfiles();
+
   // 1. Health & Safe Diagnostics Status Endpoint (Never exposes API keys or user content)
   app.get('/api/gemini/status', (_req: Request, res: Response) => {
     res.json({
@@ -1182,6 +1326,401 @@ async function startServer() {
     res.json(buildProvidersSystemState());
   });
 
+  // 1d. AI Connection Profiles Management Endpoints
+  app.get('/api/ai/connections', (_req: Request, res: Response) => {
+    initializeDefaultConnectionProfiles();
+    // Return profiles WITHOUT exposing any secrets (maskedKey and public metadata only)
+    res.json(serverConnectionProfiles);
+  });
+
+  app.post('/api/ai/connections', (req: Request, res: Response) => {
+    initializeDefaultConnectionProfiles();
+    const { id, providerId, userDefinedName, rawApiKey, selectedModel, isDefault } =
+      req.body || {};
+
+    if (!providerId || !userDefinedName) {
+      return res.status(400).json({
+        error: { message: 'Укажите провайдера и понятное название подключения.' },
+      });
+    }
+
+    if (providerId === 'openrouter' && selectedModel) {
+      if (!isStrictlyFreeOpenRouterModelId(selectedModel)) {
+        return res.status(400).json({
+          error: {
+            message:
+              'Защита от списаний: для OpenRouter разрешены исключительно бесплатные модели (openrouter/free или :free).',
+          },
+        });
+      }
+    }
+
+    const existingIndex = id
+      ? serverConnectionProfiles.findIndex((p) => p.id === id)
+      : -1;
+    const profileId =
+      existingIndex >= 0
+        ? id
+        : `profile-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+    const cleanKey = typeof rawApiKey === 'string' ? rawApiKey.trim() : '';
+
+    if (cleanKey) {
+      serverRawSecretsStore.set(profileId, cleanKey);
+    }
+
+    if (isDefault) {
+      serverConnectionProfiles.forEach((p) => {
+        if (p.providerId === providerId) p.isDefault = false;
+      });
+    }
+
+    const currentKey =
+      serverRawSecretsStore.get(profileId) ||
+      (providerId === 'gemini'
+        ? (process.env.GEMINI_API_KEY || '').trim()
+        : providerId === 'openrouter'
+          ? (process.env.OPENROUTER_API_KEY || '').trim()
+          : '');
+    const maskedKey =
+      providerId === 'ollama'
+        ? 'Локальный API (без ключа)'
+        : maskApiKeyOnServer(currentKey);
+    const hasKey =
+      providerId === 'ollama'
+        ? true
+        : Boolean(currentKey && currentKey.length >= 8);
+
+    const updatedProfile: ServerAIConnectionProfile = {
+      id: profileId,
+      providerId,
+      userDefinedName: String(userDefinedName).trim().slice(0, 60),
+      maskedKey,
+      encryptedCredentialReference: `ref-srv-${profileId}`,
+      selectedModel: String(
+        selectedModel ||
+          (providerId === 'gemini'
+            ? GEMINI_MODEL
+            : providerId === 'openrouter'
+              ? OPENROUTER_DEFAULT_FREE_MODEL
+              : 'llama3.2:3b')
+      ).trim(),
+      connectionStatus: hasKey
+        ? providerId === 'ollama'
+          ? 'not_configured'
+          : 'available'
+        : 'not_configured',
+      isDefault: Boolean(isDefault),
+      createdAt:
+        existingIndex >= 0
+          ? serverConnectionProfiles[existingIndex].createdAt
+          : new Date().toISOString(),
+    };
+
+    if (existingIndex >= 0) {
+      serverConnectionProfiles[existingIndex] = updatedProfile;
+    } else {
+      serverConnectionProfiles.push(updatedProfile);
+    }
+
+    res.json(updatedProfile);
+  });
+
+  app.delete('/api/ai/connections/:id', (req: Request, res: Response) => {
+    initializeDefaultConnectionProfiles();
+    const id = req.params.id;
+    const index = serverConnectionProfiles.findIndex((p) => p.id === id);
+    if (index >= 0) {
+      serverConnectionProfiles.splice(index, 1);
+      serverRawSecretsStore.delete(id);
+      return res.json({ ok: true });
+    }
+    res.status(404).json({ error: { message: 'Профиль подключения не найден.' } });
+  });
+
+  app.post('/api/ai/connections/:id/test', async (req: Request, res: Response) => {
+    initializeDefaultConnectionProfiles();
+    const profileId = req.params.id;
+    const profile = serverConnectionProfiles.find((p) => p.id === profileId);
+    if (!profile) {
+      return res
+        .status(404)
+        .json({ error: { message: 'Профиль подключения не найден.' } });
+    }
+
+    const startMs = Date.now();
+    const testedAt = new Date().toISOString();
+
+    if (profile.providerId === 'gemini') {
+      const rawKey =
+        serverRawSecretsStore.get(profileId) ||
+        (process.env.GEMINI_API_KEY || '').trim();
+      if (!rawKey) {
+        profile.connectionStatus = 'not_configured';
+        profile.lastCheckedAt = testedAt;
+        profile.lastError = 'API-ключ не настроен на сервере.';
+        return res.json({
+          ok: false,
+          status: 'not_configured',
+          model: profile.selectedModel,
+          error: profile.lastError,
+          testedAt,
+        });
+      }
+      try {
+        const testClient = new GoogleGenAI({ apiKey: rawKey });
+        await testClient.models.generateContent({
+          model: profile.selectedModel || GEMINI_MODEL,
+          contents: 'ping',
+        });
+        profile.connectionStatus = 'connected';
+        profile.lastCheckedAt = testedAt;
+        profile.lastError = undefined;
+        return res.json({
+          ok: true,
+          status: 'connected',
+          model: profile.selectedModel,
+          testedAt,
+          latencyMs: Date.now() - startMs,
+        });
+      } catch (err) {
+        const classified = classifyProviderError('gemini', err);
+        profile.connectionStatus =
+          classified.healthStatus === 'connected'
+            ? 'connected'
+            : classified.healthStatus === 'quota_exceeded'
+              ? 'quota_exceeded'
+              : 'error';
+        profile.lastCheckedAt = testedAt;
+        profile.lastError = classified.message;
+        return res.json({
+          ok: false,
+          status: profile.connectionStatus,
+          model: profile.selectedModel,
+          error: classified.message,
+          testedAt,
+          latencyMs: Date.now() - startMs,
+        });
+      }
+    }
+
+    if (profile.providerId === 'openrouter') {
+      const rawKey =
+        serverRawSecretsStore.get(profileId) ||
+        (process.env.OPENROUTER_API_KEY || '').trim();
+      if (!rawKey) {
+        profile.connectionStatus = 'not_configured';
+        profile.lastCheckedAt = testedAt;
+        profile.lastError = 'API-ключ OpenRouter не настроен.';
+        return res.json({
+          ok: false,
+          status: 'not_configured',
+          model: profile.selectedModel,
+          error: profile.lastError,
+          testedAt,
+        });
+      }
+      if (!isStrictlyFreeOpenRouterModelId(profile.selectedModel)) {
+        profile.connectionStatus = 'error';
+        profile.lastCheckedAt = testedAt;
+        profile.lastError =
+          'Защита от списаний: в OpenRouter разрешены только бесплатные модели.';
+        return res.json({
+          ok: false,
+          status: 'error',
+          model: profile.selectedModel,
+          error: profile.lastError,
+          testedAt,
+        });
+      }
+      try {
+        const authRes = await fetch('https://openrouter.ai/api/v1/auth/key', {
+          headers: { Authorization: `Bearer ${rawKey}` },
+        });
+        if (!authRes.ok) {
+          throw new Error(
+            `OpenRouter HTTP ${authRes.status}: Неверный ключ или ошибка авторизации`
+          );
+        }
+        profile.connectionStatus = 'available';
+        profile.lastCheckedAt = testedAt;
+        profile.lastError = undefined;
+        return res.json({
+          ok: true,
+          status: 'available',
+          model: profile.selectedModel,
+          testedAt,
+          latencyMs: Date.now() - startMs,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        profile.connectionStatus = 'error';
+        profile.lastCheckedAt = testedAt;
+        profile.lastError = msg;
+        return res.json({
+          ok: false,
+          status: 'error',
+          model: profile.selectedModel,
+          error: msg,
+          testedAt,
+          latencyMs: Date.now() - startMs,
+        });
+      }
+    }
+
+    if (profile.providerId === 'ollama') {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 2000);
+        const resTags = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+          signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        if (resTags.ok) {
+          const json = (await resTags.json()) as {
+            models?: Array<{ name?: string }>;
+          };
+          const modelNames = (json.models || []).map((m) => m?.name || '');
+          const hasModel = modelNames.some((m) =>
+            m
+              .toLowerCase()
+              .includes((profile.selectedModel || '').toLowerCase())
+          );
+          profile.connectionStatus = 'connected';
+          profile.lastCheckedAt = testedAt;
+          profile.lastError = hasModel
+            ? undefined
+            : `Модель ${profile.selectedModel} пока не загружена в локальную Ollama.`;
+          return res.json({
+            ok: true,
+            status: 'connected',
+            model: profile.selectedModel,
+            testedAt,
+            latencyMs: Date.now() - startMs,
+            error: profile.lastError,
+          });
+        }
+        throw new Error('Локальный API Ollama (127.0.0.1:11434) недоступен.');
+      } catch {
+        profile.connectionStatus = 'not_configured';
+        profile.lastCheckedAt = testedAt;
+        profile.lastError =
+          'Сервер Ollama не запущен (доступен в настольной версии или после локального запуска).';
+        return res.json({
+          ok: false,
+          status: 'not_configured',
+          model: profile.selectedModel,
+          error: profile.lastError,
+          testedAt,
+        });
+      }
+    }
+
+    return res
+      .status(400)
+      .json({ error: { message: 'Неизвестный провайдер.' } });
+  });
+
+  // 1e. Specialist Model Assignment Endpoints
+  app.get('/api/ai/specialist-models', (_req: Request, res: Response) => {
+    res.json(serverSpecialistModelAssignments);
+  });
+
+  app.post('/api/ai/specialist-models', (req: Request, res: Response) => {
+    const assignments = req.body;
+    if (assignments && typeof assignments === 'object') {
+      serverSpecialistModelAssignments = {
+        ...serverSpecialistModelAssignments,
+        ...assignments,
+      };
+    }
+    res.json(serverSpecialistModelAssignments);
+  });
+
+  // 1f. Failover Settings Endpoints
+  app.get('/api/ai/failover-settings', (_req: Request, res: Response) => {
+    res.json(serverFailoverSettings);
+  });
+
+  app.post('/api/ai/failover-settings', (req: Request, res: Response) => {
+    const settings = req.body;
+    if (settings && typeof settings === 'object') {
+      if (Array.isArray(settings.order) && settings.order.length > 0) {
+        serverFailoverSettings.order = settings.order.filter((p: string) =>
+          VALID_PROVIDER_IDS.has(p as AIProviderId)
+        );
+      }
+      if (typeof settings.allowCloudFailoverForDocs === 'boolean') {
+        serverFailoverSettings.allowCloudFailoverForDocs =
+          settings.allowCloudFailoverForDocs;
+      }
+      if (typeof settings.requireExplicitDocConsent === 'boolean') {
+        serverFailoverSettings.requireExplicitDocConsent =
+          settings.requireExplicitDocConsent;
+      }
+    }
+    res.json(serverFailoverSettings);
+  });
+
+  // 1g. Ollama Status & Catalog Endpoint
+  app.get('/api/ai/ollama/status', async (_req: Request, res: Response) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2000);
+    try {
+      const tagsRes = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: ctrl.signal,
+      });
+      if (tagsRes.ok) {
+        const tagsJson = (await tagsRes.json()) as {
+          models?: Array<{
+            name?: string;
+            size?: number;
+            modified_at?: string;
+            details?: {
+              parameter_size?: string;
+              format?: string;
+              family?: string;
+            };
+          }>;
+        };
+        const models = (tagsJson.models || []).map((m) => ({
+          name: String(m.name || ''),
+          sizeBytes: typeof m.size === 'number' ? m.size : undefined,
+          modifiedAt: m.modified_at,
+          parameterSize: m.details?.parameter_size,
+          format: m.details?.format,
+          family: m.details?.family,
+        }));
+        return res.json({
+          installed: true,
+          running: true,
+          apiUrl: OLLAMA_BASE_URL,
+          models,
+          lastCheckedAt: new Date().toISOString(),
+        });
+      }
+      return res.json({
+        installed: false,
+        running: false,
+        apiUrl: OLLAMA_BASE_URL,
+        models: [],
+        error: 'Локальный порт 11434 не отвечает.',
+      });
+    } catch {
+      return res.json({
+        installed: false,
+        running: false,
+        apiUrl: OLLAMA_BASE_URL,
+        models: [],
+        error:
+          'Локальный демон Ollama не обнаружен (доступен на ПК после запуска Ollama).',
+      });
+    } finally {
+      clearTimeout(t);
+    }
+  });
+
   // 2. Universal Server Endpoint for the 4 Specialists & Pixel Companion with Free Provider Failover
   const handleAiChatRequest = async (req: Request, res: Response) => {
     const startMs = Date.now();
@@ -1252,12 +1791,23 @@ async function startServer() {
       consentedProvidersSet.add('gemini');
     }
 
-    const requestedSelection: AIProviderSelectionMode =
+    let requestedSelection: AIProviderSelectionMode =
       body.providerSelection === 'gemini' ||
       body.providerSelection === 'openrouter' ||
       body.providerSelection === 'ollama'
         ? body.providerSelection
         : 'auto';
+
+    if (requestedSelection === 'auto') {
+      const specialistAssignment = serverSpecialistModelAssignments[body.mode];
+      if (
+        specialistAssignment &&
+        specialistAssignment.providerSelection &&
+        specialistAssignment.providerSelection !== 'auto'
+      ) {
+        requestedSelection = specialistAssignment.providerSelection;
+      }
+    }
 
     // Validate initial document consent before starting any generation
     if (hasDocumentsWithText) {
@@ -1310,18 +1860,32 @@ async function startServer() {
       ? Math.min(body.selectedDocuments.length, MAX_TOTAL_DOCS)
       : 0;
 
-    // Determine candidate provider sequence (max 1 attempt per provider, no infinite loops)
+    // Determine candidate provider sequence (failover order always preserved)
+    const configuredOrder = serverFailoverSettings.order || [
+      'gemini',
+      'openrouter',
+      'ollama',
+    ];
+
     let candidateProviders: AIProviderId[];
     if (requestedSelection !== 'auto') {
-      candidateProviders = [requestedSelection];
+      // Put requested provider first, followed by the remaining configured providers in failover order
+      candidateProviders = [
+        requestedSelection,
+        ...configuredOrder.filter((p) => p !== requestedSelection),
+      ];
     } else {
-      // Auto priority order: 1. Gemini Free -> 2. OpenRouter Free -> 3. Ollama (if local connected)
-      const baseOrder: AIProviderId[] = ['gemini', 'openrouter'];
-      if (
-        providerHealthRegistry.ollama.status === 'connected' ||
-        providerHealthRegistry.ollama.status === 'available'
-      ) {
-        baseOrder.push('ollama');
+      const baseOrder: AIProviderId[] = configuredOrder.filter((p) => {
+        if (p === 'ollama') {
+          return (
+            providerHealthRegistry.ollama.status === 'connected' ||
+            providerHealthRegistry.ollama.status === 'available'
+          );
+        }
+        return true;
+      });
+      if (baseOrder.length === 0) {
+        baseOrder.push('gemini', 'openrouter');
       }
       // Put non-cooldown configured providers first, keeping fallback order intact
       const ready = baseOrder.filter((p) => !isProviderInCooldown(p));
@@ -1354,11 +1918,23 @@ async function startServer() {
         res.setHeader('X-Accel-Buffering', 'no');
         res.flushHeaders?.();
 
+        const firstUsableProvider =
+          candidateProviders.find((p) =>
+            p === 'gemini'
+              ? isGeminiApiKeyConfigured()
+              : p === 'openrouter'
+                ? isOpenRouterApiKeyConfigured()
+                : providerHealthRegistry.ollama.status === 'connected' ||
+                  providerHealthRegistry.ollama.status === 'available'
+          ) ||
+          candidateProviders[0] ||
+          'gemini';
+
         writeSseEvent(res, {
           type: 'stage',
           stage: 'waiting_model',
           requestId,
-          providerId: candidateProviders[0] || 'gemini',
+          providerId: firstUsableProvider,
           model: GEMINI_MODEL,
         });
 
@@ -1389,23 +1965,65 @@ async function startServer() {
         const providerId = candidateProviders[i];
         if (clientDisconnected) break;
 
-        // Skip unconfigured secondary providers in auto mode unless it's the only one left
-        if (
-          requestedSelection === 'auto' &&
-          i > 0 &&
-          providerId === 'openrouter' &&
-          !isOpenRouterApiKeyConfigured()
-        ) {
-          lastClassifiedError = lastClassifiedError || {
+        // Skip unconfigured providers if there are other candidate providers to try
+        if (providerId === 'openrouter' && !isOpenRouterApiKeyConfigured()) {
+          if (!firstFailedProvider) {
+            firstFailedProvider = 'openrouter';
+          }
+          lastClassifiedError = {
             status: 503,
             code: 'OPENROUTER_NOT_CONFIGURED',
             message:
-              'Основной провайдер Gemini временно недоступен, а резервный провайдер OpenRouter Free ещё не настроен (не задан OPENROUTER_API_KEY на сервере).',
-            shouldFailover: false,
+              'Провайдер OpenRouter Free ещё не настроен: не задан ключ API в настройках подключений или на сервере.',
+            shouldFailover: true,
             healthStatus: 'not_configured',
             applyCooldown: false,
           };
-          continue;
+          if (i < candidateProviders.length - 1) {
+            continue;
+          }
+        }
+
+        if (providerId === 'gemini' && !isGeminiApiKeyConfigured()) {
+          if (!firstFailedProvider) {
+            firstFailedProvider = 'gemini';
+          }
+          lastClassifiedError = {
+            status: 503,
+            code: 'GEMINI_NOT_CONFIGURED',
+            message:
+              'Провайдер Google Gemini не настроен: не задан GEMINI_API_KEY на сервере.',
+            shouldFailover: true,
+            healthStatus: 'not_configured',
+            applyCooldown: false,
+          };
+          if (i < candidateProviders.length - 1) {
+            continue;
+          }
+        }
+
+        if (
+          providerId === 'ollama' &&
+          !(
+            providerHealthRegistry.ollama.status === 'connected' ||
+            providerHealthRegistry.ollama.status === 'available'
+          )
+        ) {
+          if (!firstFailedProvider) {
+            firstFailedProvider = 'ollama';
+          }
+          lastClassifiedError = {
+            status: 503,
+            code: 'OLLAMA_NOT_AVAILABLE',
+            message:
+              'Локальный сервер Ollama не запущен на порту 11434 (доступен в настольной версии или после запуска Ollama на ПК).',
+            shouldFailover: true,
+            healthStatus: 'not_configured',
+            applyCooldown: false,
+          };
+          if (i < candidateProviders.length - 1) {
+            continue;
+          }
         }
 
         // Part 7: Per-provider document consent check before failing over with documents!
@@ -1469,7 +2087,7 @@ async function startServer() {
             firstFailedProvider && firstFailedProvider !== providerId
           );
           const failoverNotice = failoverUsed
-            ? `${PROVIDER_SHORT_LABELS_RU[firstFailedProvider!]} временно недоступен. Переключились на ${PROVIDER_SHORT_LABELS_RU[providerId]}`
+            ? `${PROVIDER_SHORT_LABELS_RU[firstFailedProvider!]} недоступен или не настроен. Переключились на ${PROVIDER_SHORT_LABELS_RU[providerId]}`
             : undefined;
 
           finalResult = {

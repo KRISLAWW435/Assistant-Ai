@@ -28,6 +28,7 @@ const SECTION_TITLES: Record<NavSection, string> = {
   analyst: 'Бизнес-аналитик',
   knowledge: 'База знаний двух школ',
   backups: 'Резервные копии',
+  connections: 'Подключения ИИ и модели',
 };
 
 export const TopBar: React.FC<TopBarProps> = ({

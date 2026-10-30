@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Cpu,
   GraduationCap,
   Home,
   Megaphone,
@@ -118,6 +119,12 @@ const APP_SECTION_ITEMS: AppSectionItem[] = [
     label: 'Резервные копии',
     sublabel: 'Экспорт и импорт базы',
     icon: Archive,
+  },
+  {
+    id: 'connections',
+    label: 'Подключения ИИ',
+    sublabel: 'Ключи, модели, Ollama',
+    icon: Cpu,
   },
 ];
 
