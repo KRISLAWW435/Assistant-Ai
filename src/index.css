@@ -1,0 +1,203 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Manrope', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', 'Manrope', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+
+    --kiber-yellow: #FFD700;
+    --kiber-cyan: #00A8B5;
+    --kiber-brick: #9B2C2C;
+    --kiber-petrol: #165B73;
+    --renderia-lime: #84CC16;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #F8F9FC;
+    color: #0F172A;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono-tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(15, 23, 42, 0.07);
+}
+
+.glass-button {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+}
+
+/* ============================================================================
+   COMPACT PIXEL PET ANIMATIONS (Respects prefers-reduced-motion)
+   ============================================================================ */
+
+@keyframes pixelBreathe {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-1.8px) scale(1.015, 0.99);
+  }
+}
+
+@keyframes pixelSleepBreathe {
+  0%, 100% {
+    transform: translateY(2.5px) rotate(2deg) scale(1, 0.98);
+  }
+  50% {
+    transform: translateY(3.5px) rotate(3deg) scale(1.02, 0.96);
+  }
+}
+
+@keyframes pixelPetBounce {
+  0% {
+    transform: translateY(0px) rotate(0deg) scale(1);
+  }
+  28% {
+    transform: translateY(-5px) rotate(-4deg) scale(1.05, 0.96);
+  }
+  58% {
+    transform: translateY(0px) rotate(3deg) scale(0.98, 1.03);
+  }
+  82% {
+    transform: translateY(-2.5px) rotate(-1.5deg) scale(1.02, 0.99);
+  }
+  100% {
+    transform: translateY(0px) rotate(0deg) scale(1);
+  }
+}
+
+@keyframes pixelEarTwitchLeft {
+  0%, 88%, 100% {
+    transform: rotate(0deg);
+  }
+  92% {
+    transform: rotate(-5deg);
+  }
+  96% {
+    transform: rotate(2deg);
+  }
+}
+
+@keyframes pixelEarTwitchRight {
+  0%, 86%, 100% {
+    transform: rotate(0deg);
+  }
+  91% {
+    transform: rotate(5deg);
+  }
+  95% {
+    transform: rotate(-2deg);
+  }
+}
+
+@keyframes pixelBlink {
+  0%, 93%, 100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.08);
+  }
+}
+
+@keyframes pixelHeartFloat {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.65);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-28px) scale(0.85);
+  }
+}
+
+@keyframes pixelSleepBubble {
+  0% {
+    opacity: 0;
+    transform: translate(0px, 3px) scale(0.8);
+  }
+  45% {
+    opacity: 0.75;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(6px, -11px) scale(1.08);
+  }
+}
+
+.pixel-idle-body {
+  animation: pixelBreathe 4.2s ease-in-out infinite;
+  transform-origin: 50px 76px;
+}
+
+.pixel-sleep-body {
+  animation: pixelSleepBreathe 4.8s ease-in-out infinite;
+  transform-origin: 50px 76px;
+}
+
+.pixel-pet-bounce {
+  animation: pixelPetBounce 0.75s ease-out forwards;
+  transform-origin: 50px 76px;
+}
+
+.pixel-ear-left {
+  animation: pixelEarTwitchLeft 7.2s ease-in-out infinite;
+  transform-origin: 31px 32px;
+}
+
+.pixel-ear-right {
+  animation: pixelEarTwitchRight 7.8s ease-in-out infinite;
+  transform-origin: 69px 32px;
+}
+
+.pixel-blink-eyelids {
+  animation: pixelBlink 5.4s ease-in-out infinite;
+  transform-origin: 50px 49px;
+}
+
+.pixel-heart-float {
+  animation: pixelHeartFloat 1.15s ease-out forwards;
+}
+
+.pixel-sleep-z1 {
+  animation: pixelSleepBubble 2.9s ease-out infinite;
+}
+
+.pixel-sleep-z2 {
+  animation: pixelSleepBubble 2.9s ease-out 1.4s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pixel-idle-body,
+  .pixel-sleep-body,
+  .pixel-pet-bounce,
+  .pixel-ear-left,
+  .pixel-ear-right,
+  .pixel-blink-eyelids,
+  .pixel-heart-float,
+  .pixel-sleep-z1,
+  .pixel-sleep-z2 {
+    animation: none !important;
+    transition: none !important;
+  }
+}
