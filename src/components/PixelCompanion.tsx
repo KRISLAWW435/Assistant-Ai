@@ -68,6 +68,7 @@ import {
   SpeechRecognitionResultEvent,
 } from '../types/voice';
 import { PixelVoiceSettingsModal } from './PixelVoiceSettingsModal';
+import { PixelCharacter, pixelEmotionManager } from './pixel';
 
 interface PixelCompanionProps {
   activeSchool: SchoolId;
@@ -90,6 +91,7 @@ interface PixelCompanionProps {
     prefs: CompanionPreferencesRecord
   ) => Promise<void>;
   onOpenLiveVoice?: () => void;
+  forceOpenChatTrigger?: number;
 }
 
 type CompanionPanelTab = 'chat' | 'tasks' | 'memory';
@@ -246,6 +248,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   onDeleteCompanionTask,
   onSaveCompanionPreferences,
   onOpenLiveVoice,
+  forceOpenChatTrigger,
 }) => {
   // Speech bubble state (separate from character)
   const [speechBubble, setSpeechBubble] = useState<{
@@ -307,8 +310,33 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<CompanionPanelTab>('chat');
 
+  useEffect(() => {
+    if (forceOpenChatTrigger && forceOpenChatTrigger > 0) {
+      setDialogOpen(true);
+      setActiveTab('chat');
+    }
+  }, [forceOpenChatTrigger]);
+
   // Petting animation & floating hearts state (Part 4)
   const [isPetting, setIsPetting] = useState(false);
+  const [petTriggerCount, setPetTriggerCount] = useState(0);
+  const [characterSize, setCharacterSize] = useState<number>(() => {
+    if (typeof window === 'undefined') return 74;
+    if (window.innerWidth < 640) return 54;
+    if (window.innerWidth < 1024) return 64;
+    return 74;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 640) setCharacterSize(54);
+      else if (window.innerWidth < 1024) setCharacterSize(64);
+      else setCharacterSize(74);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const [floatingHearts, setFloatingHearts] = useState<FloatingHeartItem[]>([]);
   const lastPetReactionIdxRef = useRef<number>(-1);
   const petReactionTimeoutRef = useRef<number | null>(null);
@@ -827,6 +855,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
     setIsPetting(true);
     setControlsVisibleByTap(true);
+    setPetTriggerCount((c) => c + 1);
+    pixelEmotionManager.triggerPetInteraction();
 
     if (petBounceTimeoutRef.current) {
       window.clearTimeout(petBounceTimeoutRef.current);
@@ -1497,9 +1527,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         >
           {/* Window Header */}
           <div className="px-4 py-3 bg-gradient-to-r from-amber-50/90 via-white to-lime-50/70 border-b border-slate-200/80 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <PixelCharacter
+                size={34}
+                showAura={false}
+                interactive={false}
+                isSpeaking={isSpeakingActive}
+                isThinking={isPixelGenerating}
+              />
               <span
-                className={`px-2 py-0.5 rounded-md font-display font-extrabold text-[10px] tracking-wide ${
+                className={`px-2 py-0.5 rounded-md font-display font-extrabold text-[10px] tracking-wide shrink-0 ${
                   activeSchool === 'kiberone'
                     ? 'bg-[#FFD700] text-slate-950'
                     : 'bg-[#84CC16] text-slate-950'
@@ -2932,312 +2969,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
               isDragging ? 'cursor-grabbing scale-105' : 'cursor-grab'
             } transition-transform duration-150`}
           >
-            {/* Compact Responsive Size:
-                Mobile: 54x54px (48-60px target)
-                Tablet (sm): 64x64px (55-70px target)
-                Desktop (lg): 74x74px (65-85px target) */}
-            <svg
-              viewBox="0 0 100 100"
-              className="w-[54px] h-[54px] sm:w-[64px] sm:h-[64px] lg:w-[74px] lg:h-[74px] overflow-visible bg-transparent"
-              aria-label="Пиксель — дружелюбный цифровой питомец Анны"
-            >
-              <defs>
-                <filter
-                  id="pixel-compact-shadow"
-                  x="-20%"
-                  y="-20%"
-                  width="140%"
-                  height="140%"
-                >
-                  <feDropShadow
-                    dx="0"
-                    dy="3"
-                    stdDeviation="3"
-                    floodColor="#0F172A"
-                    floodOpacity="0.16"
-                  />
-                </filter>
-                <linearGradient
-                  id="pixelCompactFurGrad"
-                  x1="0"
-                  y1="0"
-                  x2="0"
-                  y2="1"
-                >
-                  <stop offset="0%" stopColor="#FDE68A" />
-                  <stop offset="60%" stopColor="#FCD34D" />
-                  <stop offset="100%" stopColor="#F59E0B" />
-                </linearGradient>
-                <linearGradient
-                  id="pixelCompactBellyGrad"
-                  x1="0"
-                  y1="0"
-                  x2="0"
-                  y2="1"
-                >
-                  <stop offset="0%" stopColor="#FFFFFF" />
-                  <stop offset="100%" stopColor="#FEF3C7" />
-                </linearGradient>
-              </defs>
-
-              <g
-                filter="url(#pixel-compact-shadow)"
-                className={getBodyAnimationClass()}
-              >
-                {/* Left Fluffy Animal Ear (No antenna!) */}
-                <g className="pixel-ear-left">
-                  <path
-                    d="M27 36 C13 14, 24 4, 40 24 Z"
-                    fill="url(#pixelCompactFurGrad)"
-                    stroke="#78350F"
-                    strokeWidth="2.4"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M28 31 C19 17, 26 11, 36 24 Z"
-                    fill="#FDA4AF"
-                  />
-                </g>
-
-                {/* Right Fluffy Animal Ear */}
-                <g className="pixel-ear-right">
-                  <path
-                    d="M73 36 C87 14, 76 4, 60 24 Z"
-                    fill="url(#pixelCompactFurGrad)"
-                    stroke="#78350F"
-                    strokeWidth="2.4"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M72 31 C81 17, 74 11, 64 24 Z"
-                    fill="#FDA4AF"
-                  />
-                </g>
-
-                {/* Soft Rounded Fluffy Body & Cheek Fur (Pure organic creature, zero antennas or rods) */}
-                <path
-                  d="M20 56 C14 52, 14 44, 21 39 C23 23, 35 16, 50 16 C65 16, 77 23, 79 39 C86 44, 86 52, 80 56 C84 72, 74 86, 50 86 C26 86, 16 72, 20 56 Z"
-                  fill="url(#pixelCompactFurGrad)"
-                  stroke="#78350F"
-                  strokeWidth="2.5"
-                  strokeLinejoin="round"
-                />
-
-                {/* Soft Organic Forehead Fur Tuft (No circle, no gem, no antenna) */}
-                <path
-                  d="M44 17 Q50 11 55 17"
-                  fill="url(#pixelCompactFurGrad)"
-                  stroke="#78350F"
-                  strokeWidth="2.2"
-                  strokeLinecap="round"
-                />
-
-                {/* Warm Cream Belly Patch */}
-                <ellipse
-                  cx="50"
-                  cy="70"
-                  rx="18"
-                  ry="12"
-                  fill="url(#pixelCompactBellyGrad)"
-                />
-
-                {/* Subtle School Scarf / Collar Band for KIBERONE / RENDERIA Identity */}
-                <path
-                  d="M32 61 Q50 67 68 61"
-                  fill="none"
-                  stroke={activeSchool === 'renderia' ? '#84CC16' : '#FFD700'}
-                  strokeWidth="3.2"
-                  strokeLinecap="round"
-                />
-
-                {/* Rosy Cheeks */}
-                <ellipse
-                  cx="28"
-                  cy="53"
-                  rx="5.2"
-                  ry="3.2"
-                  fill="#FB7185"
-                  opacity={isPetting ? '0.85' : '0.55'}
-                />
-                <ellipse
-                  cx="72"
-                  cy="53"
-                  rx="5.2"
-                  ry="3.2"
-                  fill="#FB7185"
-                  opacity={isPetting ? '0.85' : '0.55'}
-                />
-
-                {/* Expressive Eyes: Petting Pleasure / Auto-Sleep / Delicate Cursor Tracking */}
-                {isPetting ? (
-                  /* Happy Pleased Closed Arcs (^ ^) */
-                  <g
-                    fill="none"
-                    stroke="#1E293B"
-                    strokeWidth="2.8"
-                    strokeLinecap="round"
-                  >
-                    <path d="M31 46 Q37.5 39 44 46" />
-                    <path d="M56 46 Q62.5 39 69 46" />
-                  </g>
-                ) : isAutoSleeping ? (
-                  /* Calm Sleeping Closed Eyelids */
-                  <g
-                    fill="none"
-                    stroke="#1E293B"
-                    strokeWidth="2.6"
-                    strokeLinecap="round"
-                  >
-                    <path d="M31 46 Q37.5 51 44 46" />
-                    <path d="M56 46 Q62.5 51 69 46" />
-                  </g>
-                ) : (
-                  <g className="pixel-blink-eyelids">
-                    {/* Left Eye */}
-                    <ellipse
-                      cx="37.5"
-                      cy="45"
-                      rx="7.5"
-                      ry="8.2"
-                      fill="#FFFFFF"
-                      stroke="#1E293B"
-                      strokeWidth="2.2"
-                    />
-                    {/* Right Eye */}
-                    <ellipse
-                      cx="62.5"
-                      cy="45"
-                      rx="7.5"
-                      ry="8.2"
-                      fill="#FFFFFF"
-                      stroke="#1E293B"
-                      strokeWidth="2.2"
-                    />
-
-                    {/* Delicately Moving Pupils + Dual Highlights */}
-                    <g
-                      transform={`translate(${pupilOffset.x}, ${pupilOffset.y})`}
-                      className="transition-transform duration-75 ease-out"
-                    >
-                      <circle cx="38" cy="45" r="5" fill="#0F172A" />
-                      <circle cx="36" cy="42.6" r="2" fill="#FFFFFF" />
-                      <circle cx="40" cy="47" r="0.9" fill="#FFFFFF" />
-
-                      <circle cx="62" cy="45" r="5" fill="#0F172A" />
-                      <circle cx="60" cy="42.6" r="2" fill="#FFFFFF" />
-                      <circle cx="64" cy="47" r="0.9" fill="#FFFFFF" />
-                    </g>
-                  </g>
-                )}
-
-                {/* Cute Little Nose & Friendly Smile Variants */}
-                <ellipse cx="50" cy="51" rx="2.6" ry="1.9" fill="#451A03" />
-
-                {isPetting ? (
-                  /* Delighted Open Smile */
-                  <path
-                    d="M44.5 54 Q50 60 55.5 54 Z"
-                    fill="#FB7185"
-                    stroke="#451A03"
-                    strokeWidth="1.8"
-                    strokeLinejoin="round"
-                  />
-                ) : isAutoSleeping ? (
-                  /* Peaceful Tiny Sleep Smile */
-                  <path
-                    d="M46.5 54.5 Q50 56.5 53.5 54.5"
-                    fill="none"
-                    stroke="#451A03"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                  />
-                ) : mood === 'thinking' ? (
-                  /* Thoughtful Expression */
-                  <path
-                    d="M46 55 Q50 53.5 54 55"
-                    fill="none"
-                    stroke="#451A03"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                ) : (
-                  /* Friendly Warm Cat/Fox Smile */
-                  <path
-                    d="M44.5 54 Q47.2 57.2 50 54 Q52.8 57.2 55.5 54"
-                    fill="none"
-                    stroke="#451A03"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                )}
-
-                {/* Cute Little Front Paws */}
-                <ellipse
-                  cx="32"
-                  cy="66"
-                  rx="6"
-                  ry="4.2"
-                  fill="#FCD34D"
-                  stroke="#78350F"
-                  strokeWidth="2"
-                />
-                <ellipse
-                  cx="68"
-                  cy="66"
-                  rx="6"
-                  ry="4.2"
-                  fill="#FCD34D"
-                  stroke="#78350F"
-                  strokeWidth="2"
-                />
-
-                {/* Cute Little Bottom Feet Paws */}
-                <ellipse
-                  cx="37"
-                  cy="85"
-                  rx="7.5"
-                  ry="4.2"
-                  fill="#FDE68A"
-                  stroke="#78350F"
-                  strokeWidth="2"
-                />
-                <ellipse
-                  cx="63"
-                  cy="85"
-                  rx="7.5"
-                  ry="4.2"
-                  fill="#FDE68A"
-                  stroke="#78350F"
-                  strokeWidth="2"
-                />
-
-                {/* Subtle Calm Sleep Indicator during 60s Automatic Nap */}
-                {isAutoSleeping && (
-                  <g
-                    fill="#6366F1"
-                    fontFamily="var(--font-display)"
-                    fontWeight="800"
-                  >
-                    <text
-                      x="74"
-                      y="24"
-                      fontSize="11"
-                      className="pixel-sleep-z1"
-                    >
-                      z
-                    </text>
-                    <text
-                      x="82"
-                      y="15"
-                      fontSize="9"
-                      className="pixel-sleep-z2"
-                    >
-                      z
-                    </text>
-                  </g>
-                )}
-              </g>
-            </svg>
+            {/* 3D Glowing Sphere Character (Stage 7: Living Animated AI Companion) */}
+            <div className="w-[54px] h-[54px] sm:w-[64px] sm:h-[64px] lg:w-[74px] lg:h-[74px] flex items-center justify-center">
+              <PixelCharacter
+                size={characterSize}
+                petTrigger={petTriggerCount}
+                isSpeaking={isSpeakingActive}
+                isThinking={isPixelGenerating}
+                interactive={false}
+              />
+            </div>
           </div>
         </div>
       </div>

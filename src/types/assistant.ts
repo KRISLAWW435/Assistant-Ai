@@ -314,6 +314,7 @@ export interface CompanionMessage {
   createdAt: string;
   createdAtMs: number;
   schoolId?: SchoolId | 'both';
+  isSpoken?: boolean;
   usedContextLabels?: string[];
   proposedTask?: ProposedCompanionTaskDraft;
   proposedMemory?: ProposedCompanionMemoryDraft;
@@ -340,6 +341,7 @@ export interface CompanionPreferencesRecord {
   id: 'pixel_state';
   quietMode: boolean;
   breakRemindersEnabled: boolean;
+  proactiveTipsEnabled?: boolean;
   activeWorkElapsedMs: number;
   breakSnoozeUntilMs?: number | null;
   lastActiveInteractionMs: number;

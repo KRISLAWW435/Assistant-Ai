@@ -12,6 +12,8 @@ import { AGENT_MODES, SCHOOLS } from '../config/schoolsAndModes';
 import { isAgentModeSection } from './Sidebar';
 import { WAKE_WORD_STATE_META, WakeWordState } from '../types/voice';
 
+import { pixelVoiceCoordinator } from '../providers/voice/pixelVoiceCoordinator';
+
 interface TopBarProps {
   activeSection: NavSection;
   activeSchool: SchoolId;
@@ -51,54 +53,84 @@ export const TopBar: React.FC<TopBarProps> = ({
   dialogueFilesCount = 0,
   onOpenLiveVoice,
   onOpenVoiceSettings,
-  isWakeWordListening = false,
-  wakeWordState,
-  wakeWordDetail,
-  onToggleWakeWord,
 }) => {
   const [showMicInfo, setShowMicInfo] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
   const school = SCHOOLS[activeSchool];
   const isChatMode = isAgentModeSection(activeSection);
 
-  const resolvedState: WakeWordState =
-    wakeWordState || (isWakeWordListening ? 'standby_listening' : 'mic_muted');
-  const currentWakeMeta = WAKE_WORD_STATE_META[resolvedState];
+  const [voiceSnapshot, setVoiceSnapshot] = useState(() =>
+    pixelVoiceCoordinator.getSnapshot()
+  );
 
-  const isListeningActive =
-    resolvedState === 'standby_listening' || resolvedState === 'hearing_speech';
+  useEffect(() => {
+    return pixelVoiceCoordinator.onStateChange((s) => {
+      setVoiceSnapshot(s);
+    });
+  }, []);
+
+  const { mode, liveState, wakeWordState: currentWakeState } = voiceSnapshot;
+  const isLive = mode === 'LIVE';
+  const isStandby = mode === 'STANDBY';
 
   const statusMeta = useMemo(() => {
-    if (resolvedState === 'error' || resolvedState === 'unsupported') {
+    if (isLive) {
+      if (liveState === 'speaking') {
+        return {
+          label: 'Пиксель говорит',
+          dotClass: 'bg-[#FFD700] animate-bounce',
+          badgeClass: 'text-cyan-800 bg-cyan-50 border-cyan-200',
+        };
+      }
+      if (liveState === 'listening') {
+        return {
+          label: 'Слушаю вас...',
+          dotClass: 'bg-emerald-500 animate-pulse',
+          badgeClass: 'text-emerald-800 bg-emerald-50 border-emerald-200',
+        };
+      }
+      if (liveState === 'thinking') {
+        return {
+          label: 'Думает...',
+          dotClass: 'bg-amber-500 animate-spin',
+          badgeClass: 'text-amber-800 bg-amber-50 border-amber-200',
+        };
+      }
+      if (liveState === 'paused') {
+        return {
+          label: 'На паузе',
+          dotClass: 'bg-amber-400',
+          badgeClass: 'text-amber-800 bg-amber-50 border-amber-200',
+        };
+      }
       return {
-        label: 'Микрофон недоступен',
-        dotClass: 'bg-rose-500',
-        badgeClass: 'text-rose-700 bg-rose-50 border-rose-200',
+        label: 'Пиксель в эфире',
+        dotClass: 'bg-cyan-500 animate-pulse',
+        badgeClass: 'text-cyan-800 bg-cyan-50 border-cyan-200',
       };
     }
-    if (isListeningActive) {
+
+    if (isStandby) {
+      if (currentWakeState === 'hearing_speech') {
+        return {
+          label: 'Слышу речь...',
+          dotClass: 'bg-teal-500 animate-ping',
+          badgeClass: 'text-teal-700 bg-teal-50 border-teal-200',
+        };
+      }
       return {
         label: 'Ожидает вызова',
         dotClass: 'bg-emerald-500 animate-pulse',
         badgeClass: 'text-emerald-700 bg-emerald-50 border-emerald-200',
       };
     }
-    if (
-      resolvedState === 'wake_word_triggered' ||
-      resolvedState === 'connecting_live'
-    ) {
-      return {
-        label: 'Подключение...',
-        dotClass: 'bg-cyan-500 animate-ping',
-        badgeClass: 'text-cyan-700 bg-cyan-50 border-cyan-200',
-      };
-    }
+
     return {
       label: 'Ожидание выключено',
       dotClass: 'bg-slate-400',
       badgeClass: 'text-slate-600 bg-slate-100 border-slate-200',
     };
-  }, [resolvedState, isListeningActive]);
+  }, [isLive, liveState, isStandby, currentWakeState]);
 
   useEffect(() => {
     if (!showMicInfo) return;
@@ -191,19 +223,22 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Zone 3: Quick Voice Actions & Right Panel Toggle */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Unified Voice Capsule Block */}
-          <div className="flex items-center p-0.5 sm:p-1 bg-slate-100/90 rounded-2xl border border-slate-200/80 gap-1 shrink-0">
-            {/* Rich Standby Wake Word Indicator Pill with compact popover */}
+          {/* Unified Voice Capsule: Single Capsule Component with Internal Divider */}
+          <div className="flex items-center bg-white border border-slate-200/90 rounded-2xl p-0.5 sm:p-1 shadow-2xs shrink-0">
+            {/* Standby Wake Word Indicator Pill with compact popover */}
             <div className="relative" ref={popoverRef}>
               <button
                 type="button"
                 onClick={() => setShowMicInfo((prev) => !prev)}
                 aria-expanded={showMicInfo}
                 title={`${statusMeta.label}. Нажмите для управления.`}
-                className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${currentWakeMeta.badgeClass}`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100/80 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <span className={`w-2 h-2 rounded-full ${currentWakeMeta.dotClass}`} />
-                <span>{statusMeta.label}</span>
+                <span className={`w-2 h-2 rounded-full ${statusMeta.dotClass}`} />
+                <span className="hidden sm:inline">{statusMeta.label}</span>
+                <span className="sm:hidden text-[11px]">
+                  {isLive ? 'В эфире' : isStandby ? 'Ожидание' : 'Выкл'}
+                </span>
               </button>
 
               {/* Compact Popover */}
@@ -236,50 +271,52 @@ export const TopBar: React.FC<TopBarProps> = ({
                         Ожидание фразы «Пиксель»
                       </div>
                       <div className="text-[10px] text-slate-400">
-                        {isListeningActive
+                        {isStandby
                           ? 'Микрофон слушает ключевое слово'
-                          : 'Фоновое распознавание отключено'}
+                          : isLive
+                            ? 'Прямой голосовой эфир активен'
+                            : 'Фоновое распознавание отключено'}
                       </div>
                     </div>
-                    {onToggleWakeWord && (
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={isListeningActive}
-                        onClick={onToggleWakeWord}
-                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-hidden ${
-                          isListeningActive ? 'bg-emerald-600' : 'bg-slate-300'
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={isStandby || isLive}
+                      onClick={() => void pixelVoiceCoordinator.toggleStandby()}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                        isStandby || isLive ? 'bg-emerald-600' : 'bg-slate-300'
+                      }`}
+                      title={
+                        isStandby || isLive
+                          ? 'Выключить ожидание'
+                          : 'Включить ожидание'
+                      }
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out mt-0.5 ml-0.5 ${
+                          isStandby || isLive ? 'translate-x-4' : 'translate-x-0'
                         }`}
-                        title={
-                          isListeningActive
-                            ? 'Выключить ожидание'
-                            : 'Включить ожидание'
-                        }
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out mt-0.5 ml-0.5 ${
-                            isListeningActive ? 'translate-x-4' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    )}
+                      />
+                    </button>
                   </div>
 
                   {/* 3. Actions */}
                   <div className="pt-2.5 space-y-2">
-                    {onOpenLiveVoice && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMicInfo(false);
-                          onOpenLiveVoice();
-                        }}
-                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] transition-colors shadow-2xs cursor-pointer"
-                      >
-                        <Mic className="w-3.5 h-3.5 text-[#FFD700]" />
-                        <span>Поговорить</span>
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMicInfo(false);
+                        if (isLive) {
+                          onOpenLiveVoice?.();
+                        } else {
+                          void pixelVoiceCoordinator.startLive();
+                        }
+                      }}
+                      className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] transition-colors shadow-2xs cursor-pointer"
+                    >
+                      <Mic className="w-3.5 h-3.5 text-[#FFD700]" />
+                      <span>{isLive ? 'Открыть большой экран' : 'Поговорить'}</span>
+                    </button>
 
                     {onOpenVoiceSettings && (
                       <div className="flex justify-center pt-0.5">
@@ -301,30 +338,50 @@ export const TopBar: React.FC<TopBarProps> = ({
               )}
             </div>
 
-            {/* Prominent Live Voice Button: «Поговорить с Пикселем» */}
-            {onOpenLiveVoice && (
-              <button
-                type="button"
-                onClick={onOpenLiveVoice}
-                title="Открыть живой голосовой разговор с Пикселем (Gemini Live)"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] text-white shadow-xs transition-all whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Mic className="w-3.5 h-3.5 text-[#FFD700] animate-pulse" />
-                <span className="hidden sm:inline">Поговорить с Пикселем</span>
-                <span className="sm:hidden">Пиксель</span>
-              </button>
-            )}
+            {/* Internal Divider inside Capsule */}
+            <div className="w-px h-4 bg-slate-200 mx-1 shrink-0" aria-hidden="true" />
+
+            {/* Prominent Live Voice Action */}
+            <button
+              type="button"
+              onClick={() => {
+                if (isLive) {
+                  onOpenLiveVoice?.();
+                } else {
+                  void pixelVoiceCoordinator.startLive();
+                }
+              }}
+              title={
+                isLive
+                  ? 'Пиксель на связи в фоне. Нажмите, чтобы открыть большой экран'
+                  : 'Начать голосовой диалог с Пикселем (Gemini Live)'
+              }
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                isLive
+                  ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-xs'
+                  : 'bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] text-white shadow-2xs'
+              }`}
+            >
+              <Mic className="w-3.5 h-3.5 text-[#FFD700] animate-pulse shrink-0" />
+              <span className="hidden sm:inline">
+                {isLive ? 'Экран диалога' : 'Поговорить с Пикселем'}
+              </span>
+              <span className="sm:hidden">{isLive ? 'Экран' : 'Пиксель'}</span>
+            </button>
 
             {onOpenVoiceSettings && (
-              <button
-                type="button"
-                onClick={onOpenVoiceSettings}
-                title="Настройки голоса, тембра и режима ожидания"
-                aria-label="Настройки голоса"
-                className="p-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-white/80 transition-colors shrink-0 cursor-pointer"
-              >
-                <Sliders className="w-4 h-4" />
-              </button>
+              <>
+                <div className="w-px h-3.5 bg-slate-200 mx-1 shrink-0 hidden sm:block" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={onOpenVoiceSettings}
+                  title="Настройки голоса, тембра и режима ожидания"
+                  aria-label="Настройки голоса"
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors shrink-0 cursor-pointer"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                </button>
+              </>
             )}
           </div>
 

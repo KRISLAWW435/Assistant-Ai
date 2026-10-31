@@ -19,10 +19,12 @@ import {
   Loader2,
   Mic,
   MicOff,
+  Minimize2,
   Pause,
   Play,
   RotateCcw,
   Sparkles,
+  Square,
   Volume2,
   VolumeX,
   X,
@@ -45,8 +47,9 @@ import {
   LiveVoiceState,
 } from '../types/voice';
 import { voiceManager } from '../providers/voice/voiceManager';
-
 import { wakeWordManager } from '../providers/voice/wakeWordManager';
+import { pixelVoiceCoordinator } from '../providers/voice/pixelVoiceCoordinator';
+import { PixelCharacter } from './pixel';
 
 interface PixelLiveVoiceModalProps {
   isOpen: boolean;
@@ -71,11 +74,9 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
   onOpenSettings,
   triggeredByWakeWord = false,
 }) => {
-  const [liveState, setLiveState] = useState<LiveVoiceState>('idle');
-  const [stateDetail, setStateDetail] = useState<string>('');
-  const [transcripts, setTranscripts] = useState<LiveTranscriptEntry[]>([]);
-  const [isMicMuted, setIsMicMuted] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
+  const [snapshot, setSnapshot] = useState(() =>
+    pixelVoiceCoordinator.getSnapshot()
+  );
   const [selectedVoice, setSelectedVoice] = useState<string>(() => {
     return voiceManager.getSettings().selectedLiveVoice || 'Kore';
   });
@@ -83,15 +84,45 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
     return voiceManager.getSettings().selectedLiveVoice || 'Kore';
   });
   const [isReconnecting, setIsReconnecting] = useState(false);
-  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
-  const [sessionElapsedSec, setSessionElapsedSec] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const transcriptsEndRef = useRef<HTMLDivElement | null>(null);
-  const initialTurnsCountRef = useRef(0);
 
   const schoolConfig = SCHOOLS[activeSchool];
+  const liveState = snapshot.liveState;
+  const transcripts = snapshot.transcripts;
+  const isMicMuted = snapshot.isMicMuted;
+  const isPaused = snapshot.isPaused;
+  const sessionElapsedSec = snapshot.sessionElapsedSec;
   const stateMeta = LIVE_VOICE_STATE_META[liveState];
+
+  // Subscribe to coordinator state changes
+  useEffect(() => {
+    return pixelVoiceCoordinator.onStateChange((next) => {
+      setSnapshot(next);
+      if (next.errorDetail) {
+        setErrorMessage(next.errorDetail);
+      }
+    });
+  }, []);
+
+  // When modal is opened, if live session is not running yet, initiate it via coordinator
+  useEffect(() => {
+    if (!isOpen) return;
+
+    setErrorMessage(null);
+    const freshVoice = voiceManager.getSettings().selectedLiveVoice || 'Kore';
+    setSelectedVoice(freshVoice);
+    setConnectedVoice(freshVoice);
+
+    if (pixelVoiceCoordinator.getSnapshot().mode !== 'LIVE') {
+      pixelVoiceCoordinator
+        .startLive({ voiceName: freshVoice })
+        .catch((err) => {
+          setErrorMessage(err.message);
+        });
+    }
+  }, [isOpen, activeSchool]);
 
   // Auto-scroll transcript container on new entries
   useEffect(() => {
@@ -99,106 +130,6 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
       transcriptsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [transcripts]);
-
-  // Session timer
-  useEffect(() => {
-    if (!isOpen || liveState === 'idle' || liveState === 'error') {
-      return;
-    }
-    const timer = setInterval(() => {
-      if (sessionStartTime) {
-        setSessionElapsedSec(
-          Math.floor((Date.now() - sessionStartTime) / 1000)
-        );
-      }
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [isOpen, liveState, sessionStartTime]);
-
-  const startLiveSession = async (voiceToUse: string, isReconnection = false) => {
-    // Filter relevant memories for the active school or shared personal preferences
-    const relevantMemories = companionMemory
-      .filter((m) => !m.schoolId || m.schoolId === activeSchool)
-      .slice(0, 8)
-      .map((m) => ({
-        id: m.id,
-        category: m.category,
-        title: m.title,
-        content: m.content,
-      }));
-
-    // Filter active tasks
-    const activeTasks = companionTasks
-      .filter((t) => t.status !== 'done')
-      .slice(0, 8)
-      .map((t) => ({
-        id: t.id,
-        title: t.title,
-        dueDate: t.dueDate || '',
-        priority: t.priority,
-        status: t.status,
-      }));
-
-    await geminiLiveClient.startSession({
-      schoolId: activeSchool,
-      voiceName: voiceToUse,
-      initialWakeGreeting: isReconnection ? false : Boolean(triggeredByWakeWord),
-      pixelContext: {
-        activeSchool,
-        schoolName: schoolConfig.name,
-        relevantMemories,
-        activeTasks,
-      },
-      callbacks: {
-        onStateChange: (newState, meta) => {
-          setLiveState(newState);
-          setStateDetail(meta?.detail || '');
-          if (newState === 'error' && meta?.detail) {
-            setErrorMessage(meta.detail);
-          }
-        },
-        onTranscriptUpdate: (updated) => {
-          setTranscripts(updated);
-        },
-        onInterrupted: () => {
-          setLiveState('interrupted');
-        },
-        onError: (err) => {
-          setErrorMessage(err.message);
-        },
-      },
-    });
-
-    setConnectedVoice(voiceToUse);
-  };
-
-  // Initialize live session when modal opens
-  useEffect(() => {
-    if (!isOpen) return;
-
-    // Immediately pause standby wake word listener to free the audio input device cleanly
-    wakeWordManager.pauseForLiveMode();
-
-    initialTurnsCountRef.current = 0;
-    setErrorMessage(null);
-    setSessionStartTime(Date.now());
-    setSessionElapsedSec(0);
-    setIsMicMuted(false);
-    setIsPaused(false);
-
-    const freshVoice = voiceManager.getSettings().selectedLiveVoice || 'Kore';
-    setSelectedVoice(freshVoice);
-
-    startLiveSession(freshVoice, false).catch((err) => {
-      setErrorMessage(err.message);
-    });
-
-    return () => {
-      geminiLiveClient.stopSession();
-      // Resume standby listening cleanly after live mode closes
-      wakeWordManager.resumeAfterLiveMode();
-    };
-  }, [isOpen, activeSchool, triggeredByWakeWord]);
 
   if (!isOpen) return null;
 
@@ -211,8 +142,8 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
     setIsReconnecting(true);
     setErrorMessage(null);
     try {
-      geminiLiveClient.stopSession();
-      await startLiveSession(voiceToUse, true);
+      await pixelVoiceCoordinator.startLive({ voiceName: voiceToUse });
+      setConnectedVoice(voiceToUse);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMessage(`Ошибка переподключения с голосом ${voiceToUse}: ${msg}`);
@@ -222,56 +153,15 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
   };
 
   const handleToggleMute = () => {
-    const next = !isMicMuted;
-    setIsMicMuted(next);
-    geminiLiveClient.setMicrophoneMuted(next);
+    pixelVoiceCoordinator.toggleMute();
   };
 
   const handleTogglePause = () => {
-    if (isPaused) {
-      setIsPaused(false);
-      geminiLiveClient.resumeConversation();
-    } else {
-      setIsPaused(true);
-      geminiLiveClient.pauseConversation();
-    }
+    pixelVoiceCoordinator.togglePause();
   };
 
   const handleFinishAndSave = async () => {
-    // Collect finalized turns into companion messages
-    const finishedTranscripts = geminiLiveClient.getTranscripts();
-    geminiLiveClient.stopSession();
-
-    if (finishedTranscripts.length > 0) {
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString('ru-RU', {
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-      const nowMs = now.getTime();
-
-      const newMessages: CompanionMessage[] = finishedTranscripts
-        .filter((t) => t.text.trim().length > 0)
-        .map((t, idx) => ({
-          id: `live-turn-${nowMs}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-          role: t.role === 'user' ? 'user' : 'pixel',
-          content: t.text.trim(),
-          schoolId: activeSchool,
-          createdAt: t.timestamp || timeStr,
-          createdAtMs: nowMs + idx * 10,
-          providerId: 'gemini',
-          modelName: 'gemini-3.8-live',
-        }));
-
-      if (newMessages.length > 0) {
-        try {
-          await onAppendCompanionMessages(newMessages);
-        } catch (saveErr) {
-          console.warn('[PixelLiveModal] Failed to append live conversation messages:', saveErr);
-        }
-      }
-    }
-
+    await pixelVoiceCoordinator.stopLive(true);
     onClose();
   };
 
@@ -346,17 +236,27 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
               type="button"
               onClick={onOpenSettings}
               title="Настройки голоса"
-              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
             >
               <Headphones className="w-4 h-4" />
             </button>
             <button
               type="button"
-              onClick={handleFinishAndSave}
-              title="Закрыть и сохранить"
-              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              onClick={onClose}
+              title="Свернуть в виджет (разговор продолжится в фоне)"
+              className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer flex items-center gap-1 text-xs"
             >
-              <X className="w-5 h-5" />
+              <Minimize2 className="w-4 h-4" />
+              <span className="hidden sm:inline">Свернуть</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleFinishAndSave}
+              title="Завершить разговор"
+              className="px-2.5 py-1.5 rounded-xl bg-red-600/80 hover:bg-red-600 text-white text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer ml-1"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>Завершить</span>
             </button>
           </div>
         </div>
@@ -393,72 +293,14 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
 
         {/* 2. Central Visualizer Sphere Area */}
         <div className="relative py-8 px-6 flex flex-col items-center justify-center border-b border-slate-800/60 bg-gradient-to-b from-slate-900 via-slate-900/90 to-slate-950">
-          {/* Organic Pulsing Voice Orb */}
-          <div className="relative w-44 h-44 sm:w-52 sm:h-52 flex items-center justify-center">
-            {/* Outer Ripple Layers */}
-            <div
-              className={`absolute inset-0 rounded-full blur-2xl transition-all duration-700 ${
-                liveState === 'speaking'
-                  ? 'bg-[#00A8B5]/35 scale-125 animate-pulse'
-                  : liveState === 'listening'
-                    ? 'bg-emerald-500/25 scale-110 animate-pulse'
-                    : liveState === 'thinking'
-                      ? 'bg-amber-500/30 scale-115'
-                      : liveState === 'interrupted'
-                        ? 'bg-rose-500/40 scale-120'
-                        : liveState === 'connecting'
-                          ? 'bg-indigo-500/25 scale-105'
-                          : 'bg-slate-700/20 scale-95'
-              }`}
+          {/* 3D Glowing Pixel Character (120px Master Avatar) */}
+          <div className="relative py-4 flex items-center justify-center">
+            <PixelCharacter
+              size={120}
+              isSpeaking={liveState === 'speaking'}
+              isListening={liveState === 'listening'}
+              isThinking={liveState === 'thinking'}
             />
-
-            {/* Middle Glow Ring */}
-            <div
-              className={`absolute inset-4 rounded-full border transition-all duration-500 ${
-                liveState === 'speaking'
-                  ? 'border-[#00A8B5]/60 shadow-[0_0_40px_rgba(0,168,181,0.5)] animate-spin-slow'
-                  : liveState === 'listening'
-                    ? 'border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.4)]'
-                    : liveState === 'thinking'
-                      ? 'border-amber-400/60 shadow-[0_0_35px_rgba(245,158,11,0.5)] animate-spin'
-                      : liveState === 'interrupted'
-                        ? 'border-rose-500/70 shadow-[0_0_40px_rgba(244,63,94,0.6)]'
-                        : 'border-slate-700/50'
-              }`}
-            />
-
-            {/* Core Animated Sphere */}
-            <div
-              className={`relative w-28 h-28 sm:w-32 sm:h-32 rounded-full flex flex-col items-center justify-center shadow-inner transition-all duration-500 ${
-                liveState === 'speaking'
-                  ? 'bg-gradient-to-tr from-[#00A8B5] via-teal-400 to-[#FFD700] scale-105 shadow-[0_0_30px_#00A8B5]'
-                  : liveState === 'listening'
-                    ? 'bg-gradient-to-tr from-emerald-600 via-teal-500 to-emerald-400 scale-100 shadow-[0_0_25px_#10B981]'
-                    : liveState === 'thinking'
-                      ? 'bg-gradient-to-tr from-amber-600 via-amber-400 to-yellow-300 scale-100 animate-pulse shadow-[0_0_25px_#F59E0B]'
-                      : liveState === 'interrupted'
-                        ? 'bg-gradient-to-tr from-rose-600 via-red-500 to-amber-500 scale-95'
-                        : liveState === 'paused'
-                          ? 'bg-slate-700 opacity-80'
-                          : 'bg-gradient-to-tr from-slate-800 to-slate-700'
-              }`}
-            >
-              {liveState === 'connecting' ? (
-                <Loader2 className="w-8 h-8 text-white animate-spin" />
-              ) : liveState === 'speaking' ? (
-                <Volume2 className="w-9 h-9 text-slate-950 animate-bounce" />
-              ) : liveState === 'listening' ? (
-                <Mic className="w-9 h-9 text-slate-950" />
-              ) : liveState === 'thinking' ? (
-                <Sparkles className="w-9 h-9 text-slate-950 animate-spin" />
-              ) : liveState === 'interrupted' ? (
-                <Zap className="w-9 h-9 text-white animate-ping" />
-              ) : liveState === 'paused' ? (
-                <Pause className="w-8 h-8 text-slate-300" />
-              ) : (
-                <Mic className="w-8 h-8 text-slate-400" />
-              )}
-            </div>
           </div>
 
           {/* Current State Text Label */}
@@ -467,7 +309,7 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
               {stateMeta.labelRu}
             </div>
             <div className="text-xs text-slate-400 max-w-sm px-2">
-              {stateDetail || stateMeta.descriptionRu}
+              {errorMessage || stateMeta.descriptionRu}
             </div>
           </div>
         </div>

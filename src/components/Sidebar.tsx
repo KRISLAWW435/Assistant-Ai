@@ -462,25 +462,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       ) : (
         <div className="p-3 border-b border-slate-200/70 space-y-2.5">
-          {/* Prominent New Chat Button */}
+          {/* Prominent New Chat Button (Monolithic Style) */}
           <button
             type="button"
             onClick={handleStartNewChat}
-            className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-slate-900 text-white hover:bg-slate-800 transition-colors shadow-2xs text-xs font-semibold"
+            className="w-full flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-900 text-white hover:bg-slate-800 transition-colors shadow-2xs text-xs font-semibold cursor-pointer"
           >
-            <div className="flex items-center gap-2 min-w-0">
-              <MessageSquarePlus
-                className={`w-4 h-4 shrink-0 ${
-                  activeSchool === 'renderia'
-                    ? 'text-[#84CC16]'
-                    : 'text-[#FFD700]'
-                }`}
-              />
-              <span className="truncate">Новый чат</span>
-            </div>
-            <span className="text-[10px] font-normal text-slate-300 truncate">
-              {currentModeConfig.shortTitle} · {currentSchool.name}
-            </span>
+            <MessageSquarePlus
+              className={`w-4 h-4 shrink-0 ${
+                activeSchool === 'renderia'
+                  ? 'text-[#84CC16]'
+                  : 'text-[#FFD700]'
+              }`}
+            />
+            <span>Новый чат</span>
           </button>
 
           {/* Expressive Typographic School Switcher (KIBERONE / RENDERIA) */}

@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ChevronsRight,
   Clock,
   Eye,
   FileSpreadsheet,
@@ -415,7 +416,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
           <button
             type="button"
             onClick={onCloseMobile}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100"
+            className="p-1.5 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 cursor-pointer"
             aria-label="Закрыть панель материалов"
           >
             <X className="w-4 h-4" />
@@ -424,11 +425,11 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
           <button
             type="button"
             onClick={onToggleCollapsed}
-            title="Свернуть панель «Рабочие материалы»"
+            title="Свернуть панель «Рабочие материалы» (>>)"
             aria-label="Свернуть правую панель"
-            className="inline-flex items-center justify-center w-8 h-8 rounded-xl border border-slate-200/90 bg-slate-50 text-slate-700 hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-colors shrink-0"
+            className="inline-flex items-center justify-center gap-1 w-8 h-8 rounded-xl border border-slate-200/90 bg-slate-50 text-slate-700 hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-colors shrink-0 cursor-pointer"
           >
-            <ChevronRight className="w-4 h-4" />
+            <ChevronsRight className="w-4 h-4" />
           </button>
         )}
       </div>

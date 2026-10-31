@@ -159,6 +159,7 @@ export function createDefaultCompanionPreferences(): CompanionPreferencesRecord 
     id: 'pixel_state',
     quietMode: false,
     breakRemindersEnabled: true,
+    proactiveTipsEnabled: true,
     activeWorkElapsedMs: 0,
     breakSnoozeUntilMs: null,
     lastActiveInteractionMs: nowMs,

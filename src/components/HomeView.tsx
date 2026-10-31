@@ -145,7 +145,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               return (
                 <div
                   key={id}
-                  className={`rounded-2xl p-4 sm:p-5 transition-all duration-200 border flex flex-col justify-between gap-3 ${
+                  className={`rounded-2xl p-3.5 sm:p-4 transition-all duration-200 border flex flex-col justify-between gap-3 min-w-0 overflow-hidden ${
                     isSelected
                       ? id === 'kiberone'
                         ? 'bg-[#FFD700]/10 border-[#FFD700] ring-2 ring-[#FFD700]/30 shadow-xs'
@@ -153,10 +153,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       : 'bg-white/60 border-slate-200/70 opacity-70'
                   }`}
                 >
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between gap-2">
+                  <div className="space-y-2.5 min-w-0">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5 min-w-0">
                       <span
-                        className={`inline-flex items-center px-3 py-1 rounded-xl font-display font-extrabold text-sm sm:text-base tracking-wide ${
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-lg font-display font-black text-xs sm:text-sm tracking-wide shrink-0 ${
                           id === 'kiberone'
                             ? 'bg-[#FFD700] text-slate-950'
                             : 'bg-[#84CC16] text-slate-950'
@@ -165,12 +165,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         {s.name}
                       </span>
                       {isSelected ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-900 text-white shadow-2xs">
-                          <Check className="w-3 h-3 text-emerald-400" />
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-900 text-white shadow-2xs shrink-0 whitespace-nowrap">
+                          <Check className="w-2.5 h-2.5 text-emerald-400" />
                           <span>Активна</span>
                         </span>
                       ) : (
-                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-md text-slate-400 bg-slate-100">
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md text-slate-400 bg-slate-100 shrink-0 whitespace-nowrap">
                           Вторая школа
                         </span>
                       )}
@@ -183,19 +183,19 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
                   {/* Knowledge Base Progress Bar */}
                   <div className="pt-2.5 border-t border-slate-200/60 space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span className="font-medium">База знаний</span>
-                      <span className="font-mono-tabular font-semibold text-slate-800">
-                        {filled}/{KNOWLEDGE_CATEGORIES.length} разд.
-                      </span>
+                    <div className="text-[11px] font-medium text-slate-600">
+                      База знаний
                     </div>
-                    <div className="w-full h-1.5 bg-slate-200/70 rounded-full overflow-hidden">
+                    <div className="w-full h-1.5 bg-slate-200/80 rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all duration-300 ${
                           id === 'kiberone' ? 'bg-[#FFD700]' : 'bg-[#84CC16]'
                         }`}
                         style={{ width: `${progressPct}%` }}
                       />
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-mono-tabular">
+                      {filled} из {KNOWLEDGE_CATEGORIES.length} разделов
                     </div>
                   </div>
                 </div>
@@ -216,7 +216,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5">
           {AGENT_MODE_LIST.map((mode) => {
             const Icon = MODE_ICONS[mode.id];
             return (
@@ -224,35 +224,35 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 key={mode.id}
                 type="button"
                 onClick={() => onNavigate(mode.id)}
-                className="glass-panel rounded-2xl p-6 text-left bg-white/80 hover:bg-white hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 transition-all duration-200 border border-slate-200/80 flex flex-col justify-between gap-5 group cursor-pointer"
+                className="glass-panel rounded-2xl p-4 sm:p-4.5 text-left bg-white/85 hover:bg-white hover:-translate-y-0.5 hover:shadow-md hover:border-slate-300 transition-all duration-200 border border-slate-200/80 flex flex-col justify-between gap-3 group cursor-pointer"
               >
-                <div className="space-y-3.5">
+                <div className="space-y-2.5">
                   <div className="flex items-center justify-between">
                     <div
-                      className="w-11 h-11 rounded-xl flex items-center justify-center text-white shadow-2xs group-hover:scale-105 transition-transform"
+                      className="w-9 h-9 rounded-xl flex items-center justify-center text-white shadow-2xs group-hover:scale-105 transition-transform"
                       style={{ backgroundColor: mode.accentColor }}
                     >
-                      <Icon className="w-5 h-5" />
+                      <Icon className="w-4 h-4" />
                     </div>
-                    <span className="text-xs text-slate-400 font-mono-tabular">
+                    <span className="text-[11px] text-slate-400 font-mono-tabular">
                       {mode.quickPrompts.length} шабл.
                     </span>
                   </div>
                   <div>
-                    <h3 className="font-display font-bold text-base text-slate-900 group-hover:text-[#00A8B5] transition-colors">
+                    <h3 className="font-display font-bold text-sm sm:text-base text-slate-900 group-hover:text-[#00A8B5] transition-colors leading-snug">
                       {mode.title}
                     </h3>
-                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                    <p className="text-xs text-slate-500 mt-1 leading-snug">
                       {mode.description}
                     </p>
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-800">
+                <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-800">
                   <span className="group-hover:text-[#00A8B5] transition-colors">
                     Открыть диалог
                   </span>
-                  <ArrowRight className="w-4 h-4 text-[#00A8B5] group-hover:translate-x-1.5 transition-transform duration-200" />
+                  <ArrowRight className="w-3.5 h-3.5 text-[#00A8B5] group-hover:translate-x-1.5 transition-transform duration-200" />
                 </div>
               </button>
             );

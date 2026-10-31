@@ -253,6 +253,10 @@ export class GeminiLiveClient {
   }
 
   public stopSession(): void {
+    if (this.state === 'idle' && !this.ws && !this.mediaStream) {
+      return;
+    }
+
     this.stopModelAudioPlayback();
 
     // Release microphone tracks immediately (frees mic indicator in browser tab)
@@ -307,7 +311,11 @@ export class GeminiLiveClient {
     }
 
     this.modelIsSpeaking = false;
-    this.updateState('idle');
+    const previousState = this.state;
+    this.state = 'idle';
+    if (previousState !== 'idle') {
+      this.callbacks?.onStateChange('idle');
+    }
   }
 
   private setupMicrophoneProcessor(
@@ -576,6 +584,9 @@ export class GeminiLiveClient {
     newState: LiveVoiceState,
     meta?: { detail?: string }
   ): void {
+    if (this.state === newState && newState === 'idle') {
+      return;
+    }
     this.state = newState;
     this.callbacks?.onStateChange(newState, meta);
   }

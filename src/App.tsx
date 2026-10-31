@@ -85,6 +85,8 @@ import {
 import { PixelCompanion } from './components/PixelCompanion';
 import { PixelLiveVoiceModal } from './components/PixelLiveVoiceModal';
 import { PixelVoiceSettingsModal } from './components/PixelVoiceSettingsModal';
+import { PixelVoiceWidget } from './components/PixelVoiceWidget';
+import { pixelVoiceCoordinator } from './providers/voice/pixelVoiceCoordinator';
 import { wakeWordManager } from './providers/voice/wakeWordManager';
 import { voiceManager } from './providers/voice/voiceManager';
 import { WakeWordState } from './types/voice';
@@ -344,7 +346,7 @@ export default function App() {
     text: string;
   } | null>(null);
 
-  // Live Voice Mode & Voice Settings Modal state (Part B & C)
+  // Live Voice Mode & Voice Settings Modal state (Stage 6.1: Global Coordinator)
   const [isLiveVoiceOpen, setIsLiveVoiceOpen] = useState(false);
   const [isLiveVoiceFromWakeWord, setIsLiveVoiceFromWakeWord] = useState(false);
   const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
@@ -352,26 +354,53 @@ export default function App() {
     wakeWordManager.getState()
   );
   const [wakeWordDetail, setWakeWordDetail] = useState<string>('');
+  const [pixelForceOpenChatTrigger, setPixelForceOpenChatTrigger] = useState(0);
+
+  // References to keep latest context available to pixelVoiceCoordinator
+  const activeSchoolRef = useRef<SchoolId>(activeSchool);
+  useEffect(() => {
+    activeSchoolRef.current = activeSchool;
+    pixelVoiceCoordinator.updateActiveSchool(activeSchool);
+  }, [activeSchool]);
+
+  const companionMemoryRef = useRef<CompanionMemoryRecord[]>(companionMemory);
+  useEffect(() => {
+    companionMemoryRef.current = companionMemory;
+  }, [companionMemory]);
+
+  const companionTasksRef = useRef<CompanionTaskRecord[]>(companionTasks);
+  useEffect(() => {
+    companionTasksRef.current = companionTasks;
+  }, [companionTasks]);
+
+  const companionMessagesRef = useRef<CompanionMessage[]>(companionMessages);
+  useEffect(() => {
+    companionMessagesRef.current = companionMessages;
+  }, [companionMessages]);
 
   useEffect(() => {
-    wakeWordManager.init({
-      onTriggered: (phrase) => {
-        console.log('[App] Wake word triggered:', phrase);
-        voiceManager.stopAll();
-        setIsLiveVoiceFromWakeWord(true);
-        setIsLiveVoiceOpen(true);
-      },
-      onStateChange: (state, detail) => {
-        setWakeWordState(state);
-        if (detail) setWakeWordDetail(detail);
-      },
-      onError: (err) => {
-        console.warn('[App] Wake word manager error:', err.message);
+    pixelVoiceCoordinator.init({
+      getActiveSchool: () => activeSchoolRef.current,
+      getCompanionMemory: () => companionMemoryRef.current,
+      getCompanionTasks: () => companionTasksRef.current,
+      onAppendCompanionMessages: async (newMessages) => {
+        await handleSaveCompanionMessages([
+          ...companionMessagesRef.current,
+          ...newMessages,
+        ]);
       },
     });
 
+    const unsubscribe = pixelVoiceCoordinator.onStateChange((snapshot) => {
+      setWakeWordState(snapshot.wakeWordState);
+      if (snapshot.errorDetail) {
+        setWakeWordDetail(snapshot.errorDetail);
+      }
+    });
+
     return () => {
-      wakeWordManager.stop();
+      unsubscribe();
+      pixelVoiceCoordinator.stop();
     };
   }, []);
 
@@ -379,13 +408,20 @@ export default function App() {
     const current = voiceManager.getSettings();
     const nextEnabled = !current.wakeWordEnabled;
     await voiceManager.updateSettings({ wakeWordEnabled: nextEnabled });
-    wakeWordManager.setEnabled(nextEnabled);
+    if (nextEnabled) {
+      pixelVoiceCoordinator.setMode('STANDBY');
+    } else {
+      pixelVoiceCoordinator.setMode('OFF');
+    }
   };
 
   const handleAppendLiveCompanionMessages = async (
     newMessages: CompanionMessage[]
   ) => {
-    await handleSaveCompanionMessages([...companionMessages, ...newMessages]);
+    await handleSaveCompanionMessages([
+      ...companionMessagesRef.current,
+      ...newMessages,
+    ]);
   };
   const lastRetryPayloadRef = useRef<
     Record<
@@ -2194,7 +2230,17 @@ export default function App() {
         isCheckingProviders={isCheckingProviders}
       />
 
-      {/* 4. PIXEL AI COMPANION & PERSONAL ASSISTANT FOR ANNA */}
+      {/* 4. PIXEL VOICE WIDGET (STAGE 6.1: PERSISTENT VOICE ASSISTANT) */}
+      <PixelVoiceWidget
+        onOpenPixelChat={() => setPixelForceOpenChatTrigger((c) => c + 1)}
+        onOpenFullscreenModal={() => {
+          setIsLiveVoiceFromWakeWord(false);
+          setIsLiveVoiceOpen(true);
+        }}
+        onOpenSettings={() => setIsVoiceSettingsOpen(true)}
+      />
+
+      {/* 5. PIXEL AI COMPANION & PERSONAL ASSISTANT FOR ANNA */}
       <PixelCompanion
         activeSchool={activeSchool}
         activeSection={activeSection}
@@ -2205,6 +2251,7 @@ export default function App() {
         companionMemory={companionMemory}
         companionTasks={companionTasks}
         companionPreferences={companionPreferences}
+        forceOpenChatTrigger={pixelForceOpenChatTrigger}
         onSaveCompanionMessages={handleSaveCompanionMessages}
         onClearCompanionMessages={handleClearCompanionMessages}
         onSaveCompanionMemory={handleSaveCompanionMemory}

@@ -187,6 +187,28 @@
   animation: pixelSleepBubble 2.9s ease-out 1.4s infinite;
 }
 
+@keyframes pixelHeartBurst {
+  0% {
+    opacity: 0;
+    transform: scale(0.35);
+  }
+  15% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  75% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.75);
+  }
+}
+
+.pixel-heart-burst {
+  animation: pixelHeartBurst 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pixel-idle-body,
   .pixel-sleep-body,
@@ -195,6 +217,7 @@
   .pixel-ear-right,
   .pixel-blink-eyelids,
   .pixel-heart-float,
+  .pixel-heart-burst,
   .pixel-sleep-z1,
   .pixel-sleep-z2 {
     animation: none !important;

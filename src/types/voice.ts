@@ -361,6 +361,14 @@ export const GEMINI_TTS_STANDARD_STYLE =
   'Естественная русская разговорная речь. Чуть более высокий, светлый, лёгкий и мягкий регистр. Приветливый, открытый, воодушевляющий тон, без искусственности и без писклявости.';
 
 /**
+ * Global 3-state voice mode for Pixel Companion (Stage 6.1)
+ * - OFF: Microphone completely disabled, standby off, text chat ready.
+ * - STANDBY: Passive wake-word listening for «Пиксель» via Web Speech API (Chrome ru-RU).
+ * - LIVE: Bidirectional spoken dialogue via Gemini Live API without blocking interface.
+ */
+export type PixelVoiceMode = 'OFF' | 'STANDBY' | 'LIVE';
+
+/**
  * Unified Standby Wake Word state machine
  */
 export type WakeWordState =
