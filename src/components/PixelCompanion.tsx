@@ -5,9 +5,12 @@ import {
   Calendar,
   Check,
   CheckCircle2,
+  ChevronDown,
   Clock,
   Coffee,
+  Copy,
   Edit3,
+  FolderOpen,
   ListTodo,
   Loader2,
   MessageCircleHeart,
@@ -27,6 +30,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  AgentMode,
   CompanionCustomPosition,
   CompanionMemoryCategory,
   CompanionMemoryRecord,
@@ -41,7 +45,7 @@ import {
   ProposedCompanionTaskDraft,
   SchoolId,
 } from '../types/assistant';
-import { SCHOOLS } from '../config/schoolsAndModes';
+import { AGENT_MODES, SCHOOLS } from '../config/schoolsAndModes';
 import {
   buildSelectivePixelContext,
   containsSensitiveCredentials,
@@ -69,6 +73,13 @@ import {
 } from '../types/voice';
 import { PixelVoiceSettingsModal } from './PixelVoiceSettingsModal';
 import { PixelCharacter, pixelEmotionManager } from './pixel';
+import {
+  PIXEL_DELEGATION_STATUS_LABELS,
+  SPECIALIST_NAMES_DATIVE_RU,
+  SPECIALIST_NAMES_GENITIVE_RU,
+  SPECIALIST_NAMES_INSTRUMENTAL_RU,
+  pixelAgentCoordinator,
+} from '../providers/PixelAgentCoordinator';
 
 interface PixelCompanionProps {
   activeSchool: SchoolId;
@@ -293,6 +304,15 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speechBubble]);
 
+  useEffect(() => {
+    pixelAgentCoordinator.setBubbleHandler((text) => {
+      setSpeechBubble({ text });
+    });
+    return () => {
+      pixelAgentCoordinator.setBubbleHandler(null);
+    };
+  }, []);
+
   const handleBubbleMouseEnter = () => {
     setIsBubbleHovered(true);
     setIsBubbleFadingOut(false);
@@ -442,9 +462,14 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const [playbackState, setPlaybackState] = useState(() =>
     voiceManager.getPlaybackState()
   );
+  const [stoppedReadingSession, setStoppedReadingSession] = useState(() =>
+    voiceManager.getStoppedReadingSession()
+  );
 
   // Store pre-speech text to avoid ever duplicating/accumulating interim recognition chunks
   const speechSessionBaseTextRef = useRef<string>('');
+  const lastSpeechResultIsFinalRef = useRef<boolean>(true);
+  const latestStabilizedInputRef = useRef<string>('');
 
   const isMicSupported = useMemo(() => browserSpeechInput.isSupported(), []);
   const isRemoteSpeechService = useMemo(
@@ -461,18 +486,21 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       }
       if (status === 'idle' || status === 'error') {
         speechSessionBaseTextRef.current = '';
+        lastSpeechResultIsFinalRef.current = true;
       }
     });
 
     const unsubError = browserSpeechInput.onError((err) => {
       setSpeechInputError(err.message);
       speechSessionBaseTextRef.current = '';
+      lastSpeechResultIsFinalRef.current = true;
     });
 
     const unsubResult = browserSpeechInput.onResult(
       (event: SpeechRecognitionResultEvent) => {
         const base = speechSessionBaseTextRef.current;
         const spoken = event.fullTranscript.trim();
+        lastSpeechResultIsFinalRef.current = Boolean(event.isFinal);
         if (!spoken) return;
 
         // Auto-capitalize first word if inserting at beginning
@@ -481,7 +509,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
             ? spoken.charAt(0).toUpperCase() + spoken.slice(1)
             : spoken;
 
-        setChatInput(base ? `${base} ${formattedSpoken}` : formattedSpoken);
+        const combined = base ? `${base} ${formattedSpoken}` : formattedSpoken;
+        latestStabilizedInputRef.current = combined;
+        setChatInput(combined);
       }
     );
 
@@ -491,11 +521,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       setCurrentlySpeakingMsgId(st.messageId);
     });
 
+    const unsubStoppedReading = voiceManager.onStoppedReadingChange((sess) => {
+      setStoppedReadingSession(sess);
+    });
+
     return () => {
       unsubStatus();
       unsubError();
       unsubResult();
       unsubPlayback();
+      unsubStoppedReading();
     };
   }, []);
 
@@ -545,6 +580,32 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       setSpeechBubble({
         text: `Озвучивание: ${msg}`,
       });
+    }
+  };
+
+  const [copiedCompanionMsgId, setCopiedCompanionMsgId] = useState<string | null>(
+    null
+  );
+  const [isQuickChatSwitcherOpen, setIsQuickChatSwitcherOpen] = useState(false);
+
+  const handleCopyCompanionMessage = async (msgId: string, content: string) => {
+    const cleanText = content
+      .replace(/^\[Отправлено через Пикселя\]\s*/i, '')
+      .replace(
+        /\n*\[(?:Остановлено|Генерация остановлена|Генерация ответа Пикселя остановлена)\]\s*$/i,
+        ''
+      )
+      .replace(/\s*\(ID:\s*[a-zA-Z0-9_-]+\)/gi, '')
+      .trim();
+    if (!cleanText) return;
+    try {
+      await navigator.clipboard.writeText(cleanText);
+      setCopiedCompanionMsgId(msgId);
+      setTimeout(() => {
+        setCopiedCompanionMsgId((prev) => (prev === msgId ? null : prev));
+      }, 2000);
+    } catch {
+      // Clipboard API may be blocked in restricted contexts
     }
   };
 
@@ -1056,14 +1117,58 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     }
   };
 
+  const handleConfirmPendingDelegation = async (
+    draftId?: string,
+    userCompanionMessage?: CompanionMessage
+  ) => {
+    if (isPixelGenerating) return;
+    updatePreferences({ mood: 'thinking' });
+    setIsPixelGenerating(true);
+    setPixelGenerationStage('generating');
+    setPixelSlowWarning(false);
+
+    try {
+      const taskResult = await pixelAgentCoordinator.confirmPendingDelegation({
+        draftId,
+        sourceMode: 'text',
+        userCompanionMessage,
+      });
+
+      if (!taskResult) return;
+
+      updatePreferences({
+        mood: taskResult.status === 'completed' ? 'happy' : 'curious',
+      });
+    } finally {
+      setIsPixelGenerating(false);
+      setPixelGenerationStage(null);
+      setPixelSlowWarning(false);
+      setPixelElapsedSec(0);
+    }
+  };
+
   const executePixelChatRequest = async (
     rawText: string,
     options?: { replaceMessageId?: string }
   ) => {
-    const text = rawText.trim();
+    // Stage 6.4 (3): If speech recognition was actively listening, stop and wait briefly for final text stabilization
+    const wasListening =
+      speechInputStatus === 'listening' || speechInputStatus === 'recognizing';
+    if (wasListening) {
+      browserSpeechInput.stop();
+      await new Promise((r) => setTimeout(r, 180));
+    }
+
+    const stabilizedCandidate =
+      wasListening && latestStabilizedInputRef.current.trim().length > rawText.trim().length
+        ? latestStabilizedInputRef.current.trim()
+        : rawText.trim();
+
+    const text = stabilizedCandidate;
     if (!text || isPixelGenerating) return;
 
     setChatInput('');
+    latestStabilizedInputRef.current = '';
     voiceManager.stopSpeaking();
     browserSpeechInput.stop();
     const now = new Date();
@@ -1109,6 +1214,158 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       return;
     }
 
+    // 1.2 Stage 6.3 (2), 6.4 (1) & 6.5 (1, 4): Verbatim read aloud of last specialist response or resume stopped reading
+    // Strictly does NOT create a copy of the specialist's message in Pixel's chat (`companionMessages`)
+    const readAloudIntent = pixelAgentCoordinator.parseReadAloudIntent(
+      text,
+      activeSchool
+    );
+    if (readAloudIntent) {
+      updatePreferences({ mood: 'happy' });
+      await pixelAgentCoordinator.executeReadAloud(readAloudIntent, 'text');
+      return;
+    }
+
+    // 1.25 Stage 6.5 (5): Check if Anna is confirming or cancelling a pending chat deletion
+    const pendingDeletionAction =
+      pixelAgentCoordinator.parsePendingChatDeletionAction(text);
+    if (
+      pendingDeletionAction.action !== 'none' &&
+      pendingDeletionAction.deletion
+    ) {
+      if (pendingDeletionAction.action === 'confirm') {
+        await pixelAgentCoordinator.confirmPendingChatDeletion(
+          pendingDeletionAction.deletion.deletionId,
+          existingLastUser ? undefined : userMsg
+        );
+        updatePreferences({ mood: 'happy' });
+        return;
+      }
+      if (pendingDeletionAction.action === 'cancel') {
+        await pixelAgentCoordinator.cancelPendingChatDeletion(
+          pendingDeletionAction.deletion.deletionId,
+          existingLastUser ? undefined : userMsg
+        );
+        updatePreferences({ mood: 'curious' });
+        return;
+      }
+    }
+
+    // 1.3 Stage 6.4 (2): Check if Anna is confirming («Да, отправляй»), cancelling, or adjusting a pending delegation draft
+    const pendingDraftAction =
+      pixelAgentCoordinator.parsePendingDraftAction(text);
+    if (pendingDraftAction.action !== 'none' && pendingDraftAction.draft) {
+      if (pendingDraftAction.action === 'confirm') {
+        await handleConfirmPendingDelegation(
+          pendingDraftAction.draft.draftId,
+          existingLastUser ? undefined : userMsg
+        );
+        return;
+      }
+      if (pendingDraftAction.action === 'cancel') {
+        await pixelAgentCoordinator.cancelPendingDelegation(
+          pendingDraftAction.draft.draftId,
+          existingLastUser ? undefined : userMsg
+        );
+        updatePreferences({ mood: 'curious' });
+        return;
+      }
+      if (
+        pendingDraftAction.action === 'adjust_school' &&
+        pendingDraftAction.newSchool
+      ) {
+        await pixelAgentCoordinator.updatePendingDelegationDraft(
+          pendingDraftAction.draft.draftId,
+          { targetSchool: pendingDraftAction.newSchool },
+          existingLastUser ? undefined : userMsg
+        );
+        updatePreferences({ mood: 'thinking' });
+        return;
+      }
+      if (
+        pendingDraftAction.action === 'adjust_specialist' &&
+        pendingDraftAction.newMode
+      ) {
+        await pixelAgentCoordinator.updatePendingDelegationDraft(
+          pendingDraftAction.draft.draftId,
+          { targetMode: pendingDraftAction.newMode },
+          existingLastUser ? undefined : userMsg
+        );
+        updatePreferences({ mood: 'thinking' });
+        return;
+      }
+    }
+
+    // 1.35 Stage 6.5 (5): Manage working chat deletion («Пиксель, удали этот чат», «Покажи, какие чаты можно удалить»)
+    const chatDeletionIntent = pixelAgentCoordinator.parseChatDeletionIntent(
+      text,
+      activeSchool
+    );
+    if (chatDeletionIntent) {
+      updatePreferences({ mood: 'thinking' });
+      await pixelAgentCoordinator.executeChatDeletionIntent(
+        chatDeletionIntent,
+        existingLastUser ? undefined : userMsg
+      );
+      return;
+    }
+
+    // 1.4 Stage 6.5 (1 & 2): Autonomous working chat switching & navigation («Вернись к нашему разговору с Методистом», «Открой чат Маркетолога Renderia»)
+    const chatNavIntent = pixelAgentCoordinator.parseChatNavigationIntent(
+      text,
+      activeSchool
+    );
+    if (chatNavIntent) {
+      updatePreferences({ mood: 'happy' });
+      await pixelAgentCoordinator.executeChatNavigation(
+        chatNavIntent,
+        existingLastUser ? undefined : userMsg
+      );
+      return;
+    }
+
+    // 1.45 Stage 6.5 (6): Honest report when Anna asks for an unimplemented capability
+    const unsupportedCap =
+      pixelAgentCoordinator.parseUnsupportedCapabilityIntent(text);
+    if (unsupportedCap) {
+      updatePreferences({ mood: 'curious' });
+      await pixelAgentCoordinator.replyUnsupportedCapability(
+        unsupportedCap,
+        existingLastUser ? undefined : userMsg
+      );
+      return;
+    }
+
+    // 1.5 Stage 6.2, 6.3, 6.4 (2) & 6.5 (1): Safe task delegation & follow-up continuation across all AI Specialists
+    const clarifiedIntent = pixelAgentCoordinator.consumePendingClarification(
+      text,
+      activeSchool
+    );
+    const delegationIntent =
+      clarifiedIntent ||
+      pixelAgentCoordinator.parseDelegationIntent(text, activeSchool);
+
+    if (delegationIntent) {
+      if (delegationIntent.isAmbiguous) {
+        await pixelAgentCoordinator.requestClarificationForAmbiguousIntent(
+          delegationIntent,
+          existingLastUser ? undefined : userMsg
+        );
+        updatePreferences({ mood: 'curious' });
+        return;
+      }
+
+      // Stage 6.4 (2) & 6.5 (4): NEVER send to specialist without showing school, specialist, clean text, and waiting for «Да, отправляй»
+      // Stage 6.5 (4): Do NOT auto-speak new replies; TTS starts only on explicit request
+      updatePreferences({ mood: 'thinking' });
+      await pixelAgentCoordinator.prepareDelegationForConfirmation({
+        intent: delegationIntent,
+        sourceMode: 'text',
+        userCompanionMessage: existingLastUser ? undefined : userMsg,
+      });
+      return;
+    }
+
     // 2. Client-side detection of task & memory proposals (Gemini never modifies IndexedDB directly)
     const proposedTask =
       parseTaskProposalFromMessage(text, activeSchool) || undefined;
@@ -1116,11 +1373,13 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       ? parseMemoryProposalFromMessage(text, activeSchool) || undefined
       : undefined;
 
+    const activeChatContext = pixelAgentCoordinator.getActiveChatContext();
     const contextBundle = buildSelectivePixelContext(
       text,
       activeSchool,
       companionMemory,
-      companionTasks
+      companionTasks,
+      activeChatContext
     );
 
     const pixelMsgId = `comp-pixel-${nowMs + 1}-${Math.random().toString(36).slice(2, 6)}`;
@@ -1214,15 +1473,6 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       updatePreferences({
         mood: proposedTask || proposedMemory ? 'thinking' : 'happy',
       });
-
-      if (
-        voiceManager.getSettings().autoSpeakNewReplies &&
-        !quietMode &&
-        !result.aborted &&
-        finalText.trim()
-      ) {
-        voiceManager.speakReply(finalText, pixelMsgId).catch(() => {});
-      }
     } catch (err) {
       const errMessage =
         err instanceof Error
@@ -1533,6 +1783,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 showAura={false}
                 interactive={false}
                 isSpeaking={isSpeakingActive}
+                isListening={
+                  speechInputStatus === 'listening' ||
+                  speechInputStatus === 'recognizing'
+                }
                 isThinking={isPixelGenerating}
               />
               <span
@@ -1697,18 +1951,285 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
           {/* TAB 1: PERSONAL CHAT WITH PIXEL */}
           {activeTab === 'chat' && (
             <div className="flex-1 flex flex-col min-h-0 max-h-[52vh]">
-              {/* Active Provider Diagnostics Bar */}
-              <div className="px-3 py-1.5 bg-slate-50/90 border-b border-slate-200/70 flex items-center justify-between gap-2 text-[10px] text-slate-500">
-                <div className="flex items-center gap-1.5 truncate">
-                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                  <span className="truncate">
-                    ИИ-режим: <strong className="text-slate-700">Авто</strong> (Gemini 2.5-flash → Резерв: OpenRouter Free)
-                  </span>
-                </div>
-                <span className="font-mono-tabular shrink-0 text-slate-400 font-medium">
-                  {school.name}
-                </span>
-              </div>
+              {/* Stage 6.5 (1 & 2): Unified Working Chat Navigation & Context Panel */}
+              {(() => {
+                const activeChatCtx = pixelAgentCoordinator.getActiveChatContext();
+                const pendingDraft =
+                  pixelAgentCoordinator.getLatestAwaitingConfirmationDraft();
+                const allWorkingChats =
+                  pixelAgentCoordinator.getAllWorkingChats();
+                const currentSchoolId =
+                  activeChatCtx?.schoolId || activeSchool;
+                const currentMode = activeChatCtx?.mode || 'marketer';
+                const nextRecipientSchool = pendingDraft
+                  ? pendingDraft.targetSchool
+                  : currentSchoolId;
+                const nextRecipientMode = pendingDraft
+                  ? pendingDraft.targetMode
+                  : currentMode;
+
+                return (
+                  <div className="px-3 py-2 bg-slate-50/95 border-b border-slate-200/80 space-y-1.5 text-[10px] text-slate-600">
+                    {/* Row 1: Active School & Selected Specialist quick selectors */}
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <div className="inline-flex items-center gap-1">
+                        <span className="text-slate-500 font-semibold">
+                          Школа:
+                        </span>
+                        {(['kiberone', 'renderia'] as SchoolId[]).map((sId) => {
+                          const isCurrent = currentSchoolId === sId;
+                          return (
+                            <button
+                              key={sId}
+                              type="button"
+                              onClick={() => {
+                                void pixelAgentCoordinator.switchToWorkingChat({
+                                  schoolId: sId,
+                                  mode: currentMode,
+                                  announceInCompanion: true,
+                                });
+                              }}
+                              className={`px-1.5 py-0.5 rounded font-bold transition-colors cursor-pointer ${
+                                isCurrent
+                                  ? sId === 'renderia'
+                                    ? 'bg-[#84CC16] text-slate-950 shadow-2xs'
+                                    : 'bg-[#FFD700] text-slate-950 shadow-2xs'
+                                  : 'bg-white text-slate-500 border border-slate-200 hover:text-slate-900'
+                              }`}
+                            >
+                              {SCHOOLS[sId].name}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="inline-flex items-center gap-1 flex-wrap">
+                        <span className="text-slate-500 font-semibold">
+                          Специалист:
+                        </span>
+                        {(
+                          [
+                            'marketer',
+                            'manager',
+                            'methodist',
+                            'analyst',
+                          ] as AgentMode[]
+                        ).map((mId) => {
+                          const isCurrent =
+                            Boolean(activeChatCtx) && currentMode === mId;
+                          return (
+                            <button
+                              key={mId}
+                              type="button"
+                              onClick={() => {
+                                void pixelAgentCoordinator.switchToWorkingChat({
+                                  schoolId: currentSchoolId,
+                                  mode: mId,
+                                  announceInCompanion: true,
+                                });
+                              }}
+                              className={`px-1.5 py-0.5 rounded font-bold transition-colors cursor-pointer ${
+                                isCurrent
+                                  ? 'bg-slate-900 text-white shadow-2xs'
+                                  : 'bg-white text-slate-500 border border-slate-200 hover:text-slate-900'
+                              }`}
+                            >
+                              {AGENT_MODES[mId].shortTitle}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Row 2: Open Chat & Next Instruction Target */}
+                    <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 border-t border-slate-200/60">
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                        <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                        <span className="truncate">
+                          Открытый чат:{' '}
+                          <strong className="text-slate-900">
+                            {activeChatCtx
+                              ? `«${activeChatCtx.sessionTitle}» (${activeChatCtx.messagesCount} сообщ.)`
+                              : 'Не открыт'}
+                          </strong>
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setIsQuickChatSwitcherOpen((prev) => !prev)
+                          }
+                          title="Показать список всех рабочих чатов для быстрого переключения"
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold transition-colors cursor-pointer"
+                        >
+                          <FolderOpen className="w-2.5 h-2.5 text-[#00A8B5]" />
+                          <span>Чаты ({allWorkingChats.length})</span>
+                          <ChevronDown
+                            className={`w-2.5 h-2.5 transition-transform ${
+                              isQuickChatSwitcherOpen ? 'rotate-180' : ''
+                            }`}
+                          />
+                        </button>
+
+                        {activeChatCtx && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void pixelAgentCoordinator.prepareChatDeletionForConfirmation(
+                                {
+                                  sessionId: activeChatCtx.sessionId,
+                                }
+                              );
+                            }}
+                            title="Удалить текущий открытый рабочий чат (с подтверждением)"
+                            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-white hover:bg-rose-50 text-slate-500 hover:text-rose-700 border border-slate-200 hover:border-rose-200 font-medium transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-2.5 h-2.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Row 3: Next Instruction Target + Read Aloud / Resume buttons */}
+                    <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 border-t border-slate-200/60">
+                      <div className="truncate text-slate-600">
+                        Следующее поручение:{' '}
+                        <strong className="text-[#007A85]">
+                          {AGENT_MODES[nextRecipientMode].shortTitle} ·{' '}
+                          {SCHOOLS[nextRecipientSchool].name}
+                        </strong>
+                        {pendingDraft && (
+                          <span className="ml-1 text-amber-700 font-semibold">
+                            (ждёт «Да, отправляй»)
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        {stoppedReadingSession && !isSpeakingActive && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void voiceManager.resumeStoppedReading();
+                            }}
+                            title="Продолжить дословное чтение ответа с места остановки"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold transition-colors cursor-pointer shrink-0"
+                          >
+                            <Play className="w-2.5 h-2.5 fill-current" />
+                            <span>
+                              Продолжить (
+                              {stoppedReadingSession.resumeChunkIndex + 1}/
+                              {stoppedReadingSession.totalChunks})
+                            </span>
+                          </button>
+                        )}
+                        {activeChatCtx?.lastSpecialistMessage && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void pixelAgentCoordinator.executeReadAloud(
+                                {
+                                  isReadAloud: true,
+                                  targetMode: activeChatCtx.mode,
+                                  targetSchool: activeChatCtx.schoolId,
+                                  originalText: 'Пиксель, прочитай ответ',
+                                },
+                                'text'
+                              );
+                            }}
+                            title="Дословно прочитать последний ответ открытого специалиста единым голосом Пикселя"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#00A8B5]/10 hover:bg-[#00A8B5]/20 text-[#007A85] font-bold transition-colors cursor-pointer shrink-0"
+                          >
+                            <Volume2 className="w-3 h-3" />
+                            <span>Прочитать ответ</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Expandable Quick Chat Switcher */}
+                    {isQuickChatSwitcherOpen && (
+                      <div className="pt-1.5 border-t border-slate-200 space-y-1 max-h-40 overflow-y-auto">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-slate-700">
+                          <span>Быстрое переключение рабочих чатов:</span>
+                          <button
+                            type="button"
+                            onClick={() => setIsQuickChatSwitcherOpen(false)}
+                            className="text-slate-400 hover:text-slate-700"
+                          >
+                            Скрыть
+                          </button>
+                        </div>
+                        {allWorkingChats.length === 0 ? (
+                          <div className="text-slate-400 py-1">
+                            Пока нет созданных рабочих чатов. Выберите школу и
+                            специалиста выше, чтобы открыть новый чат.
+                          </div>
+                        ) : (
+                          allWorkingChats.map((chatItem) => (
+                            <div
+                              key={chatItem.sessionId}
+                              className={`flex items-center justify-between gap-1.5 p-1.5 rounded-lg border ${
+                                chatItem.isCurrentlyOpen
+                                  ? 'bg-cyan-50/80 border-cyan-300 text-slate-900'
+                                  : 'bg-white border-slate-200/80 text-slate-700'
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsQuickChatSwitcherOpen(false);
+                                  void pixelAgentCoordinator.switchToWorkingChat(
+                                    {
+                                      schoolId: chatItem.schoolId,
+                                      mode: chatItem.mode,
+                                      sessionId: chatItem.sessionId,
+                                      announceInCompanion: true,
+                                    }
+                                  );
+                                }}
+                                className="flex-1 text-left truncate cursor-pointer"
+                              >
+                                <span
+                                  className={`inline-block px-1 py-0.2 rounded text-[9px] font-bold mr-1 ${
+                                    chatItem.schoolId === 'renderia'
+                                      ? 'bg-[#84CC16]/40 text-slate-900'
+                                      : 'bg-[#FFD700]/50 text-slate-900'
+                                  }`}
+                                >
+                                  {chatItem.schoolName}
+                                </span>
+                                <strong className="font-semibold">
+                                  {chatItem.specialistTitle}:
+                                </strong>{' '}
+                                <span>«{chatItem.sessionTitle}»</span>{' '}
+                                <span className="text-slate-400">
+                                  ({chatItem.messagesCount})
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsQuickChatSwitcherOpen(false);
+                                  void pixelAgentCoordinator.prepareChatDeletionForConfirmation(
+                                    chatItem.sessionId
+                                  );
+                                }}
+                                title="Удалить этот чат (с подтверждением)"
+                                className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {dueOrOverdueTasks.length > 0 && (
                 <div className="px-3.5 py-2 bg-amber-50/90 border-b border-amber-200/80 flex items-center justify-between gap-2 text-[11px] text-amber-950">
@@ -1934,11 +2455,579 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                           )}
                         </div>
                       )}
+
+                      {/* Stage 6.4 (2): Mandatory Safe Delegation Confirmation Card («Да, отправляй») */}
+                      {msg.pendingDelegationDraft && (
+                        <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-2.5">
+                          <div className="rounded-xl p-2.5 bg-cyan-50/70 border border-cyan-200/90 space-y-2 text-[11px]">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                                <ShieldCheck className="w-3.5 h-3.5 text-[#00A8B5] shrink-0" />
+                                <span>Проверка поручения перед отправкой</span>
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                  msg.pendingDelegationDraft.status ===
+                                  'confirmed'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : msg.pendingDelegationDraft.status ===
+                                        'cancelled'
+                                      ? 'bg-slate-200 text-slate-600'
+                                      : 'bg-amber-100 text-amber-900'
+                                }`}
+                              >
+                                {msg.pendingDelegationDraft.status ===
+                                'confirmed'
+                                  ? 'Отправлено'
+                                  : msg.pendingDelegationDraft.status ===
+                                      'cancelled'
+                                    ? 'Отменено'
+                                    : 'Ожидает подтверждения'}
+                              </span>
+                            </div>
+
+                            {/* 1. School selector / indicator */}
+                            <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-cyan-200/50">
+                              <span className="text-slate-600 font-medium">
+                                1. Школа:
+                              </span>
+                              {msg.pendingDelegationDraft.status ===
+                              'awaiting_confirmation' ? (
+                                <div className="inline-flex items-center gap-1">
+                                  {(['kiberone', 'renderia'] as SchoolId[]).map(
+                                    (sId) => {
+                                      const isSelected =
+                                        msg.pendingDelegationDraft!
+                                          .targetSchool === sId;
+                                      return (
+                                        <button
+                                          key={sId}
+                                          type="button"
+                                          onClick={() => {
+                                            if (!isSelected) {
+                                              void pixelAgentCoordinator.updatePendingDelegationDraft(
+                                                msg.pendingDelegationDraft!
+                                                  .draftId,
+                                                { targetSchool: sId }
+                                              );
+                                            }
+                                          }}
+                                          className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                                            isSelected
+                                              ? sId === 'renderia'
+                                                ? 'bg-[#84CC16] text-slate-950 shadow-2xs'
+                                                : 'bg-[#FFD700] text-slate-950 shadow-2xs'
+                                              : 'bg-white/80 text-slate-500 border border-slate-200 hover:text-slate-900'
+                                          }`}
+                                        >
+                                          {SCHOOLS[sId].name}
+                                        </button>
+                                      );
+                                    }
+                                  )}
+                                </div>
+                              ) : (
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    msg.pendingDelegationDraft.targetSchool ===
+                                    'renderia'
+                                      ? 'bg-[#84CC16]/40 text-slate-900'
+                                      : 'bg-[#FFD700]/50 text-slate-900'
+                                  }`}
+                                >
+                                  {
+                                    SCHOOLS[
+                                      msg.pendingDelegationDraft.targetSchool
+                                    ].name
+                                  }
+                                </span>
+                              )}
+                            </div>
+
+                            {/* 2. Specialist selector / indicator */}
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <span className="text-slate-600 font-medium">
+                                2. Специалист:
+                              </span>
+                              {msg.pendingDelegationDraft.status ===
+                              'awaiting_confirmation' ? (
+                                <div className="flex items-center gap-1 flex-wrap justify-end">
+                                  {(
+                                    [
+                                      'marketer',
+                                      'manager',
+                                      'methodist',
+                                      'analyst',
+                                    ] as AgentMode[]
+                                  ).map((mId) => {
+                                    const isSelected =
+                                      msg.pendingDelegationDraft!.targetMode ===
+                                      mId;
+                                    return (
+                                      <button
+                                        key={mId}
+                                        type="button"
+                                        onClick={() => {
+                                          if (!isSelected) {
+                                            void pixelAgentCoordinator.updatePendingDelegationDraft(
+                                              msg.pendingDelegationDraft!
+                                                .draftId,
+                                              { targetMode: mId }
+                                            );
+                                          }
+                                        }}
+                                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                                          isSelected
+                                            ? 'bg-slate-900 text-white shadow-2xs'
+                                            : 'bg-white/80 text-slate-500 border border-slate-200 hover:text-slate-900'
+                                        }`}
+                                      >
+                                        {AGENT_MODES[mId].shortTitle}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <span className="font-bold text-slate-900">
+                                  {
+                                    AGENT_MODES[
+                                      msg.pendingDelegationDraft.targetMode
+                                    ].shortTitle
+                                  }
+                                </span>
+                              )}
+                            </div>
+
+                            {/* 3. Clean business instruction text */}
+                            <div className="pt-1.5 border-t border-cyan-200/50 space-y-1">
+                              <div className="text-[10px] font-semibold text-slate-600">
+                                3. Текст поручения (без системных меток):
+                              </div>
+                              <div className="p-2 rounded-lg bg-white border border-slate-200/80 text-slate-900 font-medium leading-relaxed">
+                                «{msg.pendingDelegationDraft.cleanInstruction}»
+                              </div>
+                            </div>
+                          </div>
+
+                          {msg.pendingDelegationDraft.status === 'confirmed' ? (
+                            <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>
+                                Подтверждено Анной («Да, отправляй») —
+                                отправлено однократно
+                              </span>
+                            </div>
+                          ) : msg.pendingDelegationDraft.status ===
+                            'cancelled' ? (
+                            <div className="text-[11px] text-slate-400">
+                              Отправка поручения отменена
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                disabled={isPixelGenerating}
+                                onClick={() =>
+                                  void handleConfirmPendingDelegation(
+                                    msg.pendingDelegationDraft!.draftId
+                                  )
+                                }
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-bold hover:bg-slate-800 disabled:opacity-40 transition-colors cursor-pointer"
+                              >
+                                <Check className="w-3.5 h-3.5 text-[#FFD700]" />
+                                <span>Да, отправляй</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isPixelGenerating}
+                                onClick={() =>
+                                  void pixelAgentCoordinator.cancelPendingDelegation(
+                                    msg.pendingDelegationDraft!.draftId
+                                  )
+                                }
+                                className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-[11px] font-medium hover:bg-slate-200 disabled:opacity-40 transition-colors cursor-pointer"
+                              >
+                                Отменить
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Stage 6.2: Delegated Specialist Task Status Card */}
+                      {msg.delegatedTask && (
+                        <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                                  msg.delegatedTask.status === 'completed'
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : msg.delegatedTask.status === 'error'
+                                      ? 'bg-rose-50 text-rose-800 border-rose-200'
+                                      : msg.delegatedTask.status ===
+                                          'needs_revision'
+                                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                        : 'bg-cyan-50 text-cyan-800 border-cyan-200'
+                                }`}
+                              >
+                                {(msg.delegatedTask.status === 'created' ||
+                                  msg.delegatedTask.status === 'in_progress' ||
+                                  msg.delegatedTask.status === 'reviewing' ||
+                                  msg.delegatedTask.status ===
+                                    'needs_revision') && (
+                                  <Loader2 className="w-3 h-3 animate-spin text-[#00A8B5]" />
+                                )}
+                                {msg.delegatedTask.status === 'completed' && (
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                )}
+                                <span>
+                                  {PIXEL_DELEGATION_STATUS_LABELS[
+                                    msg.delegatedTask.status
+                                  ] || msg.delegatedTask.statusLabelRu}
+                                </span>
+                              </span>
+
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                  msg.delegatedTask.schoolId === 'renderia'
+                                    ? 'bg-[#84CC16]/30 text-[#365314]'
+                                    : 'bg-[#FFD700]/40 text-slate-900'
+                                }`}
+                              >
+                                {SCHOOLS[msg.delegatedTask.schoolId].name}
+                              </span>
+                            </div>
+
+                            <span className="font-mono-tabular text-[10px] text-slate-400">
+                              ID: {msg.delegatedTask.taskId}
+                            </span>
+                          </div>
+
+                          <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1.5 text-[11px]">
+                            <div className="font-bold text-slate-900 flex items-center justify-between gap-2">
+                              <span>
+                                Исполнитель: ИИ-
+                                {
+                                  AGENT_MODES[msg.delegatedTask.targetMode]
+                                    .shortTitle
+                                }
+                              </span>
+                              {msg.delegatedTask.iterationCount > 0 && (
+                                <span className="text-[10px] font-medium text-slate-500">
+                                  Итераций: {msg.delegatedTask.iterationCount}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-slate-600">
+                              Запрос: «{msg.delegatedTask.instruction}»
+                            </div>
+                            {msg.delegatedTask.reviewSummary && (
+                              <div className="pt-1 border-t border-slate-200/60 text-slate-700">
+                                <span className="font-semibold text-slate-800">
+                                  Проверка Пикселя:{' '}
+                                </span>
+                                {msg.delegatedTask.reviewSummary}
+                              </div>
+                            )}
+                            {msg.delegatedTask.errorMessage && (
+                              <div className="pt-1 border-t border-rose-200/60 text-rose-700 font-medium">
+                                Ошибка: {msg.delegatedTask.errorMessage}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                pixelAgentCoordinator.openDelegatedChat(
+                                  msg.delegatedTask!.schoolId,
+                                  msg.delegatedTask!.targetMode,
+                                  msg.delegatedTask!.sessionId,
+                                  msg.delegatedTask!.lastSpecialistMessageId
+                                );
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-semibold hover:bg-slate-800 transition-colors cursor-pointer"
+                            >
+                              <span>
+                                Открыть чат с{' '}
+                                {
+                                  SPECIALIST_NAMES_INSTRUMENTAL_RU[
+                                    msg.delegatedTask.targetMode
+                                  ]
+                                }
+                              </span>
+                            </button>
+
+                            {msg.delegatedTask.status === 'completed' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void pixelAgentCoordinator.readSpecialistMessageById(
+                                    msg.delegatedTask!.sessionId,
+                                    msg.delegatedTask!.lastSpecialistMessageId
+                                  );
+                                }}
+                                title="Озвучить ответ специалиста голосом Пикселя без создания копии в чате"
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#00A8B5]/15 text-[#007A85] text-[11px] font-semibold hover:bg-[#00A8B5]/25 transition-colors cursor-pointer"
+                              >
+                                <Volume2 className="w-3 h-3" />
+                                <span>Озвучить ответ</span>
+                              </button>
+                            )}
+
+                            {msg.delegatedTask.status === 'error' && (
+                              <button
+                                type="button"
+                                disabled={isPixelGenerating}
+                                onClick={() => {
+                                  const dt = msg.delegatedTask!;
+                                  const retryIntent =
+                                    pixelAgentCoordinator.parseDelegationIntent(
+                                      dt.originalUserRequest,
+                                      dt.schoolId
+                                    ) || {
+                                      isDelegation: true,
+                                      isSupportedSpecialist: true,
+                                      targetMode: dt.targetMode,
+                                      targetSpecialistNameRu:
+                                        AGENT_MODES[dt.targetMode].shortTitle,
+                                      targetSchool: dt.schoolId,
+                                      instruction: dt.instruction,
+                                      cleanInstruction: dt.instruction,
+                                      originalText: dt.originalUserRequest,
+                                    };
+                                  void pixelAgentCoordinator.executeDelegation({
+                                    intent: retryIntent,
+                                    sourceMode: 'text',
+                                    skipAddingUserCompanionMessage: true,
+                                    existingTaskId: dt.taskId,
+                                  });
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-100 text-amber-900 text-[11px] font-semibold hover:bg-amber-200 transition-colors cursor-pointer disabled:opacity-50"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>Повторить поручение</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Stage 6.5 (1): Disambiguation list when multiple chats match */}
+                      {msg.chatDisambiguationList &&
+                        msg.chatDisambiguationList.length > 0 && (
+                          <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5">
+                            <div className="text-[10px] font-bold text-slate-700">
+                              Выберите нужный диалог:
+                            </div>
+                            <div className="space-y-1.5">
+                              {msg.chatDisambiguationList.map((chatItem) => (
+                                <div
+                                  key={chatItem.sessionId}
+                                  className="p-2 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2 text-[11px]"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-bold text-slate-900 truncate">
+                                      «{chatItem.sessionTitle}»
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">
+                                      {chatItem.specialistTitle} ·{' '}
+                                      {chatItem.schoolName} ·{' '}
+                                      {chatItem.messagesCount} сообщ.
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void pixelAgentCoordinator.switchToWorkingChat(
+                                        {
+                                          schoolId: chatItem.schoolId,
+                                          mode: chatItem.mode,
+                                          sessionId: chatItem.sessionId,
+                                          announceInCompanion: true,
+                                        }
+                                      );
+                                    }}
+                                    className="px-2.5 py-1 rounded-xl bg-slate-900 text-white text-[10px] font-bold hover:bg-slate-800 shrink-0 cursor-pointer"
+                                  >
+                                    Открыть
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                      {/* Stage 6.5 (5): Safe Working Chat Deletion Confirmation Card */}
+                      {msg.pendingChatDeletion && (
+                        <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-2">
+                          <div className="rounded-xl p-2.5 bg-rose-50/70 border border-rose-200/90 space-y-1.5 text-[11px]">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-rose-950 flex items-center gap-1.5">
+                                <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                <span>Подтверждение удаления чата</span>
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  msg.pendingChatDeletion.status === 'confirmed'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : msg.pendingChatDeletion.status ===
+                                        'cancelled'
+                                      ? 'bg-slate-200 text-slate-600'
+                                      : 'bg-amber-100 text-amber-900'
+                                }`}
+                              >
+                                {msg.pendingChatDeletion.status === 'confirmed'
+                                  ? 'Удалено'
+                                  : msg.pendingChatDeletion.status ===
+                                      'cancelled'
+                                    ? 'Отменено'
+                                    : 'Ждёт подтверждения'}
+                              </span>
+                            </div>
+                            <div className="text-slate-700 space-y-0.5">
+                              <div>
+                                Чат:{' '}
+                                <strong className="text-slate-900">
+                                  «{msg.pendingChatDeletion.sessionTitle}»
+                                </strong>
+                              </div>
+                              <div>
+                                Школа:{' '}
+                                <strong className="text-slate-900">
+                                  {msg.pendingChatDeletion.schoolName}
+                                </strong>{' '}
+                                · Специалист:{' '}
+                                <strong className="text-slate-900">
+                                  {msg.pendingChatDeletion.specialistTitle}
+                                </strong>{' '}
+                                ({msg.pendingChatDeletion.messagesCount} сообщ.)
+                              </div>
+                            </div>
+                          </div>
+
+                          {msg.pendingChatDeletion.status ===
+                            'awaiting_confirmation' && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void pixelAgentCoordinator.confirmPendingChatDeletion(
+                                    msg.pendingChatDeletion!.deletionId
+                                  );
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 text-white text-[11px] font-bold hover:bg-rose-700 transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>Да, удалить чат</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void pixelAgentCoordinator.cancelPendingChatDeletion(
+                                    msg.pendingChatDeletion!.deletionId
+                                  );
+                                }}
+                                className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-[11px] font-medium hover:bg-slate-200 transition-colors cursor-pointer"
+                              >
+                                Отмена
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Stage 6.5 (5): Deletable Working Chats List Card */}
+                      {msg.deletableChatsList &&
+                        msg.deletableChatsList.length > 0 && (
+                          <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5">
+                            <div className="text-[10px] font-bold text-slate-700">
+                              Рабочие чаты (выберите для открытия или удаления):
+                            </div>
+                            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                              {msg.deletableChatsList.map((chatItem) => (
+                                <div
+                                  key={chatItem.sessionId}
+                                  className="p-2 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2 text-[11px]"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-bold text-slate-900 truncate">
+                                      «{chatItem.sessionTitle}»
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">
+                                      {chatItem.schoolName} ·{' '}
+                                      {chatItem.specialistTitle} ·{' '}
+                                      {chatItem.messagesCount} сообщ.
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        void pixelAgentCoordinator.switchToWorkingChat(
+                                          {
+                                            schoolId: chatItem.schoolId,
+                                            mode: chatItem.mode,
+                                            sessionId: chatItem.sessionId,
+                                            announceInCompanion: true,
+                                          }
+                                        );
+                                      }}
+                                      className="px-2 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 text-[10px] font-semibold hover:bg-slate-100 cursor-pointer"
+                                    >
+                                      Открыть
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        void pixelAgentCoordinator.prepareChatDeletionForConfirmation(
+                                          chatItem.sessionId
+                                        );
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[10px] font-semibold hover:bg-rose-100 cursor-pointer"
+                                    >
+                                      <Trash2 className="w-2.5 h-2.5" />
+                                      <span>Удалить…</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                     </div>
 
-                    {/* Transparent Context & Provider Attribution Indicator */}
+                    {/* Transparent Context, Copy Action & Provider Attribution Indicator */}
                     <div className="mt-1 px-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400">
                       <span>{msg.createdAt}</span>
+
+                      {/* Stage 6.5 (3): Copy button for Pixel & user messages */}
+                      {!msg.isStreaming && msg.content.trim() && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleCopyCompanionMessage(msg.id, msg.content)
+                          }
+                          title="Скопировать полный чистый текст сообщения без технических тегов"
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-white hover:bg-slate-100 text-slate-600 border border-slate-200/80 transition-colors cursor-pointer"
+                        >
+                          {copiedCompanionMsgId === msg.id ? (
+                            <>
+                              <Check className="w-2.5 h-2.5 text-emerald-600" />
+                              <span className="text-emerald-700 font-semibold">
+                                Скопировано
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-2.5 h-2.5 text-slate-500" />
+                              <span>Копировать</span>
+                            </>
+                          )}
+                        </button>
+                      )}
 
                       {msg.role === 'pixel' && (
                         <>
@@ -2052,7 +3141,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => handleToggleSpeakMessage(msg.id, msg.content)}
-                                    title="Прослушать ответ Пикселя"
+                                    title="Прослушать ответ единым голосом Пикселя"
                                     className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
                                   >
                                     <Volume2 className="w-2.5 h-2.5 text-[#00A8B5]" />
@@ -2061,7 +3150,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => handleToggleSpeakMessage(msg.id, msg.content, true)}
-                                    title="Заново синтезировать речь без кэша с актуальным голосом и тембром"
+                                    title="Заново синтезировать речь без кэша с выбранным голосом Пикселя"
                                     className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
                                   >
                                     <RotateCcw className="w-2.5 h-2.5" />
@@ -2082,7 +3171,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                 playbackState.provider === 'gemini' &&
                                 playbackState.status !== 'error' && (
                                   <span className="text-[10px] text-cyan-900 bg-cyan-50 border border-cyan-200 px-1.5 py-0.5 rounded font-medium">
-                                    Голос: <b>{playbackState.voiceName || 'Aoede'}</b> · {playbackState.timbreName || 'Светлый'}
+                                    Голос Пикселя: <b>{playbackState.voiceName || 'Aoede'}</b>
                                     {playbackState.fromCache ? ' (кэш)' : ''}
                                   </span>
                                 )}
@@ -2110,6 +3199,32 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
+                      onClick={() => {
+                        void executePixelChatRequest(
+                          'Пиксель, прочитай ответ'
+                        );
+                      }}
+                      className="px-2 py-1 rounded-lg bg-[#00A8B5]/10 hover:bg-[#00A8B5]/20 text-[10px] font-semibold text-[#007A85] whitespace-nowrap"
+                    >
+                      🔊 Прочитай ответ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const ctx = pixelAgentCoordinator.getActiveChatContext();
+                        const genName = ctx
+                          ? SPECIALIST_NAMES_GENITIVE_RU[ctx.mode]
+                          : 'Маркетолога';
+                        setChatInput(
+                          `Спроси ${genName}: какие 3 главных шага стоит запустить в первую очередь?`
+                        );
+                      }}
+                      className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-medium text-slate-700 whitespace-nowrap"
+                    >
+                      + Уточнить в чате...
+                    </button>
+                    <button
+                      type="button"
                       onClick={() =>
                         setChatInput(
                           `Пиксель, напомни мне завтра проверить презентацию для ${school.name}`
@@ -2118,17 +3233,6 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                       className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-medium text-slate-700 whitespace-nowrap"
                     >
                       + Напомнить завтра...
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setChatInput(
-                          `Запомни: по школе ${school.name} приоритет на запись на пробные уроки`
-                        )
-                      }
-                      className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-medium text-slate-700 whitespace-nowrap"
-                    >
-                      + Запомнить факт...
                     </button>
                   </div>
                   {companionMessages.length > 1 && (
@@ -2975,6 +4079,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 size={characterSize}
                 petTrigger={petTriggerCount}
                 isSpeaking={isSpeakingActive}
+                isListening={
+                  speechInputStatus === 'listening' ||
+                  speechInputStatus === 'recognizing'
+                }
                 isThinking={isPixelGenerating}
                 interactive={false}
               />

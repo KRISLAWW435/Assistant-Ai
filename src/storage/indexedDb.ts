@@ -496,20 +496,38 @@ function assembleLoadedWorkspaceData(
     .slice()
     .sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
 
-  // 5. Sort companion messages chronologically (normalizing any stale isStreaming flag)
+  // 5. Sort companion messages chronologically (normalizing any stale isStreaming flag or interrupted delegation task)
   const sortedCompanionMessages = rawCompanionMessages
-    .map((m) =>
-      m.isStreaming
-        ? {
-            ...m,
-            isStreaming: false,
-            isError: !m.content?.trim() ? true : m.isError,
-            content:
-              m.content?.trim() ||
-              'Генерация ответа Пикселя была прервана. Вы можете повторить отправку.',
-          }
-        : m
-    )
+    .map((m) => {
+      let normalized = m;
+      if (normalized.isStreaming) {
+        normalized = {
+          ...normalized,
+          isStreaming: false,
+          isError: !normalized.content?.trim() ? true : normalized.isError,
+          content:
+            normalized.content?.trim() ||
+            'Генерация ответа Пикселя была прервана. Вы можете повторить отправку.',
+        };
+      }
+      if (
+        normalized.delegatedTask &&
+        normalized.delegatedTask.status !== 'completed' &&
+        normalized.delegatedTask.status !== 'error'
+      ) {
+        normalized = {
+          ...normalized,
+          delegatedTask: {
+            ...normalized.delegatedTask,
+            status: 'error',
+            statusLabelRu: 'Ошибка',
+            errorMessage:
+              'Выполнение поручения было прервано при перезагрузке страницы.',
+          },
+        };
+      }
+      return normalized;
+    })
     .sort((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0));
 
   // 6. Sort companion memories by updatedAtMs descending
@@ -1473,6 +1491,18 @@ export function validateBackupArchiveJson(
             sizeBytes: Number(m.attachmentMeta.sizeBytes || 0),
           }
         : undefined,
+      delegatedByPixel:
+        typeof m.delegatedByPixel === 'boolean'
+          ? m.delegatedByPixel
+          : undefined,
+      delegationTaskId:
+        typeof m.delegationTaskId === 'string' ? m.delegationTaskId : undefined,
+      delegationIteration:
+        typeof m.delegationIteration === 'number'
+          ? m.delegationIteration
+          : undefined,
+      senderLabel:
+        typeof m.senderLabel === 'string' ? m.senderLabel : undefined,
     });
   }
 
@@ -1581,6 +1611,9 @@ export function validateBackupArchiveJson(
           cm.proposalStatus === 'dismissed'
             ? cm.proposalStatus
             : undefined,
+        delegatedTask: isObjectRecord(cm.delegatedTask)
+          ? (cm.delegatedTask as unknown as CompanionMessage['delegatedTask'])
+          : undefined,
       });
     }
   }

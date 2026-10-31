@@ -183,6 +183,10 @@ export interface ChatMessage {
   providerLabel?: string;
   failoverNotice?: string;
   consentRequiredFallbackProvider?: AIProviderId;
+  delegatedByPixel?: boolean;
+  delegationTaskId?: string;
+  delegationIteration?: number;
+  senderLabel?: string;
 }
 
 export interface ChatSession {
@@ -307,6 +311,82 @@ export interface ProposedCompanionMemoryDraft {
   schoolId?: SchoolId | 'both';
 }
 
+export type PixelDelegationStatus =
+  | 'created'
+  | 'in_progress'
+  | 'reviewing'
+  | 'needs_revision'
+  | 'completed'
+  | 'error';
+
+export interface PixelDelegatedTaskState {
+  taskId: string;
+  targetMode: AgentMode;
+  schoolId: SchoolId;
+  instruction: string;
+  originalUserRequest: string;
+  status: PixelDelegationStatus;
+  statusLabelRu: string;
+  sessionId: string;
+  lastSpecialistMessageId?: string;
+  iterationCount: number;
+  maxRevisions: number;
+  reviewSummary?: string;
+  revisionFeedbackHistory?: string[];
+  specialistReplyPreview?: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  sourceMode: 'text' | 'voice';
+}
+
+export interface PixelPendingDelegationDraft {
+  draftId: string;
+  targetSchool: SchoolId;
+  targetMode: AgentMode;
+  targetSpecialistNameRu: string;
+  cleanInstruction: string;
+  originalUserRequest: string;
+  sessionId?: string;
+  sessionTitle?: string;
+  isFollowUp?: boolean;
+  status: 'awaiting_confirmation' | 'confirmed' | 'cancelled';
+  createdAt: string;
+  createdAtMs: number;
+  sourceMode: 'text' | 'voice';
+}
+
+export interface PixelChatNavigationItem {
+  sessionId: string;
+  sessionTitle: string;
+  schoolId: SchoolId;
+  schoolName: string;
+  mode: AgentMode;
+  specialistTitle: string;
+  messagesCount: number;
+  updatedAt: string;
+  updatedAtMs: number;
+  lastMessagePreview?: string;
+  isCurrentlyOpen: boolean;
+}
+
+export interface PixelPendingChatDeletion {
+  deletionId: string;
+  sessionId: string;
+  sessionTitle: string;
+  schoolId: SchoolId;
+  schoolName: string;
+  mode: AgentMode;
+  specialistTitle: string;
+  messagesCount: number;
+  updatedAt: string;
+  status: 'awaiting_confirmation' | 'confirmed' | 'cancelled';
+  createdAt?: string;
+  createdAtMs: number;
+}
+
 export interface CompanionMessage {
   id: string;
   role: 'user' | 'pixel';
@@ -319,6 +399,11 @@ export interface CompanionMessage {
   proposedTask?: ProposedCompanionTaskDraft;
   proposedMemory?: ProposedCompanionMemoryDraft;
   proposalStatus?: 'pending' | 'confirmed' | 'dismissed';
+  pendingDelegationDraft?: PixelPendingDelegationDraft;
+  pendingChatDeletion?: PixelPendingChatDeletion;
+  deletableChatsList?: PixelChatNavigationItem[];
+  chatDisambiguationList?: PixelChatNavigationItem[];
+  delegatedTask?: PixelDelegatedTaskState;
   isStreaming?: boolean;
   isError?: boolean;
   modelName?: string;
@@ -352,6 +437,33 @@ export interface CompanionPreferencesRecord {
   customPosition?: CompanionCustomPosition | null;
 }
 
+export interface PixelActiveChatMessageItem {
+  id: string;
+  role: 'user' | 'assistant';
+  authorType: 'anna' | 'pixel' | 'specialist';
+  authorLabel: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface PixelActiveChatContext {
+  isSpecialistChatOpen?: boolean;
+  sessionId: string;
+  sessionTitle: string;
+  schoolId: SchoolId;
+  schoolName: string;
+  mode: AgentMode;
+  specialistTitle: string;
+  specialistRoleSubtitle: string;
+  messagesCount: number;
+  lastSpecialistMessage?: {
+    id: string;
+    content: string;
+    createdAt: string;
+  };
+  recentMessages: PixelActiveChatMessageItem[];
+}
+
 /**
  * Structured context bundle prepared for future selective Gemini API integration (Part 11).
  */
@@ -366,5 +478,6 @@ export interface PixelRelevantContextBundle {
     CompanionTaskRecord,
     'id' | 'title' | 'dueDate' | 'priority' | 'status'
   >[];
+  activeChatContext?: PixelActiveChatContext;
   contextSummaryLabels: string[];
 }

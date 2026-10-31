@@ -3,6 +3,7 @@ import {
   CompanionMemoryRecord,
   CompanionTaskPriority,
   CompanionTaskRecord,
+  PixelActiveChatContext,
   PixelRelevantContextBundle,
   ProposedCompanionMemoryDraft,
   ProposedCompanionTaskDraft,
@@ -289,7 +290,8 @@ export function buildSelectivePixelContext(
   query: string,
   activeSchool: SchoolId,
   memories: CompanionMemoryRecord[],
-  tasks: CompanionTaskRecord[]
+  tasks: CompanionTaskRecord[],
+  activeChatContext?: PixelActiveChatContext
 ): PixelRelevantContextBundle {
   const schoolCfg = SCHOOLS[activeSchool];
   const lowerQuery = query.toLowerCase();
@@ -338,6 +340,11 @@ export function buildSelectivePixelContext(
     }));
 
   const contextSummaryLabels: string[] = [`Школа: ${schoolCfg.name}`];
+  if (activeChatContext) {
+    contextSummaryLabels.push(
+      `Чат: ${activeChatContext.specialistTitle} (${activeChatContext.messagesCount} сообщ.)`
+    );
+  }
   if (relevantMemories.length > 0) {
     contextSummaryLabels.push(
       `Память об Анне: ${relevantMemories.length} зап.`
@@ -352,6 +359,7 @@ export function buildSelectivePixelContext(
     schoolName: schoolCfg.name,
     relevantMemories,
     activeTasks,
+    activeChatContext,
     contextSummaryLabels,
   };
 }

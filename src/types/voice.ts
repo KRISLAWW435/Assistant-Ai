@@ -91,6 +91,12 @@ export interface SpeechOutputOptions {
   timbreId?: PixelTimbreId;
   forceRefresh?: boolean;
   messageId?: string;
+  /** Chunk index to start/resume speaking from (0-based) */
+  startChunkIndex?: number;
+  /** Invoked when a chunk starts playing so stop/resume knows the exact position */
+  onChunkProgress?: (chunkIndex: number, totalChunks: number) => void;
+  /** Invoked with real-time audio volume level (0..1) for lip-sync mouth animation */
+  onAudioLevel?: (level: number) => void;
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (err: Error) => void;

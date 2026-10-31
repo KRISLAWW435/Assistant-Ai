@@ -8,6 +8,7 @@ import { FloatingParticle, NormalizedGaze, PixelCharacterProps, PixelEmotion } f
 import { PixelEyes } from './PixelEyes';
 import { PixelEffects } from './PixelEffects';
 import { pixelEmotionManager } from './PixelEmotionManager';
+import { voiceManager } from '../../providers/voice/voiceManager';
 
 const HEART_COLORS = [
   '#F472B6', // Pastel Pink
@@ -59,6 +60,27 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
   useEffect(() => {
     pixelEmotionManager.setThinkingState(isThinking);
   }, [isThinking]);
+
+  // Real-time lip-sync mouth openness (0..1) driven by voice amplitude when speaking (never when listening/idle)
+  const [mouthOpenness, setMouthOpenness] = useState<number>(0);
+
+  useEffect(() => {
+    if (isListening || (activeEmotion !== 'speaking' && !isSpeaking)) {
+      setMouthOpenness(0);
+      return;
+    }
+    const unsub = voiceManager.onAudioLevelChange((level) => {
+      if (isListening) {
+        setMouthOpenness(0);
+      } else {
+        setMouthOpenness(level);
+      }
+    });
+    return () => {
+      unsub();
+      setMouthOpenness(0);
+    };
+  }, [activeEmotion, isSpeaking, isListening]);
 
   // Mouse tracking state with smooth spring lerp
   const [targetGaze, setTargetGaze] = useState<NormalizedGaze>({ x: 0, y: 0 });
@@ -384,19 +406,40 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
             size={size}
           />
 
-          {/* 5. MOUTH / EMOTION EXPRESSION CURVE */}
-          {activeEmotion === 'speaking' ? (
-            /* Speaking vocal ripple aperture */
-            <ellipse
-              cx="50"
-              cy="64"
-              rx="4.5"
-              ry="3"
-              fill="#0F172A"
-              stroke="#38BDF8"
-              strokeWidth="1.5"
-              className="animate-pulse"
-            />
+          {/* 5. MOUTH / EMOTION EXPRESSION CURVE (With Audio-Synced Lip Animation) */}
+          {activeEmotion === 'speaking' && !isListening ? (
+            mouthOpenness > 0.04 ? (
+              <g>
+                <ellipse
+                  cx="50"
+                  cy={Number((63.4 + mouthOpenness * 0.7).toFixed(2))}
+                  rx={Number((3.6 + mouthOpenness * 1.5).toFixed(2))}
+                  ry={Number((0.85 + mouthOpenness * 3.4).toFixed(2))}
+                  fill="#0F172A"
+                  stroke="#38BDF8"
+                  strokeWidth="1.2"
+                />
+                {mouthOpenness > 0.32 && (
+                  <ellipse
+                    cx="50"
+                    cy={Number((64.4 + mouthOpenness * 1.1).toFixed(2))}
+                    rx={Number((1.8 + mouthOpenness * 0.8).toFixed(2))}
+                    ry={Number((0.5 + mouthOpenness * 0.9).toFixed(2))}
+                    fill="#F472B6"
+                    opacity="0.75"
+                  />
+                )}
+              </g>
+            ) : (
+              /* Brief consonant closure / pause between words */
+              <path
+                d="M 45.2 63.2 Q 50 65.6 54.8 63.2"
+                fill="none"
+                stroke="#0F172A"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            )
           ) : activeEmotion === 'happy' || activeEmotion === 'interacting' ? (
             /* Cheerful warm open smile */
             <path

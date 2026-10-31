@@ -9,7 +9,7 @@
  * - Clean microphone release on disconnection
  */
 
-import { SchoolId } from '../../types/assistant';
+import { PixelActiveChatContext, SchoolId } from '../../types/assistant';
 import { LiveVoiceState } from '../../types/voice';
 
 export interface IncomingPixelContext {
@@ -28,6 +28,7 @@ export interface IncomingPixelContext {
     priority: string;
     status: string;
   }>;
+  activeChatContext?: PixelActiveChatContext;
 }
 
 export interface LiveTranscriptEntry {
@@ -59,6 +60,9 @@ export class GeminiLiveClient {
   // Audio output scheduling
   private nextOutputStartTime = 0;
   private activeSourceNodes: AudioBufferSourceNode[] = [];
+  private outputAnalyser: AnalyserNode | null = null;
+  private outputLevelInterval: ReturnType<typeof setInterval> | null = null;
+  private outputLevelListeners = new Set<(level: number) => void>();
 
   // VAD & Interruption
   private isMuted = false;
@@ -70,6 +74,22 @@ export class GeminiLiveClient {
   private transcripts: LiveTranscriptEntry[] = [];
   private currentPartialUserText = '';
   private currentPartialModelText = '';
+
+  public onOutputAudioLevelChange(callback: (level: number) => void): () => void {
+    this.outputLevelListeners.add(callback);
+    return () => this.outputLevelListeners.delete(callback);
+  }
+
+  private emitOutputAudioLevel(level: number): void {
+    const clamped = Math.max(0, Math.min(1, level));
+    for (const listener of this.outputLevelListeners) {
+      try {
+        listener(clamped);
+      } catch {
+        // ignore
+      }
+    }
+  }
 
   public getState(): LiveVoiceState {
     return this.state;
@@ -157,6 +177,12 @@ export class GeminiLiveClient {
       this.inputAudioCtx = new AudioCtxClass({ sampleRate: 16000 });
       this.outputAudioCtx = new AudioCtxClass({ sampleRate: 24000 });
 
+      const analyser = this.outputAudioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.4;
+      analyser.connect(this.outputAudioCtx.destination);
+      this.outputAnalyser = analyser;
+
       // Resume context if suspended by browser autoplay policy
       if (this.inputAudioCtx.state === 'suspended') {
         await this.inputAudioCtx.resume();
@@ -166,6 +192,7 @@ export class GeminiLiveClient {
       }
 
       this.setupMicrophoneProcessor(this.mediaStream, this.inputAudioCtx);
+      this.startOutputLevelTracking();
     } catch (err: unknown) {
       console.warn('[GeminiLive] Web Audio initialization error:', err);
     }
@@ -289,6 +316,9 @@ export class GeminiLiveClient {
       this.inputAudioCtx = null;
     }
 
+    this.stopOutputLevelTracking();
+    this.outputAnalyser = null;
+
     if (this.outputAudioCtx) {
       try {
         this.outputAudioCtx.close();
@@ -384,16 +414,24 @@ export class GeminiLiveClient {
     switch (msg.type) {
       case 'user_transcript':
         if (msg.text) {
-          this.currentPartialUserText = msg.text;
-          this.updateUserTranscript(msg.text, false);
+          if (!this.currentPartialUserText) {
+            this.currentPartialUserText = msg.text;
+          } else if (!this.currentPartialUserText.endsWith(msg.text)) {
+            this.currentPartialUserText += msg.text;
+          }
+          this.updateUserTranscript(this.currentPartialUserText, false);
           this.updateState('thinking');
         }
         break;
 
       case 'model_transcript':
         if (msg.text) {
-          this.currentPartialModelText = msg.text;
-          this.updateModelTranscript(msg.text, false);
+          if (!this.currentPartialModelText) {
+            this.currentPartialModelText = msg.text;
+          } else if (!this.currentPartialModelText.endsWith(msg.text)) {
+            this.currentPartialModelText += msg.text;
+          }
+          this.updateModelTranscript(this.currentPartialModelText, false);
         }
         break;
 
@@ -441,6 +479,7 @@ export class GeminiLiveClient {
 
   private stopModelAudioPlayback(): void {
     this.modelIsSpeaking = false;
+    this.emitOutputAudioLevel(0);
     for (const source of this.activeSourceNodes) {
       try {
         source.stop();
@@ -451,6 +490,38 @@ export class GeminiLiveClient {
     }
     this.activeSourceNodes = [];
     this.nextOutputStartTime = 0;
+  }
+
+  private startOutputLevelTracking(): void {
+    this.stopOutputLevelTracking();
+    const dataArray = new Uint8Array(256);
+    this.outputLevelInterval = setInterval(() => {
+      if (!this.modelIsSpeaking || !this.outputAnalyser || this.isPaused) {
+        this.emitOutputAudioLevel(0);
+        return;
+      }
+      try {
+        this.outputAnalyser.getByteTimeDomainData(dataArray);
+        let sumSq = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const norm = (dataArray[i] - 128) / 128;
+          sumSq += norm * norm;
+        }
+        const rms = Math.sqrt(sumSq / dataArray.length);
+        const level = Math.min(1, Math.max(0, (rms - 0.01) * 4.5));
+        this.emitOutputAudioLevel(Number(level.toFixed(3)));
+      } catch {
+        this.emitOutputAudioLevel(0);
+      }
+    }, 40);
+  }
+
+  private stopOutputLevelTracking(): void {
+    if (this.outputLevelInterval) {
+      clearInterval(this.outputLevelInterval);
+      this.outputLevelInterval = null;
+    }
+    this.emitOutputAudioLevel(0);
   }
 
   /**
@@ -482,7 +553,9 @@ export class GeminiLiveClient {
 
       const sourceNode = this.outputAudioCtx.createBufferSource();
       sourceNode.buffer = audioBuffer;
-      sourceNode.connect(this.outputAudioCtx.destination);
+      sourceNode.connect(
+        this.outputAnalyser || this.outputAudioCtx.destination
+      );
 
       const currentTime = this.outputAudioCtx.currentTime;
       // Schedule immediately or seamlessly back-to-back
@@ -499,6 +572,7 @@ export class GeminiLiveClient {
         }
         if (this.activeSourceNodes.length === 0) {
           this.modelIsSpeaking = false;
+          this.emitOutputAudioLevel(0);
           if (this.state === 'speaking' && !this.isPaused) {
             this.updateState('listening');
           }

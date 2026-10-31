@@ -14,8 +14,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = 3000;
-export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
+const rawEnvGeminiModel = (process.env.GEMINI_MODEL || '').trim();
+export const GEMINI_MODEL =
+  rawEnvGeminiModel && !rawEnvGeminiModel.startsWith('gemini-2.5')
+    ? rawEnvGeminiModel
+    : 'gemini-3.8-flash';
+const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview';
 const rawEnvOpenRouterModel = (process.env.OPENROUTER_MODEL || '').trim();
 export const OPENROUTER_DEFAULT_FREE_MODEL =
   rawEnvOpenRouterModel &&
@@ -109,6 +113,30 @@ interface IncomingPixelContext {
     priority: string;
     status: string;
   }>;
+  activeChatContext?: {
+    isSpecialistChatOpen?: boolean;
+    sessionId: string;
+    sessionTitle: string;
+    schoolId: SchoolId;
+    schoolName: string;
+    mode: 'marketer' | 'manager' | 'methodist' | 'analyst';
+    specialistTitle: string;
+    specialistRoleSubtitle: string;
+    messagesCount: number;
+    lastSpecialistMessage?: {
+      id: string;
+      content: string;
+      createdAt: string;
+    };
+    recentMessages: Array<{
+      id: string;
+      role: 'user' | 'assistant';
+      authorType: 'anna' | 'pixel' | 'specialist';
+      authorLabel: string;
+      content: string;
+      createdAt: string;
+    }>;
+  };
 }
 
 interface GeminiChatRequestBody {
@@ -169,11 +197,11 @@ const MAX_KB_CATEGORY_CHARS = 3500;
 const STREAM_CHUNK_SIZE_CHARS = 180;
 
 // Per-attempt timeout & heartbeat interval
-const GEMINI_ATTEMPT_TIMEOUT_MS = 14000;
+const GEMINI_ATTEMPT_TIMEOUT_MS = 28000;
 const OPENROUTER_ATTEMPT_TIMEOUT_MS = 20000;
 const OLLAMA_ATTEMPT_TIMEOUT_MS = 10000;
 const HEARTBEAT_INTERVAL_MS = 2000;
-const CIRCUIT_BREAKER_COOLDOWN_MS = 30 * 1000; // 30s cooldown for temporarily failing provider
+const CIRCUIT_BREAKER_COOLDOWN_MS = 10 * 1000; // 10s cooldown for temporarily failing provider
 
 const recentDiagnostics: SafeDiagnosticLogEntry[] = [];
 const MAX_DIAGNOSTIC_ENTRIES = 25;
@@ -320,11 +348,11 @@ let serverSpecialistModelAssignments: Record<
   string,
   { providerSelection: 'auto' | AIProviderId; specificModel?: string }
 > = {
-  marketer: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
-  manager: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
-  methodist: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
-  analyst: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
-  pixel: { providerSelection: 'auto', specificModel: 'gemini-2.5-flash' },
+  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  manager: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
 };
 
 let serverFailoverSettings = {
@@ -508,11 +536,7 @@ function getGenAIClient(): GoogleGenAI {
     httpOptions: {
       timeout: GEMINI_ATTEMPT_TIMEOUT_MS,
       retryOptions: {
-        attempts: 2,
-        initialDelay: 1.5,
-        maxDelay: 3.0,
-        expBase: 2.0,
-        httpStatusCodes: [502, 503, 504],
+        attempts: 1,
       },
     },
   });
@@ -696,7 +720,21 @@ const ROLE_INSTRUCTIONS: Record<AssistantEndpointMode, string> = {
 5. Вы помните важные рабочие и личные факты об Анне и её школах (из раздела «Подтверждённые записи из памяти об Анне» ниже).
 6. Вы отслеживаете актуальные рабочие задачи Анны (из раздела «Актуальные задачи в списке дел Анны» ниже).
 7. Если Анна просит создать задачу или что-то запомнить, подтверждайте это доброжелательно и кратко.
-8. При первом голосовом вызове по имени («Пиксель») ваша первая фраза: «Я тут, Анна!».`,
+8. При первом голосовом вызове по имени («Пиксель») ваша первая фраза: «Я тут, Анна!».
+9. ПОСРЕДНИК ВО ВСЕХ РАБОЧИХ ЧАТАХ СПЕЦИАЛИСТОВ (Маркетолог, Менеджер, Методист, Аналитик):
+   - Вы видите историю текущего открытого рабочего чата специалиста (в разделе «ТЕКУЩИЙ ОТКРЫТЫЙ РАБОЧИЙ ЧАТ СПЕЦИАЛИСТА» ниже) и понимаете, с каким именно специалистом сейчас идёт работа.
+   - Вы строго различаете:
+     • [Сообщение управляющей Анны] — реплики самой Анны в чате;
+     • [Сообщение от Пикселя] — поручения или уточняющие вопросы, отправленные вами в чат специалиста;
+     • [Ответ специалиста] — реальные ответы ИИ-специалиста (Маркетолога, Менеджера, Методиста, Аналитика).
+   - Когда Анна задаёт вопросы по содержанию ответа специалиста или обсуждает его с вами — опирайтесь на историю текущего рабочего диалога, разбирайте ответ по существу и предлагайте следующие шаги.
+   - Когда Анна просит вас отправить сообщение, задать уточняющий вопрос или попросить специалиста доработать ответ («Спроси Маркетолога...», «Попроси его доработать...», «Уточни у Менеджера...») — перед КАЖДОЙ отправкой специалисту вы всегда уточняете школу (KIBERONE или RENDERIA), специалиста и чистый деловой текст поручения без системных меток, показываете его Анне и ждёте явного подтверждения: «Да, отправляй». Без подтверждения ничего не отправляется. Если фраза Анны не закончена или смысл неясен — сначала переспросите.
+   - Когда Анна просит озвучить ответ («Прочитай ответ», «Прочитай всё, что написал Маркетолог»), вы зачитываете полный последний ответ специалиста дословно через единую систему TTS Пикселя без сокращений и без генерации пересказа.
+10. ЕДИНОЕ УПРАВЛЕНИЕ РАБОЧИМИ ЧАТАМИ И ЧЕСТНОЕ ПОВЕДЕНИЕ (Этап 6.5):
+   - Чаты строго разделены по школам (KIBERONE и RENDERIA) и по специалистам (Маркетолог, Менеджер, Методист, Аналитик). Категорически запрещено смешивать историю одного чата с другим.
+   - Вы умеете находить, открывать и переключать рабочие чаты, отправлять поручения специалистам (после подтверждения Анны), зачитывать их ответы вслух и удалять рабочие чаты (после явного подтверждения Анны).
+   - ЧЕСТНОСТЬ О ВОЗМОЖНОСТЯХ: Если Анна просит выполнить действие, которого пока нет в системе (например: напрямую опубликовать пост во ВКонтакте/Telegram, разослать внешние письма или сообщения в WhatsApp/SMS, позвонить клиенту, внести изменения во внешнюю CRM/Google Таблицу или провести оплату), вы ОБЯЗАНЫ честно сказать, что пока не умеете делать это самостоятельно, и кратко объяснить почему. Пример честного ответа: «Анна, я пока не умею самостоятельно выполнять это действие. Я ещё учусь управлять рабочими процессами, но мы сможем добавить такую возможность».
+   - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО имитировать выполнение нереализованных внешних действий, сообщать о ложном успехе или придумывать несуществующие функции.`,
 };
 
 export function buildSystemInstruction(body: GeminiChatRequestBody): string {
@@ -798,6 +836,35 @@ export function buildSystemInstruction(body: GeminiChatRequestBody): string {
             )
             .join('\n')
       );
+    }
+    if (body.pixelContext.activeChatContext) {
+      const chatCtx = body.pixelContext.activeChatContext;
+      const header = [
+        `ТЕКУЩИЙ ОТКРЫТЫЙ РАБОЧИЙ ЧАТ СПЕЦИАЛИСТА:`,
+        `• Активный специалист: ${chatCtx.specialistTitle} (${chatCtx.specialistRoleSubtitle})`,
+        `• Школа диалога: ${chatCtx.schoolName}`,
+        `• Название диалога: «${chatCtx.sessionTitle}»`,
+        `• Статус окна: ${chatCtx.isSpecialistChatOpen !== false ? 'Чат специалиста сейчас открыт на экране Анны' : 'Фоновый контекст последнего рабочего чата'}`,
+      ].join('\n');
+
+      if (chatCtx.recentMessages && chatCtx.recentMessages.length > 0) {
+        const formattedMessages = chatCtx.recentMessages
+          .slice(-8)
+          .map(
+            (m, idx) =>
+              `${idx + 1}. [${m.authorLabel} · ${m.createdAt}]:\n${m.content
+                .trim()
+                .slice(0, 2200)}`
+          )
+          .join('\n\n');
+        pixelParts.push(
+          `${header}\n\nИстория сообщений текущего рабочего чата (различайте собственные комментарии Пикселя и реальные ответы специалиста):\n${formattedMessages}`
+        );
+      } else {
+        pixelParts.push(
+          `${header}\n\nВ этом рабочем чате со специалистом (${chatCtx.specialistTitle}) пока нет сообщений.`
+        );
+      }
     }
     if (pixelParts.length > 0) {
       sections.push(
@@ -992,8 +1059,8 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
   if (norm.startsWith('gemini-2.5')) {
     return { thinkingBudget: 0 };
   }
-  // Gemini 3.1 flash-lite supports thinkingBudget: 0 for fast responses
-  if (norm.includes('3.1-flash-lite')) {
+  // Gemini 3.1 flash-lite and flash-lite-latest support thinkingBudget: 0 for fast responses
+  if (norm.includes('3.1-flash-lite') || norm.includes('flash-lite')) {
     return { thinkingBudget: 0 };
   }
   // Gemini 3.8 and Gemini 3 full models support thinkingLevel
@@ -1003,8 +1070,17 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
   return undefined;
 }
 
+const GEMINI_MODEL_CASCADE: string[] = [
+  'gemini-3-flash-preview',
+  'gemini-flash-lite-latest',
+  'gemini-3.8-flash',
+  GEMINI_QUOTA_FALLBACK_MODEL,
+];
+
+let lastHealthyGeminiModel: string = 'gemini-3-flash-preview';
+
 /**
- * Provider 1: Google Gemini Free execution
+ * Provider 1: Google Gemini Free execution with fast multi-model cascade on 503/429/404
  */
 async function executeGeminiGeneration(params: {
   systemInstruction: string;
@@ -1017,63 +1093,78 @@ async function executeGeminiGeneration(params: {
   }
 
   const ai = getGenAIClient();
-  let usedModel = GEMINI_MODEL;
-  let response;
 
-  const primaryThinking = getThinkingConfigForGeminiModel(usedModel);
-  const primaryConfig: Record<string, unknown> = {
-    systemInstruction: params.systemInstruction,
-    abortSignal: params.signal,
-  };
-  if (primaryThinking) {
-    primaryConfig.thinkingConfig = primaryThinking;
-  }
+  // Order candidate models starting with the most recently healthy model
+  const candidateModels = Array.from(
+    new Set([
+      lastHealthyGeminiModel,
+      ...GEMINI_MODEL_CASCADE,
+      GEMINI_MODEL,
+    ])
+  ).filter(Boolean);
 
-  try {
-    response = await ai.models.generateContent({
-      model: usedModel,
-      contents: params.messages,
-      config: primaryConfig,
-    });
-  } catch (primaryErr) {
-    const errText =
-      primaryErr instanceof Error
-        ? primaryErr.message.toLowerCase()
-        : String(primaryErr || '').toLowerCase();
-    const isQuotaOrOverload =
-      errText.includes('429') ||
-      errText.includes('resource_exhausted') ||
-      errText.includes('quota') ||
-      errText.includes('503') ||
-      errText.includes('unavailable') ||
-      errText.includes('overloaded');
+  let lastErr: unknown = null;
 
-    if (!params.signal.aborted && isQuotaOrOverload) {
-      usedModel = GEMINI_QUOTA_FALLBACK_MODEL;
-      const fallbackThinking = getThinkingConfigForGeminiModel(usedModel);
-      const fallbackConfig: Record<string, unknown> = {
-        systemInstruction: params.systemInstruction,
-        abortSignal: params.signal,
-      };
-      if (fallbackThinking) {
-        fallbackConfig.thinkingConfig = fallbackThinking;
+  for (let idx = 0; idx < candidateModels.length; idx++) {
+    if (params.signal.aborted) {
+      throw lastErr || new Error('Request aborted');
+    }
+
+    const candidateModel = candidateModels[idx];
+    const thinkingCfg = getThinkingConfigForGeminiModel(candidateModel);
+    const config: Record<string, unknown> = {
+      systemInstruction: params.systemInstruction,
+      abortSignal: params.signal,
+    };
+    if (thinkingCfg) {
+      config.thinkingConfig = thinkingCfg;
+    }
+
+    try {
+      const response = await ai.models.generateContent({
+        model: candidateModel,
+        contents: params.messages,
+        config,
+      });
+
+      const fullText = (response.text || '').trim();
+      if (!fullText) {
+        throw new Error('EMPTY_MODEL_RESPONSE');
       }
 
-      response = await ai.models.generateContent({
-        model: usedModel,
-        contents: params.messages,
-        config: fallbackConfig,
-      });
-    } else {
-      throw primaryErr;
+      lastHealthyGeminiModel = candidateModel;
+      return { text: fullText, model: candidateModel };
+    } catch (err) {
+      lastErr = err;
+      const errText =
+        err instanceof Error
+          ? err.message.toLowerCase()
+          : String(err || '').toLowerCase();
+
+      const shouldTryNextModel =
+        errText.includes('429') ||
+        errText.includes('resource_exhausted') ||
+        errText.includes('quota') ||
+        errText.includes('500') ||
+        errText.includes('502') ||
+        errText.includes('503') ||
+        errText.includes('504') ||
+        errText.includes('unavailable') ||
+        errText.includes('high demand') ||
+        errText.includes('overloaded') ||
+        errText.includes('404') ||
+        errText.includes('not_found') ||
+        errText.includes('no longer available') ||
+        errText.includes('empty_model_response');
+
+      if (!params.signal.aborted && shouldTryNextModel && idx < candidateModels.length - 1) {
+        continue;
+      }
+      throw err;
     }
   }
 
-  const fullText = (response.text || '').trim();
-  if (!fullText) {
-    throw new Error('EMPTY_MODEL_RESPONSE');
-  }
-  return { text: fullText, model: usedModel };
+  throw lastErr || new Error('PROVIDER_UNAVAILABLE');
 }
 
 /**
@@ -2034,41 +2125,41 @@ async function startServer() {
         const providerId = candidateProviders[i];
         if (clientDisconnected) break;
 
-        // Skip unconfigured providers if there are other candidate providers to try
+        // Skip unconfigured providers without overwriting an existing error from an earlier configured provider
         if (providerId === 'openrouter' && !isOpenRouterApiKeyConfigured()) {
           if (!firstFailedProvider) {
             firstFailedProvider = 'openrouter';
           }
-          lastClassifiedError = {
-            status: 503,
-            code: 'OPENROUTER_NOT_CONFIGURED',
-            message:
-              'Провайдер OpenRouter Free ещё не настроен: не задан ключ API в настройках подключений или на сервере.',
-            shouldFailover: true,
-            healthStatus: 'not_configured',
-            applyCooldown: false,
-          };
-          if (i < candidateProviders.length - 1) {
-            continue;
+          if (!lastClassifiedError || requestedSelection === 'openrouter') {
+            lastClassifiedError = {
+              status: 503,
+              code: 'OPENROUTER_NOT_CONFIGURED',
+              message:
+                'Провайдер OpenRouter Free ещё не настроен: не задан ключ API в настройках подключений или на сервере.',
+              shouldFailover: true,
+              healthStatus: 'not_configured',
+              applyCooldown: false,
+            };
           }
+          continue;
         }
 
         if (providerId === 'gemini' && !isGeminiApiKeyConfigured()) {
           if (!firstFailedProvider) {
             firstFailedProvider = 'gemini';
           }
-          lastClassifiedError = {
-            status: 503,
-            code: 'GEMINI_NOT_CONFIGURED',
-            message:
-              'Провайдер Google Gemini не настроен: не задан GEMINI_API_KEY на сервере.',
-            shouldFailover: true,
-            healthStatus: 'not_configured',
-            applyCooldown: false,
-          };
-          if (i < candidateProviders.length - 1) {
-            continue;
+          if (!lastClassifiedError || requestedSelection === 'gemini') {
+            lastClassifiedError = {
+              status: 503,
+              code: 'GEMINI_NOT_CONFIGURED',
+              message:
+                'Провайдер Google Gemini не настроен: не задан GEMINI_API_KEY на сервере.',
+              shouldFailover: true,
+              healthStatus: 'not_configured',
+              applyCooldown: false,
+            };
           }
+          continue;
         }
 
         if (
@@ -2081,18 +2172,18 @@ async function startServer() {
           if (!firstFailedProvider) {
             firstFailedProvider = 'ollama';
           }
-          lastClassifiedError = {
-            status: 503,
-            code: 'OLLAMA_NOT_AVAILABLE',
-            message:
-              'Локальный сервер Ollama не запущен на порту 11434 (доступен в настольной версии или после запуска Ollama на ПК).',
-            shouldFailover: true,
-            healthStatus: 'not_configured',
-            applyCooldown: false,
-          };
-          if (i < candidateProviders.length - 1) {
-            continue;
+          if (!lastClassifiedError || requestedSelection === 'ollama') {
+            lastClassifiedError = {
+              status: 503,
+              code: 'OLLAMA_NOT_AVAILABLE',
+              message:
+                'Локальный сервер Ollama не запущен на порту 11434 (доступен в настольной версии или после запуска Ollama на ПК).',
+              shouldFailover: true,
+              healthStatus: 'not_configured',
+              applyCooldown: false,
+            };
           }
+          continue;
         }
 
         // Part 7: Per-provider document consent check before failing over with documents!

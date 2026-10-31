@@ -34,6 +34,7 @@ import {
   CompanionMemoryRecord,
   CompanionMessage,
   CompanionTaskRecord,
+  PixelDelegatedTaskState,
   SchoolId,
 } from '../types/assistant';
 import { SCHOOLS } from '../config/schoolsAndModes';
@@ -49,6 +50,12 @@ import {
 import { voiceManager } from '../providers/voice/voiceManager';
 import { wakeWordManager } from '../providers/voice/wakeWordManager';
 import { pixelVoiceCoordinator } from '../providers/voice/pixelVoiceCoordinator';
+import {
+  PIXEL_DELEGATION_STATUS_LABELS,
+  SPECIALIST_NAMES_DATIVE_RU,
+  SPECIALIST_NAMES_INSTRUMENTAL_RU,
+  pixelAgentCoordinator,
+} from '../providers/PixelAgentCoordinator';
 import { PixelCharacter } from './pixel';
 
 interface PixelLiveVoiceModalProps {
@@ -85,6 +92,8 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
   });
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [latestDelegatedTask, setLatestDelegatedTask] =
+    useState<PixelDelegatedTaskState | null>(null);
 
   const transcriptsEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -102,6 +111,17 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
       setSnapshot(next);
       if (next.errorDetail) {
         setErrorMessage(next.errorDetail);
+      }
+    });
+  }, []);
+
+  // Subscribe to delegated specialist tasks during Live Voice session
+  useEffect(() => {
+    return pixelAgentCoordinator.onTasksChange((tasks, updatedTask) => {
+      if (updatedTask) {
+        setLatestDelegatedTask(updatedTask);
+      } else if (tasks.length > 0) {
+        setLatestDelegatedTask(tasks[0]);
       }
     });
   }, []);
@@ -367,6 +387,64 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
           )}
           <div ref={transcriptsEndRef} />
         </div>
+
+        {/* Live Delegated Task Banner (Stage 6.2) */}
+        {latestDelegatedTask && (
+          <div className="px-4 py-3 bg-slate-900/95 border-t border-slate-800 text-xs flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-1 min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                    latestDelegatedTask.status === 'completed'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : latestDelegatedTask.status === 'error'
+                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                        : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                  }`}
+                >
+                  {latestDelegatedTask.status !== 'completed' &&
+                    latestDelegatedTask.status !== 'error' && (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    )}
+                  <span>
+                    {PIXEL_DELEGATION_STATUS_LABELS[
+                      latestDelegatedTask.status
+                    ] || latestDelegatedTask.statusLabelRu}
+                  </span>
+                </span>
+                <span className="font-semibold text-white truncate">
+                  Поручение{' '}
+                  {SPECIALIST_NAMES_DATIVE_RU[latestDelegatedTask.targetMode]} (
+                  {SCHOOLS[latestDelegatedTask.schoolId].name})
+                </span>
+                <span className="font-mono-tabular text-[10px] text-slate-400">
+                  ID: {latestDelegatedTask.taskId}
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-300 truncate">
+                {latestDelegatedTask.reviewSummary ||
+                  latestDelegatedTask.errorMessage ||
+                  `Задача: «${latestDelegatedTask.instruction}»`}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                pixelAgentCoordinator.openDelegatedChat(
+                  latestDelegatedTask.schoolId,
+                  latestDelegatedTask.targetMode,
+                  latestDelegatedTask.sessionId,
+                  latestDelegatedTask.lastSpecialistMessageId
+                );
+              }}
+              className="px-3 py-1.5 rounded-xl bg-[#00A8B5] hover:bg-[#00939F] text-slate-950 font-bold text-xs transition-colors shrink-0 cursor-pointer"
+            >
+              Открыть чат с{' '}
+              {SPECIALIST_NAMES_INSTRUMENTAL_RU[latestDelegatedTask.targetMode]}
+            </button>
+          </div>
+        )}
 
         {/* Error Alert Bar if any */}
         {errorMessage && (

@@ -17,23 +17,32 @@ export function cleanTextForSpeech(rawMarkdown: string): string {
 
   let text = rawMarkdown;
 
-  // 1. Remove markdown code blocks completely (do not pronounce raw code or JSON)
-  text = text.replace(/```[\s\S]*?```/g, '');
+  // 1. Convert fenced blocks into readable text (remove ```lang markers while keeping text content)
+  text = text.replace(/```[a-zA-Z0-9_-]*\r?\n?([\s\S]*?)```/g, '$1.');
   text = text.replace(/`([^`]+)`/g, '$1');
 
-  // 2. Remove markdown tables (lines containing pipes |)
-  text = text.replace(/^\|.*\|$/gm, '');
+  // 2. Convert markdown tables into natural spoken lines (remove separator rows like |---|---|)
+  text = text.replace(/^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$/gm, '');
+  text = text.replace(/^\|(.+)\|$/gm, (_, rowContent: string) => {
+    const cells = rowContent
+      .split('|')
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0 && !/^:?-{2,}:?$/.test(c));
+    if (cells.length === 0) return '';
+    const joined = cells.join(', ');
+    return /[.!?:;]$/.test(joined) ? joined : `${joined}.`;
+  });
   text = text.replace(/^[\s]*[-|:\s]+$/gm, '');
 
   // 3. Remove markdown images and replace links with anchor text
-  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '');
+  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1');
   text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
   text = text.replace(/https?:\/\/\S+/g, '');
 
-  // 4. Remove technical stop/error tags and UI status markers
+  // 4. Remove technical stop/error tags while keeping any real content
   text = text.replace(/\[Остановлено\]/gi, '');
   text = text.replace(/\[Генерация[^\]]*\]/gi, '');
-  text = text.replace(/\[Уточнить[^\]]*\]/gi, '');
+  text = text.replace(/\[([^\]]+)\]/g, '$1');
 
   // 5. Headings: remove leading # and ensure line ends with a natural pause (period)
   text = text.replace(/^#{1,6}\s+(.+)$/gm, (_, heading) => {

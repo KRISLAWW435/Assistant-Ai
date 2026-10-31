@@ -364,15 +364,18 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   };
 
   const handleCopyMessage = async (msg: ChatMessage) => {
+    const cleanText = msg.content
+      .replace(/\[(?:Генерация[^\]]*|Остановлено[^\]]*|Запрос прерван[^\]]*)\]/gi, '')
+      .trim();
     try {
-      await navigator.clipboard.writeText(msg.content);
+      await navigator.clipboard.writeText(cleanText);
       setCopiedMessageId(msg.id);
       setTimeout(() => {
         setCopiedMessageId((prev) => (prev === msg.id ? null : prev));
       }, 2000);
     } catch {
       const el = document.createElement('textarea');
-      el.value = msg.content;
+      el.value = cleanText;
       document.body.appendChild(el);
       el.select();
       document.execCommand('copy');
@@ -822,10 +825,31 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                         : ''
                     }`}
                   >
-                    <div className="flex items-center gap-2 text-[11px] text-slate-500 mb-1.5 px-1">
-                      <span className="font-semibold text-slate-700">
-                        {isUser ? 'Управляющая' : `ИИ · ${msgMode.shortTitle}`}
-                      </span>
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 mb-1.5 px-1">
+                      {isUser && msg.delegatedByPixel ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#00A8B5]/15 text-[#007A85] border border-[#00A8B5]/30 font-bold text-[10px]">
+                          <Sparkles className="w-3 h-3 text-[#00A8B5]" />
+                          <span>
+                            {msg.senderLabel || 'Пиксель · Поручение Анны'}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="font-semibold text-slate-700">
+                          {isUser
+                            ? 'Управляющая'
+                            : `ИИ · ${msgMode.shortTitle}`}
+                        </span>
+                      )}
+                      {!isUser && msg.delegatedByPixel && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-cyan-50 text-cyan-800 border border-cyan-200/80 text-[10px] font-semibold">
+                          <span>Ответ по поручению Пикселя</span>
+                        </span>
+                      )}
+                      {msg.delegationTaskId && (
+                        <span className="font-mono-tabular px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200/70 text-[10px]">
+                          ID: {msg.delegationTaskId}
+                        </span>
+                      )}
                       <span>·</span>
                       <span
                         className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
@@ -843,7 +867,9 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                     <div
                       className={`max-w-2xl w-full sm:w-auto rounded-2xl px-4 py-3.5 text-sm leading-relaxed overflow-hidden ${
                         isUser
-                          ? 'bg-slate-900 text-white shadow-2xs'
+                          ? msg.delegatedByPixel
+                            ? 'bg-slate-900 border-2 border-[#00A8B5]/50 text-white shadow-2xs'
+                            : 'bg-slate-900 text-white shadow-2xs'
                           : msg.isError
                             ? 'bg-red-50/90 border border-red-200 text-red-950 shadow-2xs'
                             : 'bg-white border border-slate-200/90 text-slate-800 shadow-2xs'
@@ -1003,6 +1029,28 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                           </div>
                         )}
 
+                      {isUser && !msg.isStreaming && msg.content.trim() && (
+                        <div className="mt-2 pt-1.5 border-t border-slate-700/70 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyMessage(msg)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            {copiedMessageId === msg.id ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span className="text-emerald-300">Скопировано</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" />
+                                <span>Копировать</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
+
                       {!isUser && !msg.isStreaming && (
                         <div className="mt-2.5 pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                           <span className="text-[10px] text-slate-400 font-mono-tabular">
@@ -1043,7 +1091,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                               ) : (
                                 <>
                                   <Copy className="w-3.5 h-3.5" />
-                                  <span>Копировать ответ</span>
+                                  <span>Копировать</span>
                                 </>
                               )}
                             </button>
@@ -1051,171 +1099,165 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                         </div>
                       )}
 
-                      {/* Voice Playback Toolbar for all Specialists (Marketer, Manager, Methodist, Analyst) */}
+                      {/* Unified Voice Playback Toolbar (uses the single unified Pixel voice) */}
                       {!isUser &&
                         !msg.isStreaming &&
                         !msg.isError &&
-                        msg.content.trim() && (
-                          <div className="mt-2.5 pt-2 border-t border-slate-100/90 flex flex-wrap items-center justify-between gap-2 bg-slate-50/80 -mx-4 -mb-3.5 px-4 py-2 rounded-b-2xl">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {playbackState.messageId === msg.id &&
-                              playbackState.status === 'loading' ? (
-                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-200">
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00A8B5]" />
-                                  <span>
-                                    {playbackState.provider === 'gemini'
-                                      ? `Синтез Gemini (${playbackState.voiceName || 'Aoede'})...`
-                                      : 'Запуск браузерной озвучки...'}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      voiceManager.stopMessage(msg.id)
-                                    }
-                                    title="Отмена"
-                                    className="ml-1 p-0.5 text-slate-500 hover:text-slate-900"
-                                  >
-                                    <Square className="w-2.5 h-2.5 fill-current" />
-                                  </button>
-                                </div>
-                              ) : playbackState.messageId === msg.id &&
-                                playbackState.status === 'playing' ? (
-                                <div className="inline-flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      voiceManager.pauseMessage(msg.id)
-                                    }
-                                    title="Приостановить воспроизведение"
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-[#00A8B5] text-white hover:bg-[#00929d] transition-colors shadow-2xs"
-                                  >
-                                    <Pause className="w-3.5 h-3.5 fill-current" />
-                                    <span>Пауза</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      voiceManager.stopMessage(msg.id)
-                                    }
-                                    title="Остановить воспроизведение"
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-200 hover:bg-slate-300 text-slate-800 transition-colors"
-                                  >
-                                    <Square className="w-3 h-3 fill-current" />
-                                    <span>Остановить</span>
-                                  </button>
-                                  <span className="flex items-center gap-0.5 px-1 text-[#00A8B5]">
-                                    <span className="w-1 h-3 bg-[#00A8B5] rounded-full animate-pulse" />
-                                    <span className="w-1 h-4 bg-[#00A8B5] rounded-full animate-bounce" />
-                                    <span className="w-1 h-2 bg-[#00A8B5] rounded-full animate-pulse" />
-                                  </span>
-                                </div>
-                              ) : playbackState.messageId === msg.id &&
-                                playbackState.status === 'paused' ? (
-                                <div className="inline-flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      voiceManager.resumeMessage(msg.id)
-                                    }
-                                    title="Продолжить воспроизведение"
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors shadow-2xs"
-                                  >
-                                    <Play className="w-3.5 h-3.5 fill-current" />
-                                    <span>Продолжить</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      voiceManager.stopMessage(msg.id)
-                                    }
-                                    title="Остановить"
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-200 hover:bg-slate-300 text-slate-800 transition-colors"
-                                  >
-                                    <Square className="w-3 h-3 fill-current" />
-                                    <span>Остановить</span>
-                                  </button>
-                                  <span className="text-[11px] text-amber-700 font-medium">
-                                    На паузе
-                                  </span>
-                                </div>
-                              ) : (
-                                <div className="inline-flex items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      voiceManager.playMessage(
-                                        msg.id,
-                                        msg.content
-                                      )
-                                    }
-                                    title="Прослушать ответ специалиста голосом"
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200/90 transition-colors shadow-2xs"
-                                  >
-                                    <Volume2 className="w-3.5 h-3.5 text-[#00A8B5]" />
-                                    <span>Прослушать</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      voiceManager.playMessage(
-                                        msg.id,
-                                        msg.content,
-                                        { forceRefresh: true }
-                                      )
-                                    }
-                                    title="Заново синтезировать речь без кэша с актуальными настройками голоса и тембра"
-                                    className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
-                                  >
-                                    <RotateCcw className="w-3 h-3" />
-                                  </button>
-                                </div>
+                        msg.content.trim() && (() => {
+                          const isThisMsgActive =
+                            playbackState.messageId === msg.id ||
+                            playbackState.messageId === `pixel-verbatim-${msg.id}`;
+                          return (
+                            <div className="mt-2.5 pt-2 border-t border-slate-100/90 flex flex-wrap items-center justify-between gap-2 bg-slate-50/80 -mx-4 -mb-3.5 px-4 py-2 rounded-b-2xl">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {isThisMsgActive &&
+                                playbackState.status === 'loading' ? (
+                                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-200">
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00A8B5]" />
+                                    <span>
+                                      {playbackState.provider === 'gemini'
+                                        ? `Озвучка Пикселем (${playbackState.voiceName || 'Aoede'})...`
+                                        : 'Запуск озвучки...'}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        voiceManager.stopSpeaking()
+                                      }
+                                      title="Отмена"
+                                      className="ml-1 p-0.5 text-slate-500 hover:text-slate-900"
+                                    >
+                                      <Square className="w-2.5 h-2.5 fill-current" />
+                                    </button>
+                                  </div>
+                                ) : isThisMsgActive &&
+                                  playbackState.status === 'playing' ? (
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        voiceManager.pauseMessage()
+                                      }
+                                      title="Приостановить воспроизведение"
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-[#00A8B5] text-white hover:bg-[#00929d] transition-colors shadow-2xs"
+                                    >
+                                      <Pause className="w-3.5 h-3.5 fill-current" />
+                                      <span>Пауза</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        voiceManager.stopSpeaking()
+                                      }
+                                      title="Остановить воспроизведение"
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-200 hover:bg-slate-300 text-slate-800 transition-colors"
+                                    >
+                                      <Square className="w-3 h-3 fill-current" />
+                                      <span>Остановить</span>
+                                    </button>
+                                    <span className="flex items-center gap-0.5 px-1 text-[#00A8B5]">
+                                      <span className="w-1 h-3 bg-[#00A8B5] rounded-full animate-pulse" />
+                                      <span className="w-1 h-4 bg-[#00A8B5] rounded-full animate-bounce" />
+                                      <span className="w-1 h-2 bg-[#00A8B5] rounded-full animate-pulse" />
+                                    </span>
+                                  </div>
+                                ) : isThisMsgActive &&
+                                  playbackState.status === 'paused' ? (
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        voiceManager.resumeMessage()
+                                      }
+                                      title="Продолжить воспроизведение"
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors shadow-2xs"
+                                    >
+                                      <Play className="w-3.5 h-3.5 fill-current" />
+                                      <span>Продолжить</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        voiceManager.stopSpeaking()
+                                      }
+                                      title="Остановить"
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-200 hover:bg-slate-300 text-slate-800 transition-colors"
+                                    >
+                                      <Square className="w-3 h-3 fill-current" />
+                                      <span>Остановить</span>
+                                    </button>
+                                    <span className="text-[11px] text-amber-700 font-medium">
+                                      На паузе
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void voiceManager.playVerbatimSpecialistMessage(
+                                          msg.id,
+                                          msg.content,
+                                          {
+                                            specialistTitle: msgMode.shortTitle,
+                                            schoolName: msgSchool.name,
+                                          }
+                                        )
+                                      }
+                                      title="Прочитать ответ единым голосом Пикселя"
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200/90 transition-colors shadow-2xs"
+                                    >
+                                      <Volume2 className="w-3.5 h-3.5 text-[#00A8B5]" />
+                                      <span>Озвучить Пикселем</span>
+                                    </button>
+                                  </div>
+                                )}
+
+                                {isThisMsgActive &&
+                                  playbackState.provider === 'browser' && (
+                                    <span className="inline-flex items-center gap-1 text-[10px] text-amber-900 bg-amber-50 border border-amber-300 px-2 py-0.5 rounded-md font-medium">
+                                      <Info className="w-3 h-3 text-amber-600 shrink-0" />
+                                      <span>
+                                        {playbackState.isFallback
+                                          ? (playbackState.fallbackReason || 'Системный голос браузера')
+                                          : 'Системный голос браузера'}
+                                      </span>
+                                    </span>
+                                  )}
+
+                                {isThisMsgActive &&
+                                  playbackState.provider === 'gemini' &&
+                                  playbackState.status !== 'error' && (
+                                    <span className="inline-flex items-center gap-1 text-[10px] text-cyan-900 bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded-md font-medium">
+                                      <Sparkles className="w-3 h-3 text-cyan-600 shrink-0" />
+                                      <span>
+                                        Единый голос: <b>{playbackState.voiceName || 'Aoede'}</b>
+                                      </span>
+                                    </span>
+                                  )}
+
+                                {isThisMsgActive &&
+                                  playbackState.status === 'error' && (
+                                    <span className="text-[10px] text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
+                                      {playbackState.errorMessage ||
+                                        'Ошибка озвучки'}
+                                    </span>
+                                  )}
+                              </div>
+
+                              {onOpenVoiceSettings && (
+                                <button
+                                  type="button"
+                                  onClick={onOpenVoiceSettings}
+                                  title="Настройки единого голоса Пикселя"
+                                  className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
+                                >
+                                  <Sliders className="w-3.5 h-3.5" />
+                                </button>
                               )}
-
-                              {playbackState.messageId === msg.id &&
-                                playbackState.provider === 'browser' && (
-                                  <span className="inline-flex items-center gap-1 text-[10px] text-amber-900 bg-amber-50 border border-amber-300 px-2 py-0.5 rounded-md font-medium">
-                                    <Info className="w-3 h-3 text-amber-600 shrink-0" />
-                                    <span>
-                                      {playbackState.isFallback
-                                        ? (playbackState.fallbackReason || 'Используется системный голос браузера')
-                                        : 'Используется системный голос браузера'}
-                                    </span>
-                                  </span>
-                                )}
-
-                              {playbackState.messageId === msg.id &&
-                                playbackState.provider === 'gemini' &&
-                                playbackState.status !== 'error' && (
-                                  <span className="inline-flex items-center gap-1 text-[10px] text-cyan-900 bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded-md font-medium">
-                                    <Sparkles className="w-3 h-3 text-cyan-600 shrink-0" />
-                                    <span>
-                                      Голос: <b>{playbackState.voiceName || 'Aoede'}</b> · {playbackState.timbreName || 'Светлый'}
-                                      {playbackState.fromCache ? ' (кэш)' : ''}
-                                    </span>
-                                  </span>
-                                )}
-
-                              {playbackState.messageId === msg.id &&
-                                playbackState.status === 'error' && (
-                                  <span className="text-[10px] text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
-                                    {playbackState.errorMessage ||
-                                      'Ошибка озвучки'}
-                                  </span>
-                                )}
                             </div>
-
-                            {onOpenVoiceSettings && (
-                              <button
-                                type="button"
-                                onClick={onOpenVoiceSettings}
-                                title="Настройки голоса и озвучивания (скорость, тембр, резерв)"
-                                className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
-                              >
-                                <Sliders className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        )}
+                          );
+                        })()}
                     </div>
                   </div>
                 );

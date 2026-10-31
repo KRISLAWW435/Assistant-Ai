@@ -20,9 +20,26 @@ import {
 import { browserSpeechInput } from './browserSpeechInputProvider';
 import { browserSpeechOutput } from './browserSpeechOutputProvider';
 import { geminiTtsOutput } from './geminiTtsProvider';
-import { cleanTextForSpeech } from '../../utils/speechTextCleaner';
+import { geminiLiveClient } from './geminiLiveClient';
+import {
+  cleanTextForSpeech,
+  splitTextIntoSpeechChunks,
+} from '../../utils/speechTextCleaner';
 
 const VOICE_SETTINGS_STORAGE_KEY = 'kiber_renderia_pixel_voice_settings_v3';
+
+export interface StoppedReadingSession {
+  playbackId: string;
+  originalMessageId: string;
+  rawText: string;
+  cleanedText: string;
+  chunks: string[];
+  resumeChunkIndex: number;
+  totalChunks: number;
+  specialistTitle?: string;
+  schoolName?: string;
+  stoppedAtMs: number;
+}
 
 export function resolveBrowserPitchForTimbre(
   timbreId: PixelVoiceSettings['selectedTimbreId'],
@@ -50,7 +67,15 @@ export class VoiceManager {
     provider: 'gemini',
   };
 
+  private currentAudioLevel = 0;
+  private activeReadingSession: StoppedReadingSession | null = null;
+  private lastStoppedReading: StoppedReadingSession | null = null;
+
   private playbackListeners = new Set<(state: MessagePlaybackState) => void>();
+  private audioLevelListeners = new Set<(level: number) => void>();
+  private stoppedReadingListeners = new Set<
+    (stopped: StoppedReadingSession | null) => void
+  >();
 
   constructor() {
     this.currentSettings = this.loadStoredSettings();
@@ -79,6 +104,80 @@ export class VoiceManager {
         }
       }
     });
+
+    // Subscribe to real-time audio volume levels across TTS and Live Voice for lip-sync
+    geminiTtsOutput.onAudioLevelChange((level) => {
+      if (this.currentPlaybackState.provider === 'gemini') {
+        this.emitAudioLevel(level);
+      }
+    });
+
+    browserSpeechOutput.onAudioLevelChange((level) => {
+      if (this.currentPlaybackState.provider === 'browser') {
+        this.emitAudioLevel(level);
+      }
+    });
+
+    geminiLiveClient.onOutputAudioLevelChange((level) => {
+      if (this.currentPlaybackState.status !== 'playing') {
+        this.emitAudioLevel(level);
+      }
+    });
+  }
+
+  public getAudioLevel(): number {
+    return this.currentAudioLevel;
+  }
+
+  public onAudioLevelChange(callback: (level: number) => void): () => void {
+    this.audioLevelListeners.add(callback);
+    callback(this.currentAudioLevel);
+    return () => this.audioLevelListeners.delete(callback);
+  }
+
+  private emitAudioLevel(level: number): void {
+    const clamped = Math.max(0, Math.min(1, level));
+    if (this.currentAudioLevel === clamped && clamped === 0) return;
+    this.currentAudioLevel = clamped;
+    for (const listener of this.audioLevelListeners) {
+      try {
+        listener(clamped);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  public getStoppedReadingSession(): StoppedReadingSession | null {
+    return this.lastStoppedReading ? { ...this.lastStoppedReading } : null;
+  }
+
+  public hasStoppedReading(): boolean {
+    return Boolean(
+      this.lastStoppedReading &&
+        this.lastStoppedReading.resumeChunkIndex <
+          this.lastStoppedReading.totalChunks
+    );
+  }
+
+  public onStoppedReadingChange(
+    callback: (stopped: StoppedReadingSession | null) => void
+  ): () => void {
+    this.stoppedReadingListeners.add(callback);
+    callback(this.getStoppedReadingSession());
+    return () => this.stoppedReadingListeners.delete(callback);
+  }
+
+  private setLastStoppedReading(session: StoppedReadingSession | null): void {
+    this.lastStoppedReading = session;
+    const snap = this.getStoppedReadingSession();
+    for (const listener of this.stoppedReadingListeners) {
+      try {
+        listener(snap);
+      } catch {
+        // ignore
+      }
+    }
   }
 
   public getInputProvider(): ISpeechInputProvider {
@@ -109,6 +208,9 @@ export class VoiceManager {
     this.currentSettings = {
       ...this.currentSettings,
       ...partial,
+      // Stage 6.5 (4): Strict on-demand reading only — never auto-speak new messages
+      autoSpeakNewReplies: false,
+      selectedTimbreId: 'bright',
     };
     this.saveStoredSettings(this.currentSettings);
     return { ...this.currentSettings };
@@ -131,6 +233,13 @@ export class VoiceManager {
       ...this.currentPlaybackState,
       ...partial,
     };
+    if (
+      this.currentPlaybackState.status === 'idle' ||
+      this.currentPlaybackState.status === 'paused' ||
+      this.currentPlaybackState.status === 'error'
+    ) {
+      this.emitAudioLevel(0);
+    }
     const snapshot = { ...this.currentPlaybackState };
     for (const listener of this.playbackListeners) {
       try {
@@ -142,13 +251,17 @@ export class VoiceManager {
   }
 
   /**
-   * Main player method for all specialist and Pixel messages.
-   * Cleans text, halts previous playback, and starts TTS with fallback support.
+   * Stage 6.4 (1): Reads a specialist's response verbatim using Pixel's own playback ID
+   * (`pixel-verbatim-${originalMessageId}`) so the specialist's own TTS button in UnifiedChatView
+   * is NEVER triggered, and supports continuing from the stopped chunk if interrupted.
    */
-  public async playMessage(
-    messageId: string,
+  public async playVerbatimSpecialistMessage(
+    originalMessageId: string,
     rawText: string,
-    callbacks?: {
+    options?: {
+      specialistTitle?: string;
+      schoolName?: string;
+      startChunkIndex?: number;
       onStart?: () => void;
       onEnd?: () => void;
       onError?: (err: Error) => void;
@@ -156,8 +269,63 @@ export class VoiceManager {
       forceRefresh?: boolean;
     }
   ): Promise<void> {
-    // If this message is already paused, simply resume it
+    const pixelPlaybackId = originalMessageId.startsWith('pixel-verbatim-')
+      ? originalMessageId
+      : `pixel-verbatim-${originalMessageId}`;
+
+    await this.playMessage(pixelPlaybackId, rawText, {
+      ...options,
+      originalMessageId: originalMessageId.replace(/^pixel-verbatim-/, ''),
+    });
+  }
+
+  /**
+   * Resumes a previously stopped/paused reading session from the exact chunk where it stopped.
+   */
+  public async resumeStoppedReading(callbacks?: {
+    onFallbackUsed?: (reason: string) => void;
+  }): Promise<boolean> {
+    if (this.currentPlaybackState.status === 'paused' && this.currentPlaybackState.messageId) {
+      this.resumeMessage(this.currentPlaybackState.messageId);
+      return true;
+    }
+    if (!this.lastStoppedReading) {
+      return false;
+    }
+    const session = this.lastStoppedReading;
+    this.setLastStoppedReading(null);
+    await this.playMessage(session.playbackId, session.rawText, {
+      originalMessageId: session.originalMessageId,
+      specialistTitle: session.specialistTitle,
+      schoolName: session.schoolName,
+      startChunkIndex: session.resumeChunkIndex,
+      onFallbackUsed: callbacks?.onFallbackUsed,
+    });
+    return true;
+  }
+
+  /**
+   * Main player method for all specialist and Pixel messages.
+   * Cleans text, halts previous playback, and starts TTS with fallback support and chunk-level resume tracking.
+   */
+  public async playMessage(
+    messageId: string,
+    rawText: string,
+    callbacks?: {
+      originalMessageId?: string;
+      specialistTitle?: string;
+      schoolName?: string;
+      startChunkIndex?: number;
+      onStart?: () => void;
+      onEnd?: () => void;
+      onError?: (err: Error) => void;
+      onFallbackUsed?: (reason: string) => void;
+      forceRefresh?: boolean;
+    }
+  ): Promise<void> {
+    // If this message is already paused and no explicit startChunkIndex override is given, simply resume it
     if (
+      callbacks?.startChunkIndex === undefined &&
       this.currentPlaybackState.messageId === messageId &&
       this.currentPlaybackState.status === 'paused'
     ) {
@@ -165,8 +333,8 @@ export class VoiceManager {
       return;
     }
 
-    // Stop any existing playback first
-    this.stopSpeaking();
+    // Stop any existing playback first without overwriting the new session we are about to start
+    this.stopSpeaking(false);
 
     const cleaned = cleanTextForSpeech(rawText);
     if (!cleaned) {
@@ -176,6 +344,26 @@ export class VoiceManager {
       });
       return;
     }
+
+    const chunks = splitTextIntoSpeechChunks(cleaned, 520);
+    const startChunkIdx = Math.max(
+      0,
+      Math.min(Math.max(0, chunks.length - 1), callbacks?.startChunkIndex ?? 0)
+    );
+
+    let activeChunkIdx = startChunkIdx;
+    this.activeReadingSession = {
+      playbackId: messageId,
+      originalMessageId: callbacks?.originalMessageId || messageId,
+      rawText,
+      cleanedText: cleaned,
+      chunks,
+      resumeChunkIndex: startChunkIdx,
+      totalChunks: chunks.length,
+      specialistTitle: callbacks?.specialistTitle,
+      schoolName: callbacks?.schoolName,
+      stoppedAtMs: Date.now(),
+    };
 
     // Always dynamically load fresh settings from storage before playback
     this.currentSettings = this.loadStoredSettings();
@@ -203,6 +391,14 @@ export class VoiceManager {
       fallbackReason: undefined,
     });
 
+    const handleChunkProgress = (chunkIndex: number, totalChunks: number) => {
+      activeChunkIdx = chunkIndex;
+      if (this.activeReadingSession && this.activeReadingSession.playbackId === messageId) {
+        this.activeReadingSession.resumeChunkIndex = chunkIndex;
+        this.activeReadingSession.totalChunks = totalChunks;
+      }
+    };
+
     if (providerToUse === 'gemini') {
       const voiceURI = `gemini://${voiceId}`;
 
@@ -215,6 +411,8 @@ export class VoiceManager {
           timbreId: s.selectedTimbreId,
           model: ttsModel,
           forceRefresh: Boolean(callbacks?.forceRefresh),
+          startChunkIndex: startChunkIdx,
+          onChunkProgress: handleChunkProgress,
           onMetaResolved: (meta) => {
             this.updatePlaybackState({
               messageId,
@@ -239,6 +437,10 @@ export class VoiceManager {
             callbacks?.onStart?.();
           },
           onEnd: () => {
+            if (this.activeReadingSession?.playbackId === messageId) {
+              this.activeReadingSession = null;
+              this.setLastStoppedReading(null);
+            }
             this.updatePlaybackState({
               messageId: null,
               status: 'idle',
@@ -286,6 +488,8 @@ export class VoiceManager {
             pitch: resolveBrowserPitchForTimbre(s.selectedTimbreId, s.pitch),
             volume: s.volume,
             lang: 'ru-RU',
+            startChunkIndex: activeChunkIdx,
+            onChunkProgress: handleChunkProgress,
             onStart: () => {
               this.updatePlaybackState({
                 messageId,
@@ -297,6 +501,10 @@ export class VoiceManager {
               callbacks?.onStart?.();
             },
             onEnd: () => {
+              if (this.activeReadingSession?.playbackId === messageId) {
+                this.activeReadingSession = null;
+                this.setLastStoppedReading(null);
+              }
               this.updatePlaybackState({
                 messageId: null,
                 status: 'idle',
@@ -340,6 +548,8 @@ export class VoiceManager {
         pitch: resolveBrowserPitchForTimbre(s.selectedTimbreId, s.pitch),
         volume: s.volume,
         lang: 'ru-RU',
+        startChunkIndex: startChunkIdx,
+        onChunkProgress: handleChunkProgress,
         onStart: () => {
           this.updatePlaybackState({
             messageId,
@@ -349,6 +559,10 @@ export class VoiceManager {
           callbacks?.onStart?.();
         },
         onEnd: () => {
+          if (this.activeReadingSession?.playbackId === messageId) {
+            this.activeReadingSession = null;
+            this.setLastStoppedReading(null);
+          }
           this.updatePlaybackState({
             messageId: null,
             status: 'idle',
@@ -387,6 +601,13 @@ export class VoiceManager {
       browserSpeechOutput.pause();
     }
 
+    if (this.activeReadingSession) {
+      this.setLastStoppedReading({
+        ...this.activeReadingSession,
+        stoppedAtMs: Date.now(),
+      });
+    }
+
     this.updatePlaybackState({ status: 'paused' });
   }
 
@@ -406,7 +627,7 @@ export class VoiceManager {
     if (messageId && this.currentPlaybackState.messageId !== messageId) {
       return;
     }
-    this.stopSpeaking();
+    this.stopSpeaking(true);
   }
 
   /**
@@ -427,9 +648,23 @@ export class VoiceManager {
     await this.playMessage(id, text, callbacks);
   }
 
-  public stopSpeaking(): void {
+  public stopSpeaking(recordForResume = true): void {
+    if (
+      recordForResume &&
+      this.activeReadingSession &&
+      (this.currentPlaybackState.status === 'playing' ||
+        this.currentPlaybackState.status === 'loading' ||
+        this.currentPlaybackState.status === 'paused')
+    ) {
+      this.setLastStoppedReading({
+        ...this.activeReadingSession,
+        stoppedAtMs: Date.now(),
+      });
+    }
+    this.activeReadingSession = null;
     geminiTtsOutput.stop();
     browserSpeechOutput.stop();
+    this.emitAudioLevel(0);
     this.updatePlaybackState({
       messageId: null,
       status: 'idle',
@@ -438,7 +673,7 @@ export class VoiceManager {
   }
 
   public stopAll(): void {
-    this.stopSpeaking();
+    this.stopSpeaking(true);
   }
 
   public isSpeaking(): boolean {
@@ -469,23 +704,15 @@ export class VoiceManager {
       if (!raw) return DEFAULT_PIXEL_VOICE_SETTINGS;
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
-        const timbre =
-          parsed.selectedTimbreId === 'natural' ||
-          parsed.selectedTimbreId === 'high' ||
-          parsed.selectedTimbreId === 'bright'
-            ? parsed.selectedTimbreId
-            : 'bright';
-
         const validVoices = ['Aoede', 'Achernar', 'Sulafat', 'Vindemiatrix'];
         const voice = validVoices.includes(parsed.selectedGeminiVoice)
           ? parsed.selectedGeminiVoice
           : 'Aoede';
 
         return {
-          ttsProviderId:
-            parsed.ttsProviderId === 'browser' ? 'browser' : 'gemini',
+          ttsProviderId: 'gemini',
           selectedGeminiVoice: voice,
-          selectedTimbreId: timbre,
+          selectedTimbreId: 'bright',
           selectedLiveVoice:
             typeof parsed.selectedLiveVoice === 'string'
               ? parsed.selectedLiveVoice
@@ -494,7 +721,7 @@ export class VoiceManager {
             parsed.allowBrowserFallback !== undefined
               ? Boolean(parsed.allowBrowserFallback)
               : true,
-          autoSpeakNewReplies: Boolean(parsed.autoSpeakNewReplies),
+          autoSpeakNewReplies: false,
           voiceURI:
             typeof parsed.voiceURI === 'string' ? parsed.voiceURI : undefined,
           voiceName:

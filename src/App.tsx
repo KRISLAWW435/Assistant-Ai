@@ -87,9 +87,11 @@ import { PixelLiveVoiceModal } from './components/PixelLiveVoiceModal';
 import { PixelVoiceSettingsModal } from './components/PixelVoiceSettingsModal';
 import { PixelVoiceWidget } from './components/PixelVoiceWidget';
 import { pixelVoiceCoordinator } from './providers/voice/pixelVoiceCoordinator';
+import { geminiLiveClient } from './providers/voice/geminiLiveClient';
 import { wakeWordManager } from './providers/voice/wakeWordManager';
 import { voiceManager } from './providers/voice/voiceManager';
 import { WakeWordState } from './types/voice';
+import { pixelAgentCoordinator } from './providers/PixelAgentCoordinator';
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'kiber_renderia_sidebar_collapsed';
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'kiber_renderia_right_panel_collapsed';
@@ -356,12 +358,38 @@ export default function App() {
   const [wakeWordDetail, setWakeWordDetail] = useState<string>('');
   const [pixelForceOpenChatTrigger, setPixelForceOpenChatTrigger] = useState(0);
 
-  // References to keep latest context available to pixelVoiceCoordinator
+  // References to keep latest context available to pixelVoiceCoordinator & pixelAgentCoordinator
   const activeSchoolRef = useRef<SchoolId>(activeSchool);
   useEffect(() => {
     activeSchoolRef.current = activeSchool;
     pixelVoiceCoordinator.updateActiveSchool(activeSchool);
   }, [activeSchool]);
+
+  const activeSectionRef = useRef<NavSection>(activeSection);
+  useEffect(() => {
+    activeSectionRef.current = activeSection;
+  }, [activeSection]);
+
+  const activeAgentModeRef = useRef<AgentMode>(activeAgentMode);
+  useEffect(() => {
+    activeAgentModeRef.current = activeAgentMode;
+  }, [activeAgentMode]);
+
+  const activeSessionIdRef = useRef<string | null>(activeSessionId);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  // Stage 6.3 (6): Notify Pixel when Anna switches to another specialist chat or school
+  useEffect(() => {
+    if (isAgentModeSection(activeSection)) {
+      pixelAgentCoordinator.notifyContextSwitch(
+        activeSchool,
+        activeSection,
+        activeSessionId
+      );
+    }
+  }, [activeSchool, activeSection, activeSessionId]);
 
   const companionMemoryRef = useRef<CompanionMemoryRecord[]>(companionMemory);
   useEffect(() => {
@@ -378,16 +406,150 @@ export default function App() {
     companionMessagesRef.current = companionMessages;
   }, [companionMessages]);
 
+  const knowledgeBaseRef = useRef<KnowledgeBaseBySchool>(knowledgeBase);
+  useEffect(() => {
+    knowledgeBaseRef.current = knowledgeBase;
+  }, [knowledgeBase]);
+
+  const uploadedDocumentsRef =
+    useRef<UploadedDocumentRecord[]>(uploadedDocuments);
+  useEffect(() => {
+    uploadedDocumentsRef.current = uploadedDocuments;
+  }, [uploadedDocuments]);
+
+  const providerSelectionRef =
+    useRef<AIProviderSelectionMode>(providerSelection);
+  useEffect(() => {
+    providerSelectionRef.current = providerSelection;
+  }, [providerSelection]);
+
+  const filterOutReadAloudTurns = (
+    incoming: CompanionMessage[]
+  ): CompanionMessage[] => {
+    const hasReadAloudUserTurn = incoming.some(
+      (m) =>
+        m.role === 'user' &&
+        Boolean(
+          pixelAgentCoordinator.parseReadAloudIntent(
+            m.content,
+            activeSchoolRef.current
+          )
+        )
+    );
+    if (hasReadAloudUserTurn) {
+      // Stage 6.3 (2): Do not create a copy of the specialist's message in Pixel's chat on read-aloud command
+      return [];
+    }
+    return incoming;
+  };
+
+  useEffect(() => {
+    pixelAgentCoordinator.init({
+      getActiveSchool: () => activeSchoolRef.current,
+      getActiveSection: () => activeSectionRef.current,
+      getActiveAgentMode: () => activeAgentModeRef.current,
+      getActiveSessionId: () => activeSessionIdRef.current,
+      getSessions: () => sessionsRef.current,
+      onUpdateSessions: (nextSessions, selectSessionId) => {
+        sessionsRef.current = nextSessions;
+        setSessions(nextSessions);
+        if (selectSessionId !== undefined) {
+          activeSessionIdRef.current = selectSessionId;
+          setActiveSessionId(selectSessionId);
+        }
+      },
+      onDeleteSession: async (sessionId) => {
+        try {
+          await storageProvider.deleteSessionCascade(sessionId);
+          const remaining = sortSessionsPinnedAndUpdatedDesc(
+            sessionsRef.current.filter((s) => s.id !== sessionId)
+          );
+          sessionsRef.current = remaining;
+          setSessions(remaining);
+
+          if (sessionId === activeSessionIdRef.current) {
+            const sameContextMatch = remaining.find(
+              (s) =>
+                s.schoolId === activeSchoolRef.current &&
+                s.mode === activeAgentModeRef.current
+            );
+            const nextId = sameContextMatch ? sameContextMatch.id : null;
+            activeSessionIdRef.current = nextId;
+            setActiveSessionId(nextId);
+          }
+          setStorageError(null);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      getKnowledgeBase: () => knowledgeBaseRef.current,
+      getUploadedDocuments: () => uploadedDocumentsRef.current,
+      getProviderSelection: () => providerSelectionRef.current,
+      getCompanionMessages: () => companionMessagesRef.current,
+      onSaveCompanionMessages: async (msgs) => {
+        await handleSaveCompanionMessages(msgs);
+      },
+      onSpecialistGenerationStateChange: ({
+        isGenerating,
+        sessionId,
+        stage,
+      }) => {
+        setIsGeneratingChat(isGenerating);
+        setGeneratingSessionId(sessionId);
+        setChatGenerationStage(stage);
+      },
+      onOpenDelegatedChat: (schoolId, mode, sessionId, highlightMessageId) => {
+        activeSchoolRef.current = schoolId;
+        activeAgentModeRef.current = mode;
+        activeSectionRef.current = mode;
+        activeSessionIdRef.current = sessionId;
+        setActiveSchool(schoolId);
+        writeActiveSchoolToStorage(schoolId);
+        setActiveAgentMode(mode);
+        setActiveSection(mode);
+        setActiveSessionId(sessionId);
+        setRightPanelMobileOpen(false);
+        if (highlightMessageId) {
+          setHighlightedMessageId(highlightMessageId);
+          setTimeout(() => {
+            setHighlightedMessageId((prev) =>
+              prev === highlightMessageId ? null : prev
+            );
+          }, 3500);
+        }
+      },
+      onHighlightSpecialistMessage: (_sessionId, messageId) => {
+        setHighlightedMessageId(messageId);
+        setTimeout(() => {
+          setHighlightedMessageId((prev) =>
+            prev === messageId ? null : prev
+          );
+        }, 4000);
+      },
+      onNotifyLiveVoice: (notificationText) => {
+        if (pixelVoiceCoordinator.getSnapshot().mode === 'LIVE') {
+          geminiLiveClient.sendTextPrompt(notificationText);
+        }
+      },
+    });
+  }, []);
+
   useEffect(() => {
     pixelVoiceCoordinator.init({
       getActiveSchool: () => activeSchoolRef.current,
       getCompanionMemory: () => companionMemoryRef.current,
       getCompanionTasks: () => companionTasksRef.current,
+      getActiveChatContext: () => pixelAgentCoordinator.getActiveChatContext(),
       onAppendCompanionMessages: async (newMessages) => {
-        await handleSaveCompanionMessages([
-          ...companionMessagesRef.current,
-          ...newMessages,
-        ]);
+        const filtered = filterOutReadAloudTurns(newMessages);
+        if (filtered.length > 0) {
+          await handleSaveCompanionMessages([
+            ...companionMessagesRef.current,
+            ...filtered,
+          ]);
+        }
+        pixelAgentCoordinator.handleSpokenUserMessagesIfAny(newMessages);
       },
     });
 
@@ -418,10 +580,14 @@ export default function App() {
   const handleAppendLiveCompanionMessages = async (
     newMessages: CompanionMessage[]
   ) => {
-    await handleSaveCompanionMessages([
-      ...companionMessagesRef.current,
-      ...newMessages,
-    ]);
+    const filtered = filterOutReadAloudTurns(newMessages);
+    if (filtered.length > 0) {
+      await handleSaveCompanionMessages([
+        ...companionMessagesRef.current,
+        ...filtered,
+      ]);
+    }
+    pixelAgentCoordinator.handleSpokenUserMessagesIfAny(newMessages);
   };
   const lastRetryPayloadRef = useRef<
     Record<
@@ -552,10 +718,13 @@ export default function App() {
           loaded.sessions
         );
         setKnowledgeBase(loaded.knowledgeBase);
+        knowledgeBaseRef.current = loaded.knowledgeBase;
         setUploadedDocuments(loaded.documents);
+        uploadedDocumentsRef.current = loaded.documents;
         setSessions(orderedSessions);
         sessionsRef.current = orderedSessions;
         setCompanionMessages(loaded.companionMessages);
+        companionMessagesRef.current = loaded.companionMessages;
         setCompanionMemory(loaded.companionMemory);
         setCompanionTasks(loaded.companionTasks);
         setCompanionPreferences(loaded.companionPreferences);
@@ -1835,6 +2004,7 @@ export default function App() {
   // Pixel Companion IndexedDB v3 persistence handlers
   const handleSaveCompanionMessages = async (messages: CompanionMessage[]) => {
     const ordered = [...messages].sort((a, b) => a.createdAtMs - b.createdAtMs);
+    companionMessagesRef.current = ordered;
     setCompanionMessages(ordered);
     if (isStorageLoading) return;
     try {

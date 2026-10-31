@@ -21,9 +21,11 @@ export class BrowserSpeechOutputProvider implements ISpeechOutputProvider {
   private isCurrentlySpeaking = false;
   private isCurrentlyPaused = false;
   private currentUtteranceQueue: SpeechSynthesisUtterance[] = [];
+  private levelInterval: ReturnType<typeof setInterval> | null = null;
   private stateListeners = new Set<
     (speaking: boolean, messageId: string | null) => void
   >();
+  private audioLevelListeners = new Set<(level: number) => void>();
 
   constructor() {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
@@ -89,8 +91,14 @@ export class BrowserSpeechOutputProvider implements ISpeechOutputProvider {
     const cleaned = cleanTextForSpeech(rawText);
     if (!cleaned) return;
 
-    const chunks = splitTextIntoSpeechChunks(cleaned, 180);
+    // Use 520-char sentence chunks so chunk indices align cleanly with Gemini TTS when resuming
+    const chunks = splitTextIntoSpeechChunks(cleaned, 520);
     if (chunks.length === 0) return;
+
+    const startIdx = Math.max(
+      0,
+      Math.min(chunks.length - 1, options?.startChunkIndex ?? 0)
+    );
 
     const allVoices = window.speechSynthesis.getVoices();
     const ruVoices = allVoices.filter((v) => {
@@ -125,17 +133,20 @@ export class BrowserSpeechOutputProvider implements ISpeechOutputProvider {
     this.notifyState();
 
     options?.onStart?.();
+    this.startAudioLevelLoop(options?.onAudioLevel);
 
     return new Promise<void>((resolve, reject) => {
-      let chunkIdx = 0;
+      let outerIdx = startIdx;
 
-      const playNextChunk = () => {
+      const playNextOuterChunk = () => {
         if (!this.isCurrentlySpeaking) {
+          this.stopAudioLevelLoop(options?.onAudioLevel);
           resolve();
           return;
         }
 
-        if (chunkIdx >= chunks.length) {
+        if (outerIdx >= chunks.length) {
+          this.stopAudioLevelLoop(options?.onAudioLevel);
           this.isCurrentlySpeaking = false;
           this.currentMessageId = null;
           this.notifyState();
@@ -144,52 +155,123 @@ export class BrowserSpeechOutputProvider implements ISpeechOutputProvider {
           return;
         }
 
-        const chunkText = chunks[chunkIdx];
-        chunkIdx++;
+        const currentOuterIdx = outerIdx;
+        outerIdx++;
+        options?.onChunkProgress?.(currentOuterIdx, chunks.length);
 
-        const utterance = new SpeechSynthesisUtterance(chunkText);
-        if (selectedVoice) {
-          utterance.voice = selectedVoice;
-        }
-        utterance.lang = selectedVoice?.lang || options?.lang || 'ru-RU';
-        utterance.rate = options?.rate ?? 1.0;
-        utterance.pitch = options?.pitch ?? 1.05;
-        utterance.volume = options?.volume ?? 1.0;
+        // Split outer chunk into ~180 char sub-utterances so Chromium SpeechSynthesis never stalls
+        const subChunks = splitTextIntoSpeechChunks(chunks[currentOuterIdx], 180);
+        let subIdx = 0;
 
-        utterance.onend = () => {
-          playNextChunk();
-        };
-
-        utterance.onerror = (e) => {
-          // If canceled via stop(), do not treat as fatal error
-          if (e.error === 'canceled' || e.error === 'interrupted') {
+        const playNextSubChunk = () => {
+          if (!this.isCurrentlySpeaking) {
+            this.stopAudioLevelLoop(options?.onAudioLevel);
             resolve();
             return;
           }
-          this.isCurrentlySpeaking = false;
-          this.currentMessageId = null;
-          this.notifyState();
-          const err = new Error(`Ошибка синтеза речи: ${e.error}`);
-          options?.onError?.(err);
-          reject(err);
+
+          if (subIdx >= subChunks.length) {
+            playNextOuterChunk();
+            return;
+          }
+
+          const subText = subChunks[subIdx];
+          subIdx++;
+
+          const utterance = new SpeechSynthesisUtterance(subText);
+          if (selectedVoice) {
+            utterance.voice = selectedVoice;
+          }
+          utterance.lang = selectedVoice?.lang || options?.lang || 'ru-RU';
+          utterance.rate = options?.rate ?? 1.0;
+          utterance.pitch = options?.pitch ?? 1.05;
+          utterance.volume = options?.volume ?? 1.0;
+
+          utterance.onend = () => {
+            playNextSubChunk();
+          };
+
+          utterance.onerror = (e) => {
+            // If canceled via stop(), do not treat as fatal error
+            if (e.error === 'canceled' || e.error === 'interrupted') {
+              this.stopAudioLevelLoop(options?.onAudioLevel);
+              resolve();
+              return;
+            }
+            this.stopAudioLevelLoop(options?.onAudioLevel);
+            this.isCurrentlySpeaking = false;
+            this.currentMessageId = null;
+            this.notifyState();
+            const err = new Error(`Ошибка синтеза речи: ${e.error}`);
+            options?.onError?.(err);
+            reject(err);
+          };
+
+          try {
+            window.speechSynthesis.speak(utterance);
+          } catch (err) {
+            this.stopAudioLevelLoop(options?.onAudioLevel);
+            this.isCurrentlySpeaking = false;
+            this.currentMessageId = null;
+            this.notifyState();
+            reject(err);
+          }
         };
 
-        try {
-          window.speechSynthesis.speak(utterance);
-        } catch (err) {
-          this.isCurrentlySpeaking = false;
-          this.currentMessageId = null;
-          this.notifyState();
-          reject(err);
-        }
+        playNextSubChunk();
       };
 
-      playNextChunk();
+      playNextOuterChunk();
     });
+  }
+
+  private startAudioLevelLoop(onLevel?: (level: number) => void): void {
+    this.stopAudioLevelLoop(onLevel);
+    let tick = 0;
+    this.levelInterval = setInterval(() => {
+      if (!this.isCurrentlySpeaking || this.isCurrentlyPaused) {
+        this.emitAudioLevel(0, onLevel);
+        return;
+      }
+      tick++;
+      // Natural syllable envelope with brief consonant dips
+      const wave =
+        0.42 +
+        0.32 * Math.sin(tick * 0.65) +
+        0.18 * Math.cos(tick * 1.15);
+      const level = tick % 9 === 0 ? 0.08 : Math.max(0.12, Math.min(0.92, wave));
+      this.emitAudioLevel(level, onLevel);
+    }, 45);
+  }
+
+  private stopAudioLevelLoop(onLevel?: (level: number) => void): void {
+    if (this.levelInterval) {
+      clearInterval(this.levelInterval);
+      this.levelInterval = null;
+    }
+    this.emitAudioLevel(0, onLevel);
+  }
+
+  private emitAudioLevel(level: number, onLevel?: (level: number) => void): void {
+    const clamped = Math.max(0, Math.min(1, level));
+    onLevel?.(clamped);
+    for (const listener of this.audioLevelListeners) {
+      try {
+        listener(clamped);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  public onAudioLevelChange(callback: (level: number) => void): () => void {
+    this.audioLevelListeners.add(callback);
+    return () => this.audioLevelListeners.delete(callback);
   }
 
   public stop(): void {
     if (!this.isSupported()) return;
+    this.stopAudioLevelLoop();
     this.isCurrentlySpeaking = false;
     this.isCurrentlyPaused = false;
     this.currentMessageId = null;
@@ -206,6 +288,7 @@ export class BrowserSpeechOutputProvider implements ISpeechOutputProvider {
     try {
       window.speechSynthesis.pause();
       this.isCurrentlyPaused = true;
+      this.emitAudioLevel(0);
       this.notifyState();
     } catch {
       // ignore
@@ -243,6 +326,9 @@ export class BrowserSpeechOutputProvider implements ISpeechOutputProvider {
   }
 
   private notifyState(): void {
+    if (!this.isCurrentlySpeaking || this.isCurrentlyPaused) {
+      this.emitAudioLevel(0);
+    }
     for (const listener of this.stateListeners) {
       try {
         listener(this.isCurrentlySpeaking, this.currentMessageId);

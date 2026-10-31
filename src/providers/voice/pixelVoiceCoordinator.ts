@@ -21,6 +21,7 @@ import {
   CompanionMemoryRecord,
   CompanionMessage,
   CompanionTaskRecord,
+  PixelActiveChatContext,
   SchoolId,
 } from '../../types/assistant';
 import {
@@ -49,6 +50,7 @@ export interface CoordinatorContextResolvers {
   getActiveSchool: () => SchoolId;
   getCompanionMemory: () => CompanionMemoryRecord[];
   getCompanionTasks: () => CompanionTaskRecord[];
+  getActiveChatContext?: () => PixelActiveChatContext | undefined;
   onAppendCompanionMessages: (messages: CompanionMessage[]) => Promise<void>;
 }
 
@@ -382,6 +384,7 @@ export class PixelVoiceCoordinator {
       schoolName: school === 'kiberone' ? 'KIBERONE' : 'RENDERIA',
       relevantMemories,
       activeTasks,
+      activeChatContext: this.contextResolvers.getActiveChatContext?.(),
     };
   }
 
