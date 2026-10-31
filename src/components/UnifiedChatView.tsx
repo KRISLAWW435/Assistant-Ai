@@ -9,6 +9,7 @@ import {
   Eye,
   FileText,
   FolderOpen,
+  Info,
   Loader2,
   MessageSquarePlus,
   Paperclip,
@@ -1061,7 +1062,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                               playbackState.status === 'loading' ? (
                                 <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-200">
                                   <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00A8B5]" />
-                                  <span>Загрузка аудио...</span>
+                                  <span>
+                                    {playbackState.provider === 'gemini'
+                                      ? `Синтез Gemini (${playbackState.voiceName || 'Aoede'})...`
+                                      : 'Запуск браузерной озвучки...'}
+                                  </span>
                                   <button
                                     type="button"
                                     onClick={() =>
@@ -1134,26 +1139,59 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                   </span>
                                 </div>
                               ) : (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    voiceManager.playMessage(
-                                      msg.id,
-                                      msg.content
-                                    )
-                                  }
-                                  title="Прослушать ответ специалиста голосом"
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200/90 transition-colors shadow-2xs"
-                                >
-                                  <Volume2 className="w-3.5 h-3.5 text-[#00A8B5]" />
-                                  <span>Прослушать</span>
-                                </button>
+                                <div className="inline-flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      voiceManager.playMessage(
+                                        msg.id,
+                                        msg.content
+                                      )
+                                    }
+                                    title="Прослушать ответ специалиста голосом"
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200/90 transition-colors shadow-2xs"
+                                  >
+                                    <Volume2 className="w-3.5 h-3.5 text-[#00A8B5]" />
+                                    <span>Прослушать</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      voiceManager.playMessage(
+                                        msg.id,
+                                        msg.content,
+                                        { forceRefresh: true }
+                                      )
+                                    }
+                                    title="Заново синтезировать речь без кэша с актуальными настройками голоса и тембра"
+                                    className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                  </button>
+                                </div>
                               )}
 
                               {playbackState.messageId === msg.id &&
-                                playbackState.fallbackReason && (
-                                  <span className="text-[10px] text-amber-900 bg-amber-100/90 border border-amber-300/80 px-2 py-0.5 rounded-md font-medium">
-                                    {playbackState.fallbackReason}
+                                playbackState.provider === 'browser' && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] text-amber-900 bg-amber-50 border border-amber-300 px-2 py-0.5 rounded-md font-medium">
+                                    <Info className="w-3 h-3 text-amber-600 shrink-0" />
+                                    <span>
+                                      {playbackState.isFallback
+                                        ? (playbackState.fallbackReason || 'Используется системный голос браузера')
+                                        : 'Используется системный голос браузера'}
+                                    </span>
+                                  </span>
+                                )}
+
+                              {playbackState.messageId === msg.id &&
+                                playbackState.provider === 'gemini' &&
+                                playbackState.status !== 'error' && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] text-cyan-900 bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded-md font-medium">
+                                    <Sparkles className="w-3 h-3 text-cyan-600 shrink-0" />
+                                    <span>
+                                      Голос: <b>{playbackState.voiceName || 'Aoede'}</b> · {playbackState.timbreName || 'Светлый'}
+                                      {playbackState.fromCache ? ' (кэш)' : ''}
+                                    </span>
                                   </span>
                                 )}
 

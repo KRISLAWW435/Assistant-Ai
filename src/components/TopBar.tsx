@@ -191,139 +191,142 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Zone 3: Quick Voice Actions & Right Panel Toggle */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Rich Standby Wake Word Indicator Pill with compact popover */}
-          <div className="relative" ref={popoverRef}>
-            <button
-              type="button"
-              onClick={() => setShowMicInfo((prev) => !prev)}
-              aria-expanded={showMicInfo}
-              title={`${statusMeta.label}. Нажмите для управления.`}
-              className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${currentWakeMeta.badgeClass}`}
-            >
-              <span className={`w-2 h-2 rounded-full ${currentWakeMeta.dotClass}`} />
-              <span>{statusMeta.label}</span>
-            </button>
-
-            {/* Compact Popover */}
-            {showMicInfo && (
-              <div
-                className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 p-3.5 z-50 text-slate-800 animate-in fade-in zoom-in-95 duration-100"
+          {/* Unified Voice Capsule Block */}
+          <div className="flex items-center p-0.5 sm:p-1 bg-slate-100/90 rounded-2xl border border-slate-200/80 gap-1 shrink-0">
+            {/* Rich Standby Wake Word Indicator Pill with compact popover */}
+            <div className="relative" ref={popoverRef}>
+              <button
+                type="button"
+                onClick={() => setShowMicInfo((prev) => !prev)}
+                aria-expanded={showMicInfo}
+                title={`${statusMeta.label}. Нажмите для управления.`}
+                className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${currentWakeMeta.badgeClass}`}
               >
-                {/* 1. Status row */}
-                <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-lg bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
-                      <Mic className="w-3.5 h-3.5" />
+                <span className={`w-2 h-2 rounded-full ${currentWakeMeta.dotClass}`} />
+                <span>{statusMeta.label}</span>
+              </button>
+
+              {/* Compact Popover */}
+              {showMicInfo && (
+                <div
+                  className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 p-3.5 z-50 text-slate-800 animate-in fade-in zoom-in-95 duration-100"
+                >
+                  {/* 1. Status row */}
+                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+                        <Mic className="w-3.5 h-3.5" />
+                      </div>
+                      <span className="text-xs font-bold text-slate-800">
+                        Голосовой вызов
+                      </span>
                     </div>
-                    <span className="text-xs font-bold text-slate-800">
-                      Голосовой вызов
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusMeta.badgeClass}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${statusMeta.dotClass}`} />
+                      <span>{statusMeta.label}</span>
                     </span>
                   </div>
-                  <span
-                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusMeta.badgeClass}`}
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full ${statusMeta.dotClass}`} />
-                    <span>{statusMeta.label}</span>
-                  </span>
-                </div>
 
-                {/* 2. Switch row */}
-                <div className="flex items-center justify-between py-2.5 border-b border-slate-100">
-                  <div className="min-w-0 pr-2">
-                    <div className="text-xs font-semibold text-slate-700">
-                      Ожидание фразы «Пиксель»
+                  {/* 2. Switch row */}
+                  <div className="flex items-center justify-between py-2.5 border-b border-slate-100">
+                    <div className="min-w-0 pr-2">
+                      <div className="text-xs font-semibold text-slate-700">
+                        Ожидание фразы «Пиксель»
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        {isListeningActive
+                          ? 'Микрофон слушает ключевое слово'
+                          : 'Фоновое распознавание отключено'}
+                      </div>
                     </div>
-                    <div className="text-[10px] text-slate-400">
-                      {isListeningActive
-                        ? 'Микрофон слушает ключевое слово'
-                        : 'Фоновое распознавание отключено'}
-                    </div>
-                  </div>
-                  {onToggleWakeWord && (
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={isListeningActive}
-                      onClick={onToggleWakeWord}
-                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-hidden ${
-                        isListeningActive ? 'bg-emerald-600' : 'bg-slate-300'
-                      }`}
-                      title={
-                        isListeningActive
-                          ? 'Выключить ожидание'
-                          : 'Включить ожидание'
-                      }
-                    >
-                      <span
-                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out mt-0.5 ml-0.5 ${
-                          isListeningActive ? 'translate-x-4' : 'translate-x-0'
+                    {onToggleWakeWord && (
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={isListeningActive}
+                        onClick={onToggleWakeWord}
+                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                          isListeningActive ? 'bg-emerald-600' : 'bg-slate-300'
                         }`}
-                      />
-                    </button>
-                  )}
-                </div>
+                        title={
+                          isListeningActive
+                            ? 'Выключить ожидание'
+                            : 'Включить ожидание'
+                        }
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out mt-0.5 ml-0.5 ${
+                            isListeningActive ? 'translate-x-4' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    )}
+                  </div>
 
-                {/* 3. Actions */}
-                <div className="pt-2.5 space-y-2">
-                  {onOpenLiveVoice && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMicInfo(false);
-                        onOpenLiveVoice();
-                      }}
-                      className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] transition-colors shadow-2xs cursor-pointer"
-                    >
-                      <Mic className="w-3.5 h-3.5 text-[#FFD700]" />
-                      <span>Поговорить</span>
-                    </button>
-                  )}
-
-                  {onOpenVoiceSettings && (
-                    <div className="flex justify-center pt-0.5">
+                  {/* 3. Actions */}
+                  <div className="pt-2.5 space-y-2">
+                    {onOpenLiveVoice && (
                       <button
                         type="button"
                         onClick={() => {
                           setShowMicInfo(false);
-                          onOpenVoiceSettings();
+                          onOpenLiveVoice();
                         }}
-                        className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] transition-colors shadow-2xs cursor-pointer"
                       >
-                        <Sliders className="w-3 h-3" />
-                        <span>Настройки голоса</span>
+                        <Mic className="w-3.5 h-3.5 text-[#FFD700]" />
+                        <span>Поговорить</span>
                       </button>
-                    </div>
-                  )}
+                    )}
+
+                    {onOpenVoiceSettings && (
+                      <div className="flex justify-center pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowMicInfo(false);
+                            onOpenVoiceSettings();
+                          }}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                        >
+                          <Sliders className="w-3 h-3" />
+                          <span>Настройки голоса</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
+            </div>
+
+            {/* Prominent Live Voice Button: «Поговорить с Пикселем» */}
+            {onOpenLiveVoice && (
+              <button
+                type="button"
+                onClick={onOpenLiveVoice}
+                title="Открыть живой голосовой разговор с Пикселем (Gemini Live)"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] text-white shadow-xs transition-all whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Mic className="w-3.5 h-3.5 text-[#FFD700] animate-pulse" />
+                <span className="hidden sm:inline">Поговорить с Пикселем</span>
+                <span className="sm:hidden">Пиксель</span>
+              </button>
+            )}
+
+            {onOpenVoiceSettings && (
+              <button
+                type="button"
+                onClick={onOpenVoiceSettings}
+                title="Настройки голоса, тембра и режима ожидания"
+                aria-label="Настройки голоса"
+                className="p-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-white/80 transition-colors shrink-0 cursor-pointer"
+              >
+                <Sliders className="w-4 h-4" />
+              </button>
             )}
           </div>
-
-          {/* Prominent Live Voice Button: «Поговорить с Пикселем» */}
-          {onOpenLiveVoice && (
-            <button
-              type="button"
-              onClick={onOpenLiveVoice}
-              title="Открыть живой голосовой разговор с Пикселем (Gemini Live)"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] text-white shadow-xs transition-all whitespace-nowrap shrink-0"
-            >
-              <Mic className="w-3.5 h-3.5 text-[#FFD700] animate-pulse" />
-              <span className="hidden sm:inline">Поговорить с Пикселем</span>
-              <span className="sm:hidden">Пиксель</span>
-            </button>
-          )}
-
-          {onOpenVoiceSettings && (
-            <button
-              type="button"
-              onClick={onOpenVoiceSettings}
-              title="Настройки голоса, тембра и режима ожидания"
-              aria-label="Настройки голоса"
-              className="p-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 transition-colors shrink-0"
-            >
-              <Sliders className="w-4 h-4" />
-            </button>
-          )}
 
           {activeSection === 'knowledge' ? (
             <button

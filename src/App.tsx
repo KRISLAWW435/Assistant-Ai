@@ -106,6 +106,17 @@ function readInitialBoolean(key: string, defaultVal: boolean): boolean {
   return defaultVal;
 }
 
+function readInitialRightPanelCollapsed(): boolean {
+  try {
+    const val = window.localStorage.getItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY);
+    if (val === 'true') return true;
+    if (val === 'false') return false;
+  } catch {
+    // ignore storage errors
+  }
+  return typeof window !== 'undefined' ? window.innerWidth < 1440 : false;
+}
+
 function readInitialRightPanelTab(): RightPanelTab {
   try {
     const saved = window.localStorage.getItem(RIGHT_PANEL_TAB_STORAGE_KEY);
@@ -247,7 +258,7 @@ export default function App() {
     readInitialBoolean(SIDEBAR_COLLAPSED_STORAGE_KEY, false)
   );
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState<boolean>(() =>
-    readInitialBoolean(RIGHT_PANEL_COLLAPSED_STORAGE_KEY, false)
+    readInitialRightPanelCollapsed()
   );
   const [rightPanelMobileOpen, setRightPanelMobileOpen] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>(() =>

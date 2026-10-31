@@ -2694,12 +2694,30 @@ async function startServer() {
 
   wss.on('connection', (clientWs: WebSocket) => {
     let liveSession: any = null;
+    let greetingTimeout: NodeJS.Timeout | null = null;
+
+    const cleanupLiveSession = () => {
+      if (greetingTimeout) {
+        clearTimeout(greetingTimeout);
+        greetingTimeout = null;
+      }
+      if (liveSession) {
+        try {
+          liveSession.close();
+        } catch {
+          // ignore
+        }
+        liveSession = null;
+      }
+    };
 
     clientWs.on('message', async (raw: Buffer | string) => {
       try {
         const msg = JSON.parse(raw.toString());
 
         if (msg.type === 'init') {
+          cleanupLiveSession();
+
           if (!isGeminiApiKeyConfigured()) {
             clientWs.send(
               JSON.stringify({
@@ -2786,6 +2804,10 @@ async function startServer() {
                   }
                 },
                 onclose: () => {
+                  if (greetingTimeout) {
+                    clearTimeout(greetingTimeout);
+                    greetingTimeout = null;
+                  }
                   if (clientWs.readyState === WebSocket.OPEN) {
                     clientWs.send(JSON.stringify({ type: 'session_closed' }));
                   }
@@ -2816,12 +2838,25 @@ async function startServer() {
               })
             );
 
-            if (msg.initialWakeGreeting && liveSession) {
-              setTimeout(() => {
+            if (msg.initialWakeGreeting) {
+              if (greetingTimeout) {
+                clearTimeout(greetingTimeout);
+                greetingTimeout = null;
+              }
+              const sessionToGreet = liveSession;
+              greetingTimeout = setTimeout(() => {
+                greetingTimeout = null;
                 try {
-                  liveSession.sendRealtimeInput({
-                    text: 'Голосовой вызов Пикселя: скажи только «Я тут, Анна!» и сразу слушай ответ.',
-                  });
+                  if (
+                    sessionToGreet &&
+                    liveSession === sessionToGreet &&
+                    clientWs.readyState === WebSocket.OPEN &&
+                    typeof sessionToGreet.sendRealtimeInput === 'function'
+                  ) {
+                    sessionToGreet.sendRealtimeInput({
+                      text: 'Голосовой вызов Пикселя: скажи только «Я тут, Анна!» и сразу слушай ответ.',
+                    });
+                  }
                 } catch (greetErr) {
                   console.warn('[Live Greeting Error]', greetErr);
                 }
@@ -2843,26 +2878,35 @@ async function startServer() {
             }
           }
         } else if (msg.type === 'audio' && msg.data) {
-          if (liveSession) {
-            liveSession.sendRealtimeInput({
-              audio: { data: msg.data, mimeType: 'audio/pcm;rate=16000' },
-            });
+          if (
+            liveSession &&
+            clientWs.readyState === WebSocket.OPEN &&
+            typeof liveSession.sendRealtimeInput === 'function'
+          ) {
+            try {
+              liveSession.sendRealtimeInput({
+                audio: { data: msg.data, mimeType: 'audio/pcm;rate=16000' },
+              });
+            } catch (audioErr) {
+              console.warn('[Live Audio Input Error]', audioErr);
+            }
           }
         } else if (msg.type === 'text' && msg.text) {
-          if (liveSession) {
-            liveSession.sendRealtimeInput({
-              text: msg.text,
-            });
+          if (
+            liveSession &&
+            clientWs.readyState === WebSocket.OPEN &&
+            typeof liveSession.sendRealtimeInput === 'function'
+          ) {
+            try {
+              liveSession.sendRealtimeInput({
+                text: msg.text,
+              });
+            } catch (textErr) {
+              console.warn('[Live Text Input Error]', textErr);
+            }
           }
         } else if (msg.type === 'stop') {
-          if (liveSession) {
-            try {
-              liveSession.close();
-            } catch {
-              // ignore
-            }
-            liveSession = null;
-          }
+          cleanupLiveSession();
         }
       } catch (err) {
         console.warn('[WebSocket message parse error]', err);
@@ -2870,18 +2914,12 @@ async function startServer() {
     });
 
     clientWs.on('close', () => {
-      if (liveSession) {
-        try {
-          liveSession.close();
-        } catch {
-          // ignore
-        }
-        liveSession = null;
-      }
+      cleanupLiveSession();
     });
 
     clientWs.on('error', (wsErr) => {
       console.warn('[Client WS error]', wsErr);
+      cleanupLiveSession();
     });
   });
 

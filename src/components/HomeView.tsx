@@ -4,6 +4,7 @@ import {
   ArrowRight,
   BarChart3,
   BookOpen,
+  Check,
   Clock,
   Cpu,
   GraduationCap,
@@ -86,7 +87,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
               ответов родителям и контент-планов до методических сценариев и
               разбора отчётов.
             </p>
-            <div className="pt-2 flex flex-wrap items-center gap-3">
+            <div className="pt-2 flex flex-wrap items-center gap-2 sm:gap-3">
+              {/* Primary High-Priority CTA */}
               <button
                 type="button"
                 onClick={() => onNavigate('marketer')}
@@ -101,26 +103,28 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   }`}
                 />
               </button>
+
+              {/* Secondary Subtle Links */}
               <button
                 type="button"
                 onClick={() => onNavigate('knowledge')}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold glass-button text-slate-800 hover:bg-white transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100/90 transition-colors"
               >
                 <BookOpen className="w-4 h-4 text-[#00A8B5]" />
-                <span>База знаний ({currentSchool.name})</span>
+                <span>База знаний</span>
               </button>
               <button
                 type="button"
                 onClick={() => onNavigate('backups')}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold glass-button text-slate-700 hover:bg-white transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100/90 transition-colors"
               >
-                <Archive className="w-4 h-4 text-slate-600" />
+                <Archive className="w-4 h-4 text-slate-500" />
                 <span>Резервные копии</span>
               </button>
               <button
                 type="button"
                 onClick={() => onNavigate('connections')}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold glass-button text-slate-700 hover:bg-white transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100/90 transition-colors"
               >
                 <Cpu className="w-4 h-4 text-teal-600" />
                 <span>Подключения ИИ</span>
@@ -128,30 +132,31 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </div>
           </div>
 
-          {/* Two Expressive Typographic School Switch Cards */}
+          {/* Two Informative School Summary Cards (Non-conflicting with TopBar/Sidebar switchers) */}
           <div className="lg:col-span-5 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             {(['kiberone', 'renderia'] as SchoolId[]).map((id) => {
               const s = SCHOOLS[id];
               const isSelected = activeSchool === id;
               const filled = getFilledCategories(id);
+              const progressPct = Math.round(
+                (filled / KNOWLEDGE_CATEGORIES.length) * 100
+              );
 
               return (
-                <button
+                <div
                   key={id}
-                  type="button"
-                  onClick={() => onSelectSchool(id)}
-                  className={`text-left rounded-2xl p-4 transition-colors duration-200 border flex flex-col justify-between gap-3 ${
+                  className={`rounded-2xl p-4 sm:p-5 transition-all duration-200 border flex flex-col justify-between gap-3 ${
                     isSelected
                       ? id === 'kiberone'
-                        ? 'bg-[#FFD700]/15 border-[#FFD700] shadow-xs'
-                        : 'bg-[#84CC16]/20 border-[#84CC16] shadow-xs'
-                      : 'bg-white/85 hover:bg-white border-slate-200/80'
+                        ? 'bg-[#FFD700]/10 border-[#FFD700] ring-2 ring-[#FFD700]/30 shadow-xs'
+                        : 'bg-[#84CC16]/10 border-[#84CC16] ring-2 ring-[#84CC16]/30 shadow-xs'
+                      : 'bg-white/60 border-slate-200/70 opacity-70'
                   }`}
                 >
-                  <div className="space-y-3">
+                  <div className="space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <span
-                        className={`inline-flex items-center px-3 py-1.5 rounded-xl font-display font-extrabold text-base sm:text-lg tracking-wide ${
+                        className={`inline-flex items-center px-3 py-1 rounded-xl font-display font-extrabold text-sm sm:text-base tracking-wide ${
                           id === 'kiberone'
                             ? 'bg-[#FFD700] text-slate-950'
                             : 'bg-[#84CC16] text-slate-950'
@@ -159,28 +164,41 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       >
                         {s.name}
                       </span>
-                      <span
-                        className={`text-[11px] font-semibold px-2 py-0.5 rounded-md shrink-0 ${
-                          isSelected
-                            ? 'bg-slate-900 text-white'
-                            : 'text-slate-500 bg-slate-100'
-                        }`}
-                      >
-                        {isSelected ? 'Активна' : 'Выбрать'}
-                      </span>
+                      {isSelected ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-900 text-white shadow-2xs">
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          <span>Активна</span>
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-md text-slate-400 bg-slate-100">
+                          Вторая школа
+                        </span>
+                      )}
                     </div>
+
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      {s.tagline}
+                    </p>
                   </div>
 
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    {s.tagline}
-                  </p>
-                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px] text-slate-500">
-                    <span>База знаний</span>
-                    <span className="font-mono-tabular font-semibold text-slate-800">
-                      {filled}/{KNOWLEDGE_CATEGORIES.length} разд.
-                    </span>
+                  {/* Knowledge Base Progress Bar */}
+                  <div className="pt-2.5 border-t border-slate-200/60 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span className="font-medium">База знаний</span>
+                      <span className="font-mono-tabular font-semibold text-slate-800">
+                        {filled}/{KNOWLEDGE_CATEGORIES.length} разд.
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-200/70 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          id === 'kiberone' ? 'bg-[#FFD700]' : 'bg-[#84CC16]'
+                        }`}
+                        style={{ width: `${progressPct}%` }}
+                      />
+                    </div>
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>
@@ -206,12 +224,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 key={mode.id}
                 type="button"
                 onClick={() => onNavigate(mode.id)}
-                className="glass-panel rounded-2xl p-5 text-left hover:bg-white transition-colors duration-200 border border-slate-200/80 flex flex-col justify-between gap-4 group"
+                className="glass-panel rounded-2xl p-6 text-left bg-white/80 hover:bg-white hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 transition-all duration-200 border border-slate-200/80 flex flex-col justify-between gap-5 group cursor-pointer"
               >
-                <div className="space-y-3">
+                <div className="space-y-3.5">
                   <div className="flex items-center justify-between">
                     <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-2xs"
+                      className="w-11 h-11 rounded-xl flex items-center justify-center text-white shadow-2xs group-hover:scale-105 transition-transform"
                       style={{ backgroundColor: mode.accentColor }}
                     >
                       <Icon className="w-5 h-5" />
@@ -224,15 +242,17 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     <h3 className="font-display font-bold text-base text-slate-900 group-hover:text-[#00A8B5] transition-colors">
                       {mode.title}
                     </h3>
-                    <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
                       {mode.description}
                     </p>
                   </div>
                 </div>
 
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-800">
-                  <span>Открыть диалог</span>
-                  <ArrowRight className="w-4 h-4 text-[#00A8B5] group-hover:translate-x-0.5 transition-transform" />
+                  <span className="group-hover:text-[#00A8B5] transition-colors">
+                    Открыть диалог
+                  </span>
+                  <ArrowRight className="w-4 h-4 text-[#00A8B5] group-hover:translate-x-1.5 transition-transform duration-200" />
                 </div>
               </button>
             );
@@ -263,24 +283,29 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
 
         {sessions.length === 0 ? (
-          <div className="rounded-xl p-6 bg-white/80 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="font-display font-bold text-sm text-slate-900">
-                У нас пока нет начатых бесед, Анна
+          <div className="rounded-2xl p-6 bg-gradient-to-r from-white/95 via-slate-50/60 to-white/95 border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-5">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 flex items-center justify-center shrink-0">
+                <Sparkles className="w-6 h-6 text-amber-500" />
               </div>
-              <p className="text-xs text-slate-600">
-                Откройте новый диалог для школы{' '}
-                <strong>{currentSchool.name}</strong> или выберите готовый
-                шаблон — все черновики и заметки бережно сохранятся.
-              </p>
+              <div className="space-y-1">
+                <div className="font-display font-bold text-sm text-slate-900">
+                  У нас пока нет начатых бесед, Анна
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed max-w-xl">
+                  Откройте новый диалог для школы{' '}
+                  <strong>{currentSchool.name}</strong> или выберите готовый
+                  шаблон — все черновики и заметки бережно сохранятся.
+                </p>
+              </div>
             </div>
             <button
               type="button"
               onClick={onStartNewChat}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition-colors shadow-xs whitespace-nowrap shrink-0 self-start sm:self-auto group"
             >
               <span>Начать первый чат</span>
-              <ArrowRight className="w-3.5 h-3.5 text-[#FFD700]" />
+              <ArrowRight className="w-3.5 h-3.5 text-[#FFD700] group-hover:translate-x-1 transition-transform" />
             </button>
           </div>
         ) : (

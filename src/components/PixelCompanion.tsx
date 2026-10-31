@@ -252,6 +252,56 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     text: string;
     isBreakReminder?: boolean;
   } | null>(null);
+  const [isBubbleHovered, setIsBubbleHovered] = useState(false);
+  const [isBubbleFadingOut, setIsBubbleFadingOut] = useState(false);
+  const bubbleAutoHideTimeoutRef = useRef<number | null>(null);
+
+  const clearBubbleTimer = () => {
+    if (bubbleAutoHideTimeoutRef.current) {
+      window.clearTimeout(bubbleAutoHideTimeoutRef.current);
+      bubbleAutoHideTimeoutRef.current = null;
+    }
+  };
+
+  const scheduleBubbleAutoHide = (delayMs = 5000) => {
+    clearBubbleTimer();
+    setIsBubbleFadingOut(false);
+    bubbleAutoHideTimeoutRef.current = window.setTimeout(() => {
+      setIsBubbleFadingOut(true);
+      window.setTimeout(() => {
+        setSpeechBubble(null);
+        setIsBubbleFadingOut(false);
+      }, 300);
+    }, delayMs);
+  };
+
+  useEffect(() => {
+    if (speechBubble) {
+      if (!isBubbleHovered) {
+        scheduleBubbleAutoHide(5000);
+      }
+    } else {
+      clearBubbleTimer();
+      setIsBubbleFadingOut(false);
+    }
+    return () => {
+      clearBubbleTimer();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speechBubble]);
+
+  const handleBubbleMouseEnter = () => {
+    setIsBubbleHovered(true);
+    setIsBubbleFadingOut(false);
+    clearBubbleTimer();
+  };
+
+  const handleBubbleMouseLeave = () => {
+    setIsBubbleHovered(false);
+    if (speechBubble) {
+      scheduleBubbleAutoHide(5000);
+    }
+  };
 
   // Personal assistant dialog window state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -440,17 +490,22 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     });
   };
 
-  const handleToggleSpeakMessage = async (msgId: string, content: string) => {
-    if (playbackState.messageId === msgId && playbackState.status === 'playing') {
+  const handleToggleSpeakMessage = async (
+    msgId: string,
+    content: string,
+    forceRefresh = false
+  ) => {
+    if (!forceRefresh && playbackState.messageId === msgId && playbackState.status === 'playing') {
       voiceManager.pauseMessage(msgId);
       return;
     }
-    if (playbackState.messageId === msgId && playbackState.status === 'paused') {
+    if (!forceRefresh && playbackState.messageId === msgId && playbackState.status === 'paused') {
       voiceManager.resumeMessage(msgId);
       return;
     }
     try {
       await voiceManager.playMessage(msgId, content, {
+        forceRefresh,
         onFallbackUsed: (reason) => {
           setSpeechBubble({
             text: reason,
@@ -1890,11 +1945,15 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
                           {/* Voice playback controls for Pixel response (Part A: Listen, Pause, Resume, Stop) */}
                           {!msg.isStreaming && !msg.isError && msg.content.trim() && (
-                            <div className="inline-flex items-center gap-1">
+                            <div className="inline-flex items-center gap-1 flex-wrap">
                               {playbackState.messageId === msg.id && playbackState.status === 'loading' ? (
                                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-900 border border-amber-200">
                                   <Loader2 className="w-2.5 h-2.5 animate-spin text-[#00A8B5]" />
-                                  <span>Загрузка...</span>
+                                  <span>
+                                    {playbackState.provider === 'gemini'
+                                      ? `Синтез Gemini (${playbackState.voiceName || 'Aoede'})...`
+                                      : 'Запуск озвучки...'}
+                                  </span>
                                   <button
                                     type="button"
                                     onClick={() => voiceManager.stopMessage(msg.id)}
@@ -1952,21 +2011,44 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                   </button>
                                 </div>
                               ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleSpeakMessage(msg.id, msg.content)}
-                                  title="Прослушать ответ Пикселя"
-                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
-                                >
-                                  <Volume2 className="w-2.5 h-2.5 text-[#00A8B5]" />
-                                  <span>Прослушать</span>
-                                </button>
+                                <div className="inline-flex items-center gap-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleSpeakMessage(msg.id, msg.content)}
+                                    title="Прослушать ответ Пикселя"
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
+                                  >
+                                    <Volume2 className="w-2.5 h-2.5 text-[#00A8B5]" />
+                                    <span>Прослушать</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleSpeakMessage(msg.id, msg.content, true)}
+                                    title="Заново синтезировать речь без кэша с актуальным голосом и тембром"
+                                    className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                                  >
+                                    <RotateCcw className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
                               )}
-                              {playbackState.messageId === msg.id && playbackState.fallbackReason && (
-                                <span className="text-[10px] text-amber-900 bg-amber-100/90 border border-amber-300/80 px-1 py-0.5 rounded font-medium">
-                                  {playbackState.fallbackReason}
-                                </span>
-                              )}
+
+                              {playbackState.messageId === msg.id &&
+                                playbackState.provider === 'browser' && (
+                                  <span className="text-[10px] text-amber-900 bg-amber-100/90 border border-amber-300/80 px-1 py-0.5 rounded font-medium">
+                                    {playbackState.isFallback
+                                      ? (playbackState.fallbackReason || 'Используется системный голос браузера')
+                                      : 'Используется системный голос браузера'}
+                                  </span>
+                                )}
+
+                              {playbackState.messageId === msg.id &&
+                                playbackState.provider === 'gemini' &&
+                                playbackState.status !== 'error' && (
+                                  <span className="text-[10px] text-cyan-900 bg-cyan-50 border border-cyan-200 px-1.5 py-0.5 rounded font-medium">
+                                    Голос: <b>{playbackState.voiceName || 'Aoede'}</b> · {playbackState.timbreName || 'Светлый'}
+                                    {playbackState.fromCache ? ' (кэш)' : ''}
+                                  </span>
+                                )}
                             </div>
                           )}
                         </>
@@ -2694,12 +2776,18 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
             : `transition-all duration-200 ${defaultVerticalClass} ${defaultHorizontalClass}`
         }`}
       >
-        {/* Compact Speech Bubble (Separate from Character) */}
+        {/* Compact Speech Bubble (Separate from Character, positioned strictly above Pixel, with 5s auto-hide) */}
         {!dialogOpen && speechBubble && (
           <div
             role="status"
             aria-live="polite"
-            className="pointer-events-auto relative mb-1.5 max-w-[235px] sm:max-w-[260px] rounded-2xl bg-white/98 border border-slate-200/90 shadow-lg px-3 py-2 text-xs text-slate-800 animate-in fade-in slide-in-from-bottom-1 duration-150 select-text"
+            onMouseEnter={handleBubbleMouseEnter}
+            onMouseLeave={handleBubbleMouseLeave}
+            className={`pointer-events-auto relative mb-2 max-w-[215px] sm:max-w-[240px] rounded-2xl bg-white/98 border border-slate-200/90 shadow-xl px-3.5 py-2.5 text-xs text-slate-800 transition-all duration-300 select-text ${
+              isBubbleFadingOut
+                ? 'opacity-0 scale-95 pointer-events-none'
+                : 'opacity-100 scale-100 animate-in fade-in slide-in-from-bottom-1 duration-150'
+            }`}
           >
             <div className="flex items-start justify-between gap-2">
               <p className="text-[11px] sm:text-xs text-slate-800 leading-snug font-medium">
@@ -2710,7 +2798,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 onClick={() => setSpeechBubble(null)}
                 title="Закрыть"
                 aria-label="Закрыть"
-                className="p-0.5 rounded-md text-slate-400 hover:text-slate-700 shrink-0"
+                className="p-0.5 rounded-md text-slate-400 hover:text-slate-700 shrink-0 cursor-pointer"
               >
                 <X className="w-3 h-3" />
               </button>

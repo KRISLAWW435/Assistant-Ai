@@ -101,6 +101,7 @@ export class VoiceManager {
   }
 
   public getSettings(): PixelVoiceSettings {
+    this.currentSettings = this.loadStoredSettings();
     return { ...this.currentSettings };
   }
 
@@ -152,6 +153,7 @@ export class VoiceManager {
       onEnd?: () => void;
       onError?: (err: Error) => void;
       onFallbackUsed?: (reason: string) => void;
+      forceRefresh?: boolean;
     }
   ): Promise<void> {
     // If this message is already paused, simply resume it
@@ -175,23 +177,34 @@ export class VoiceManager {
       return;
     }
 
+    // Always dynamically load fresh settings from storage before playback
+    this.currentSettings = this.loadStoredSettings();
     const s = this.currentSettings;
     const providerToUse = s.ttsProviderId === 'browser' ? 'browser' : 'gemini';
+
+    const selectedTimbre =
+      PIXEL_TIMBRE_OPTIONS.find((t) => t.id === s.selectedTimbreId) ||
+      PIXEL_TIMBRE_OPTIONS[1]; // default: bright
+
+    const voiceId = s.selectedGeminiVoice || 'Aoede';
+    const ttsModel = s.ttsModel || 'gemini-3.8-flash-lite-tts';
 
     this.updatePlaybackState({
       messageId,
       status: 'loading',
       provider: providerToUse,
+      voiceName: providerToUse === 'gemini' ? voiceId : (s.voiceName || 'Системный голос'),
+      timbreId: s.selectedTimbreId,
+      timbreName: selectedTimbre.name,
+      model: ttsModel,
+      fromCache: undefined,
+      isFallback: false,
       errorMessage: undefined,
       fallbackReason: undefined,
     });
 
     if (providerToUse === 'gemini') {
-      const selectedTimbre =
-        PIXEL_TIMBRE_OPTIONS.find((t) => t.id === s.selectedTimbreId) ||
-        PIXEL_TIMBRE_OPTIONS[1]; // default: bright
-
-      const voiceURI = `gemini://${s.selectedGeminiVoice || 'Aoede'}`;
+      const voiceURI = `gemini://${voiceId}`;
 
       try {
         await geminiTtsOutput.speak(cleaned, {
@@ -200,11 +213,28 @@ export class VoiceManager {
           volume: s.volume,
           style: selectedTimbre.stylePrompt,
           timbreId: s.selectedTimbreId,
+          model: ttsModel,
+          forceRefresh: Boolean(callbacks?.forceRefresh),
+          onMetaResolved: (meta) => {
+            this.updatePlaybackState({
+              messageId,
+              provider: 'gemini',
+              voiceName: meta.voice,
+              timbreName: selectedTimbre.name,
+              timbreId: s.selectedTimbreId,
+              model: meta.model,
+              fromCache: meta.fromCache,
+              isFallback: false,
+            });
+          },
           onStart: () => {
             this.updatePlaybackState({
               messageId,
               status: 'playing',
               provider: 'gemini',
+              voiceName: voiceId,
+              timbreName: selectedTimbre.name,
+              isFallback: false,
             });
             callbacks?.onStart?.();
           },
@@ -216,101 +246,32 @@ export class VoiceManager {
             });
             callbacks?.onEnd?.();
           },
-          onError: async (err) => {
-            console.warn('[VoiceManager] Gemini TTS error:', err.message);
-            if (!s.allowBrowserFallback) {
-              this.updatePlaybackState({
-                messageId,
-                status: 'error',
-                provider: 'gemini',
-                errorMessage: err.message,
-              });
-              callbacks?.onError?.(err);
-              return;
-            }
-
-            const fallbackNotice =
-              'Озвучено через встроенный синтез браузера (квота или сбой Gemini TTS)';
-            console.warn('[VoiceManager] Falling back to browser speech.');
-            this.updatePlaybackState({
-              messageId,
-              status: 'loading',
-              provider: 'browser',
-              fallbackReason: fallbackNotice,
-            });
-            callbacks?.onFallbackUsed?.(fallbackNotice);
-
-            geminiTtsOutput.stop();
-
-            try {
-              await browserSpeechOutput.speak(cleaned, {
-                messageId,
-                voiceURI: s.voiceURI,
-                rate: s.rate,
-                pitch: resolveBrowserPitchForTimbre(s.selectedTimbreId, s.pitch),
-                volume: s.volume,
-                lang: 'ru-RU',
-                onStart: () => {
-                  this.updatePlaybackState({
-                    messageId,
-                    status: 'playing',
-                    provider: 'browser',
-                  });
-                  callbacks?.onStart?.();
-                },
-                onEnd: () => {
-                  this.updatePlaybackState({
-                    messageId: null,
-                    status: 'idle',
-                    provider: 'browser',
-                  });
-                  callbacks?.onEnd?.();
-                },
-                onError: (bErr) => {
-                  this.updatePlaybackState({
-                    messageId,
-                    status: 'error',
-                    provider: 'browser',
-                    errorMessage: bErr.message,
-                  });
-                  callbacks?.onError?.(bErr);
-                },
-              });
-            } catch (fallbackErr: unknown) {
-              const bErr =
-                fallbackErr instanceof Error
-                  ? fallbackErr
-                  : new Error(String(fallbackErr));
-              this.updatePlaybackState({
-                messageId,
-                status: 'error',
-                provider: 'browser',
-                errorMessage: bErr.message,
-              });
-              callbacks?.onError?.(bErr);
-            }
-          },
         });
+        return;
       } catch (err: unknown) {
         const errorObj = err instanceof Error ? err : new Error(String(err));
-        console.warn('[VoiceManager] Direct Gemini TTS exception:', errorObj.message);
+        console.warn('[VoiceManager] Gemini TTS error, assessing fallback:', errorObj.message);
+
         if (!s.allowBrowserFallback) {
           this.updatePlaybackState({
             messageId,
             status: 'error',
             provider: 'gemini',
             errorMessage: errorObj.message,
+            isFallback: false,
           });
           callbacks?.onError?.(errorObj);
           return;
         }
 
         const fallbackNotice =
-          'Озвучено через встроенный синтез браузера (квота или сбой Gemini TTS)';
+          'Используется системный голос браузера (квота или сбой Gemini TTS)';
+        console.warn('[VoiceManager] Switching to browser speech fallback:', fallbackNotice);
         this.updatePlaybackState({
           messageId,
           status: 'loading',
           provider: 'browser',
+          isFallback: true,
           fallbackReason: fallbackNotice,
         });
         callbacks?.onFallbackUsed?.(fallbackNotice);
@@ -330,6 +291,8 @@ export class VoiceManager {
                 messageId,
                 status: 'playing',
                 provider: 'browser',
+                isFallback: true,
+                fallbackReason: fallbackNotice,
               });
               callbacks?.onStart?.();
             },
@@ -346,6 +309,7 @@ export class VoiceManager {
                 messageId,
                 status: 'error',
                 provider: 'browser',
+                isFallback: true,
                 errorMessage: bErr.message,
               });
               callbacks?.onError?.(bErr);
@@ -358,12 +322,13 @@ export class VoiceManager {
             messageId,
             status: 'error',
             provider: 'browser',
+            isFallback: true,
             errorMessage: fbErr.message,
           });
           callbacks?.onError?.(fbErr);
         }
+        return;
       }
-      return;
     }
 
     // Direct Browser Speech Provider
@@ -455,6 +420,7 @@ export class VoiceManager {
       onEnd?: () => void;
       onError?: (err: Error) => void;
       onFallbackUsed?: (reason: string) => void;
+      forceRefresh?: boolean;
     }
   ): Promise<void> {
     const id = messageId || `auto-${Date.now()}`;
@@ -493,7 +459,13 @@ export class VoiceManager {
   private loadStoredSettings(): PixelVoiceSettings {
     try {
       if (typeof window === 'undefined') return DEFAULT_PIXEL_VOICE_SETTINGS;
-      const raw = window.localStorage.getItem(VOICE_SETTINGS_STORAGE_KEY);
+      let raw = window.localStorage.getItem(VOICE_SETTINGS_STORAGE_KEY);
+      if (!raw) {
+        // Fallback check for legacy storage keys
+        raw =
+          window.localStorage.getItem('kiber_renderia_pixel_voice_settings_v2') ||
+          window.localStorage.getItem('kiber_renderia_pixel_voice_settings');
+      }
       if (!raw) return DEFAULT_PIXEL_VOICE_SETTINGS;
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
@@ -504,13 +476,15 @@ export class VoiceManager {
             ? parsed.selectedTimbreId
             : 'bright';
 
+        const validVoices = ['Aoede', 'Achernar', 'Sulafat', 'Vindemiatrix'];
+        const voice = validVoices.includes(parsed.selectedGeminiVoice)
+          ? parsed.selectedGeminiVoice
+          : 'Aoede';
+
         return {
           ttsProviderId:
             parsed.ttsProviderId === 'browser' ? 'browser' : 'gemini',
-          selectedGeminiVoice:
-            typeof parsed.selectedGeminiVoice === 'string'
-              ? parsed.selectedGeminiVoice
-              : 'Aoede',
+          selectedGeminiVoice: voice,
           selectedTimbreId: timbre,
           selectedLiveVoice:
             typeof parsed.selectedLiveVoice === 'string'
@@ -540,6 +514,10 @@ export class VoiceManager {
           wakeWordEnabled: Boolean(parsed.wakeWordEnabled),
           wakeWordSensitivity:
             parsed.wakeWordSensitivity === 'high' ? 'high' : 'normal',
+          ttsModel:
+            typeof parsed.ttsModel === 'string' && parsed.ttsModel
+              ? parsed.ttsModel
+              : 'gemini-3.8-flash-lite-tts',
         };
       }
     } catch {

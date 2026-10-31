@@ -335,13 +335,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           {isCollapsedMode ? (
             <div
-              className={`px-2 py-2 rounded-xl font-display font-extrabold text-[11px] tracking-tight flex items-center justify-center shrink-0 transition-colors duration-200 ${
+              title={`Активная школа: ${currentSchool.name}`}
+              className={`w-8 h-8 rounded-full font-display font-black text-xs tracking-tight flex items-center justify-center shrink-0 shadow-2xs transition-colors duration-200 ${
                 activeSchool === 'kiberone'
                   ? 'bg-[#FFD700] text-slate-950'
                   : 'bg-[#84CC16] text-slate-950'
               }`}
             >
-              {activeSchool === 'kiberone' ? 'KIBER' : 'REND'}
+              {activeSchool === 'kiberone' ? 'K' : 'R'}
             </div>
           ) : (
             <div className="min-w-0 space-y-1">
@@ -425,26 +426,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
 
-          {/* Collapsed School Switcher with Typographic Labels */}
-          <div className="flex flex-col gap-1.5 p-1.5 bg-slate-200/60 rounded-xl w-full items-center">
+          {/* Collapsed School Switcher with Circular Single-Letter Badges */}
+          <div className="flex flex-col gap-2 p-1.5 bg-slate-200/60 rounded-xl w-full items-center">
             {(['kiberone', 'renderia'] as SchoolId[]).map((id) => {
               const s = SCHOOLS[id];
               const isSelected = activeSchool === id;
+              const letter = id === 'kiberone' ? 'K' : 'R';
               return (
-                <div key={id} className="relative group w-full">
+                <div key={id} className="relative group">
                   <button
                     type="button"
                     onClick={() => onSelectSchool(id)}
-                    title={`Школа ${s.name}`}
-                    className={`w-full py-2 px-1 rounded-lg font-display font-extrabold text-[10px] tracking-tight flex items-center justify-center transition-colors duration-200 ${
+                    title={`Школа ${s.name} (нажмите для переключения)`}
+                    aria-label={`Школа ${s.name}`}
+                    className={`w-8 h-8 rounded-full font-display font-black text-xs tracking-tight flex items-center justify-center transition-all duration-200 cursor-pointer ${
                       isSelected
                         ? id === 'kiberone'
-                          ? 'bg-[#FFD700] text-slate-950 shadow-2xs'
-                          : 'bg-[#84CC16] text-slate-950 shadow-2xs'
-                        : 'bg-white/80 text-slate-600 hover:text-slate-900 hover:bg-white'
+                          ? 'bg-[#FFD700] text-slate-950 ring-2 ring-slate-900/15 shadow-xs scale-105'
+                          : 'bg-[#84CC16] text-slate-950 ring-2 ring-slate-900/15 shadow-xs scale-105'
+                        : 'bg-white/80 text-slate-600 hover:text-slate-900 hover:bg-white hover:scale-105'
                     }`}
                   >
-                    {id === 'kiberone' ? 'KIBER' : 'REND'}
+                    {letter}
                   </button>
                   <div
                     role="tooltip"
@@ -647,13 +650,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {/* Search Input in Left Panel History */}
             <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
                 value={historySearch}
                 onChange={(e) => setHistorySearch(e.target.value)}
                 placeholder={`Поиск в чатах (${currentModeConfig.shortTitle})...`}
-                className="w-full rounded-xl border border-slate-200/90 bg-white pl-8 pr-7 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
+                className="w-full rounded-xl border border-slate-300 bg-white pl-8 pr-7 py-1.5 text-xs text-slate-900 placeholder:text-slate-500 font-medium focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
               />
               {historySearch && (
                 <button
