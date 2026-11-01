@@ -112,8 +112,11 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
       if (next.errorDetail) {
         setErrorMessage(next.errorDetail);
       }
+      if (next.mode === 'STANDBY' || next.mode === 'OFF') {
+        onClose();
+      }
     });
-  }, []);
+  }, [onClose]);
 
   // Subscribe to delegated specialist tasks during Live Voice session
   useEffect(() => {
@@ -197,8 +200,12 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
       aria-modal="true"
       aria-label="Живой голосовой разговор с Пикселем"
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200"
+      onClick={onClose}
     >
-      <div className="relative w-full max-w-2xl h-[92vh] max-h-[820px] bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-white">
+      <div
+        className="relative w-full max-w-2xl h-[92vh] max-h-[820px] bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-white"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* 1. Header with Active School, Status, and Controls */}
         <div className="px-5 py-4 border-b border-slate-800/80 flex items-center justify-between gap-3 bg-slate-900/60 backdrop-blur-xs">
           <div className="flex items-center gap-2.5 min-w-0">

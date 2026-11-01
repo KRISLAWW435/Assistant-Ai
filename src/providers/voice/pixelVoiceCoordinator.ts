@@ -52,6 +52,7 @@ export interface CoordinatorContextResolvers {
   getCompanionTasks: () => CompanionTaskRecord[];
   getActiveChatContext?: () => PixelActiveChatContext | undefined;
   onAppendCompanionMessages: (messages: CompanionMessage[]) => Promise<void>;
+  onWakeWordTriggered?: (phrase: string) => void;
 }
 
 export class PixelVoiceCoordinator {
@@ -91,7 +92,8 @@ export class PixelVoiceCoordinator {
       onTriggered: (phrase) => {
         console.log('[PixelVoiceCoordinator] Wake word triggered:', phrase);
         voiceManager.stopAll();
-        // Spoken wake word directly initiates LIVE mode in background without full-screen modal
+        this.contextResolvers?.onWakeWordTriggered?.(phrase);
+        // Spoken wake word directly initiates LIVE mode
         void this.startLive({ initialWakeGreeting: true });
       },
       onStateChange: (state, detail) => {
@@ -326,6 +328,18 @@ export class PixelVoiceCoordinator {
     } else {
       await this.setMode('STANDBY');
     }
+  }
+
+  /**
+   * Triggers explicit browser permission prompt on user interaction
+   */
+  public async requestMicrophonePermission(): Promise<boolean> {
+    const success = await wakeWordManager.requestMicrophonePermission();
+    if (success) {
+      this.mode = 'STANDBY';
+      this.notifyListeners();
+    }
+    return success;
   }
 
   private async handleSessionEnded(): Promise<void> {

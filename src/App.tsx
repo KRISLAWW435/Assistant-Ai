@@ -85,6 +85,7 @@ import {
 import { PixelCompanion } from './components/PixelCompanion';
 import { PixelLiveVoiceModal } from './components/PixelLiveVoiceModal';
 import { PixelVoiceSettingsModal } from './components/PixelVoiceSettingsModal';
+import { VoiceDiagnosticModal } from './components/VoiceDiagnosticModal';
 import { PixelVoiceWidget } from './components/PixelVoiceWidget';
 import { pixelVoiceCoordinator } from './providers/voice/pixelVoiceCoordinator';
 import { geminiLiveClient } from './providers/voice/geminiLiveClient';
@@ -352,6 +353,7 @@ export default function App() {
   const [isLiveVoiceOpen, setIsLiveVoiceOpen] = useState(false);
   const [isLiveVoiceFromWakeWord, setIsLiveVoiceFromWakeWord] = useState(false);
   const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
+  const [isVoiceDiagnosticsOpen, setIsVoiceDiagnosticsOpen] = useState(false);
   const [wakeWordState, setWakeWordState] = useState<WakeWordState>(() =>
     wakeWordManager.getState()
   );
@@ -541,6 +543,11 @@ export default function App() {
       getCompanionMemory: () => companionMemoryRef.current,
       getCompanionTasks: () => companionTasksRef.current,
       getActiveChatContext: () => pixelAgentCoordinator.getActiveChatContext(),
+      onWakeWordTriggered: (phrase) => {
+        setIsLiveVoiceFromWakeWord(true);
+        // Do not auto-open the large modal; conversation runs in the compact widget
+        setIsLiveVoiceOpen(false);
+      },
       onAppendCompanionMessages: async (newMessages) => {
         const filtered = filterOutReadAloudTurns(newMessages);
         if (filtered.length > 0) {
@@ -2202,6 +2209,7 @@ export default function App() {
             setIsLiveVoiceOpen(true);
           }}
           onOpenVoiceSettings={() => setIsVoiceSettingsOpen(true)}
+          onOpenVoiceDiagnostics={() => setIsVoiceDiagnosticsOpen(true)}
           isWakeWordListening={
             wakeWordState === 'standby_listening' ||
             wakeWordState === 'hearing_speech'
@@ -2408,6 +2416,7 @@ export default function App() {
           setIsLiveVoiceOpen(true);
         }}
         onOpenSettings={() => setIsVoiceSettingsOpen(true)}
+        onOpenDiagnostics={() => setIsVoiceDiagnosticsOpen(true)}
       />
 
       {/* 5. PIXEL AI COMPANION & PERSONAL ASSISTANT FOR ANNA */}
@@ -2782,6 +2791,16 @@ export default function App() {
       <PixelVoiceSettingsModal
         isOpen={isVoiceSettingsOpen}
         onClose={() => setIsVoiceSettingsOpen(false)}
+      />
+
+      {/* MODAL: Pixel Voice & Electron Diagnostics */}
+      <VoiceDiagnosticModal
+        isOpen={isVoiceDiagnosticsOpen}
+        onClose={() => setIsVoiceDiagnosticsOpen(false)}
+        onOpenLiveVoice={() => {
+          setIsLiveVoiceFromWakeWord(false);
+          setIsLiveVoiceOpen(true);
+        }}
       />
     </div>
   );

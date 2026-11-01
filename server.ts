@@ -4,14 +4,28 @@ import express, { type Request, type Response } from 'express';
 import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI, Modality, ThinkingLevel, type LiveServerMessage } from '@google/genai';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const _serverDir =
+  typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+
+export interface AssistantServerOptions {
+  port?: number;
+  host?: string;
+  distPath?: string;
+  isElectronProduction?: boolean;
+}
+
+export interface RunningAssistantServer {
+  httpServer: http.Server;
+  wss: WebSocketServer;
+  port: number;
+  host: string;
+  close: () => Promise<void>;
+}
 
 const PORT = 3000;
 const rawEnvGeminiModel = (process.env.GEMINI_MODEL || '').trim();
@@ -259,6 +273,32 @@ function getGeminiApiKey(): string {
 
 function isGeminiApiKeyConfigured(): boolean {
   return Boolean(getGeminiApiKey());
+}
+
+export function setServerGeminiKey(key: string): void {
+  const cleanKey = (key || '').trim();
+  if (cleanKey) {
+    serverRawSecretsStore.set('profile-gemini-primary', cleanKey);
+    process.env.GEMINI_API_KEY = cleanKey;
+    providerHealthRegistry.gemini.status = 'connected';
+    providerHealthRegistry.gemini.lastErrorReason = undefined;
+  } else {
+    serverRawSecretsStore.delete('profile-gemini-primary');
+    delete process.env.GEMINI_API_KEY;
+  }
+}
+
+export function setServerOpenRouterKey(key: string): void {
+  const cleanKey = (key || '').trim();
+  if (cleanKey) {
+    serverRawSecretsStore.set('profile-openrouter-free', cleanKey);
+    process.env.OPENROUTER_API_KEY = cleanKey;
+    providerHealthRegistry.openrouter.status = 'available';
+    providerHealthRegistry.openrouter.lastErrorReason = undefined;
+  } else {
+    serverRawSecretsStore.delete('profile-openrouter-free');
+    delete process.env.OPENROUTER_API_KEY;
+  }
 }
 
 function getOpenRouterApiKey(): string {
@@ -1384,7 +1424,12 @@ function writeSseEvent(
   }
 }
 
-async function startServer() {
+export async function startServer(
+  options: AssistantServerOptions = {}
+): Promise<RunningAssistantServer> {
+  const PORT = options.port ?? Number(process.env.PORT || 3000);
+  const HOST = options.host ?? '0.0.0.0';
+  const customDistPath = options.distPath;
   const app = express();
 
   // Strict payload size limit to protect the server
@@ -2766,14 +2811,15 @@ async function startServer() {
   });
 
   // Mount Vite middleware in development or static dist in production
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !options.isElectronProduction) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
+    const distPath = customDistPath || path.join(_serverDir, 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
@@ -3014,11 +3060,47 @@ async function startServer() {
     });
   });
 
-  httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(
-      `[Server] KIBERONE & RENDERIA Business Assistant running on http://0.0.0.0:${PORT} (Primary Model: ${GEMINI_MODEL}, Live API on /api/live)`
-    );
+  return new Promise<RunningAssistantServer>((resolve, reject) => {
+    httpServer.once('error', (err) => {
+      reject(err);
+    });
+
+    httpServer.listen(PORT, HOST, () => {
+      const addr = httpServer.address();
+      const actualPort = typeof addr === 'object' && addr ? addr.port : PORT;
+      console.log(
+        `[Server] KIBERONE & RENDERIA Business Assistant running on http://${HOST}:${actualPort} (Primary Model: ${GEMINI_MODEL}, Live API on /api/live)`
+      );
+
+      resolve({
+        httpServer,
+        wss,
+        port: actualPort,
+        host: HOST,
+        close: async () => {
+          return new Promise<void>((resClose) => {
+            wss.close(() => {
+              httpServer.close(() => {
+                resClose();
+              });
+            });
+          });
+        },
+      });
+    });
   });
 }
 
-startServer();
+const isDirectExecution =
+  typeof process !== 'undefined' &&
+  !process.versions?.electron &&
+  Boolean(
+    process.argv[1]?.endsWith('server.ts') ||
+      process.argv[1]?.endsWith('server.js')
+  );
+
+if (isDirectExecution) {
+  startServer().catch((err) => {
+    console.error('[Server Startup Fatal Error]', err);
+  });
+}

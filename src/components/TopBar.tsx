@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Activity,
   BookOpen,
   Menu,
   MessageSquareText,
@@ -25,6 +26,7 @@ interface TopBarProps {
   dialogueFilesCount?: number;
   onOpenLiveVoice?: () => void;
   onOpenVoiceSettings?: () => void;
+  onOpenVoiceDiagnostics?: () => void;
   isWakeWordListening?: boolean;
   wakeWordState?: WakeWordState;
   wakeWordDetail?: string;
@@ -53,6 +55,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   dialogueFilesCount = 0,
   onOpenLiveVoice,
   onOpenVoiceSettings,
+  onOpenVoiceDiagnostics,
 }) => {
   const [showMicInfo, setShowMicInfo] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -69,7 +72,8 @@ export const TopBar: React.FC<TopBarProps> = ({
     });
   }, []);
 
-  const { mode, liveState, wakeWordState: currentWakeState } = voiceSnapshot;
+  const { mode, liveState, wakeWordState: currentWakeState, errorDetail } =
+    voiceSnapshot;
   const isLive = mode === 'LIVE';
   const isStandby = mode === 'STANDBY';
 
@@ -77,34 +81,34 @@ export const TopBar: React.FC<TopBarProps> = ({
     if (isLive) {
       if (liveState === 'speaking') {
         return {
-          label: 'Пиксель говорит',
+          label: 'Говорю',
           dotClass: 'bg-[#FFD700] animate-bounce',
           badgeClass: 'text-cyan-800 bg-cyan-50 border-cyan-200',
         };
       }
       if (liveState === 'listening') {
         return {
-          label: 'Слушаю вас...',
+          label: 'Слушаю',
           dotClass: 'bg-emerald-500 animate-pulse',
           badgeClass: 'text-emerald-800 bg-emerald-50 border-emerald-200',
         };
       }
       if (liveState === 'thinking') {
         return {
-          label: 'Думает...',
+          label: 'Думаю',
           dotClass: 'bg-amber-500 animate-spin',
           badgeClass: 'text-amber-800 bg-amber-50 border-amber-200',
         };
       }
       if (liveState === 'paused') {
         return {
-          label: 'На паузе',
+          label: 'Пауза',
           dotClass: 'bg-amber-400',
           badgeClass: 'text-amber-800 bg-amber-50 border-amber-200',
         };
       }
       return {
-        label: 'Пиксель в эфире',
+        label: 'Слушаю',
         dotClass: 'bg-cyan-500 animate-pulse',
         badgeClass: 'text-cyan-800 bg-cyan-50 border-cyan-200',
       };
@@ -113,9 +117,44 @@ export const TopBar: React.FC<TopBarProps> = ({
     if (isStandby) {
       if (currentWakeState === 'hearing_speech') {
         return {
-          label: 'Слышу речь...',
+          label: 'Слушаю',
           dotClass: 'bg-teal-500 animate-ping',
           badgeClass: 'text-teal-700 bg-teal-50 border-teal-200',
+        };
+      }
+      if (currentWakeState === 'standby_listening') {
+        return {
+          label: 'Ожидаю вызова',
+          dotClass: 'bg-emerald-500 animate-pulse',
+          badgeClass: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+        };
+      }
+      if (currentWakeState === 'permission_denied') {
+        return {
+          label: 'Микрофон закрыт',
+          dotClass: 'bg-red-500',
+          badgeClass: 'text-red-700 bg-red-50 border-red-200',
+        };
+      }
+      if (currentWakeState === 'error') {
+        return {
+          label: 'Сбой распознавания',
+          dotClass: 'bg-amber-500',
+          badgeClass: 'text-amber-800 bg-amber-50 border-amber-200',
+        };
+      }
+      if (currentWakeState === 'unsupported') {
+        return {
+          label: 'Речь не поддерживается',
+          dotClass: 'bg-slate-400',
+          badgeClass: 'text-slate-600 bg-slate-100 border-slate-200',
+        };
+      }
+      if (currentWakeState === 'mic_muted') {
+        return {
+          label: 'Микрофон выключен',
+          dotClass: 'bg-slate-400',
+          badgeClass: 'text-slate-600 bg-slate-100 border-slate-200',
         };
       }
       return {
@@ -300,8 +339,33 @@ export const TopBar: React.FC<TopBarProps> = ({
                     </button>
                   </div>
 
+                  {/* Diagnostic / Error Notice if any */}
+                  {errorDetail && (
+                    <div className="my-2 p-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] leading-tight flex items-start gap-1.5">
+                      <span className="font-bold text-amber-700">Инфо:</span>
+                      <span className="truncate">{errorDetail}</span>
+                    </div>
+                  )}
+
                   {/* 3. Actions */}
                   <div className="pt-2.5 space-y-2">
+                    {currentWakeState === 'permission_denied' && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const granted =
+                            await pixelVoiceCoordinator.requestMicrophonePermission();
+                          if (granted) {
+                            setShowMicInfo(false);
+                          }
+                        }}
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-2xs cursor-pointer"
+                      >
+                        <Mic className="w-3.5 h-3.5 text-white" />
+                        <span>Разрешить микрофон</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => {
@@ -318,8 +382,22 @@ export const TopBar: React.FC<TopBarProps> = ({
                       <span>{isLive ? 'Открыть большой экран' : 'Поговорить'}</span>
                     </button>
 
-                    {onOpenVoiceSettings && (
-                      <div className="flex justify-center pt-0.5">
+                    <div className="flex items-center justify-center gap-3 pt-0.5">
+                      {onOpenVoiceDiagnostics && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowMicInfo(false);
+                            onOpenVoiceDiagnostics();
+                          }}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#00A8B5] hover:text-[#165B73] transition-colors cursor-pointer"
+                        >
+                          <Activity className="w-3 h-3 text-[#FFD700]" />
+                          <span>Диагностика</span>
+                        </button>
+                      )}
+
+                      {onOpenVoiceSettings && (
                         <button
                           type="button"
                           onClick={() => {
@@ -329,10 +407,10 @@ export const TopBar: React.FC<TopBarProps> = ({
                           className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
                         >
                           <Sliders className="w-3 h-3" />
-                          <span>Настройки голоса</span>
+                          <span>Настройки</span>
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -345,9 +423,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             <button
               type="button"
               onClick={() => {
-                if (isLive) {
-                  onOpenLiveVoice?.();
-                } else {
+                onOpenLiveVoice?.();
+                if (!isLive) {
                   void pixelVoiceCoordinator.startLive();
                 }
               }}
