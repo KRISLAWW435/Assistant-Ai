@@ -526,7 +526,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     () => annaMemoryManager.getAll()
   );
   const [annaStorageInfo, setAnnaStorageInfo] = useState(() =>
-    annaMemoryManager.getStorageInfo()
+    annaMemoryManager.getStorageInfoSync()
   );
   const [selectedMemoryFilterCat, setSelectedMemoryFilterCat] = useState<
     AnnaMemoryCategory | 'all'
@@ -549,7 +549,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   useEffect(() => {
     const unsub = annaMemoryManager.subscribe((bundle) => {
       setAnnaMemoryBundle(bundle);
-      setAnnaStorageInfo(annaMemoryManager.getStorageInfo());
+      setAnnaStorageInfo(annaMemoryManager.getStorageInfoSync());
     });
     return unsub;
   }, []);
@@ -557,7 +557,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   const handleToggleAutoSaveMemory = () => {
     const nextVal = !annaStorageInfo.isAutoSaveEnabled;
     annaMemoryManager.setAutoSaveEnabled(nextVal);
-    setAnnaStorageInfo(annaMemoryManager.getStorageInfo());
+    setAnnaStorageInfo(annaMemoryManager.getStorageInfoSync());
     setMemoryNotice(
       nextVal
         ? 'Автоматическое запоминание включено'
@@ -580,7 +580,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     setEditingMemoryItem(item);
     setMemFormCategory(item.category);
     setMemFormStatus(item.status);
-    setMemFormTitle(item.title);
+    setMemFormTitle(item.title || '');
     setMemFormContent(item.content);
     setMemFormConfidence(item.confidence ?? 0.95);
     setIsNewMemoryModalOpen(true);
@@ -615,9 +615,9 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     setTimeout(() => setMemoryNotice(null), 3500);
   };
 
-  const handleDeleteMemoryItem = async (id: string, title: string) => {
+  const handleDeleteMemoryItem = async (id: string, title?: string) => {
     await annaMemoryManager.deleteItem(id);
-    setMemoryNotice(`Запись «${title}» удалена`);
+    setMemoryNotice(`Запись «${title || 'Фрагмент памяти'}» удалена`);
     setTimeout(() => setMemoryNotice(null), 3000);
   };
 
@@ -627,7 +627,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
       status: 'confirmed_fact',
       confidence: 1.0,
     });
-    setMemoryNotice(`Запись «${item.title}» подтверждена как проверенный факт`);
+    setMemoryNotice(`Запись «${item.title || item.content.slice(0, 30)}» подтверждена как проверенный факт`);
     setTimeout(() => setMemoryNotice(null), 3000);
   };
 
@@ -2919,18 +2919,18 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     </div>
                     <div>
                       <span className="text-slate-400">Школы: </span>
-                      <strong className="text-slate-800">{annaMemoryBundle.profile.schools.join(' & ')}</strong>
+                      <strong className="text-slate-800">{(annaMemoryBundle.profile.schools || ['KIBERone', 'Renderia']).join(' & ')}</strong>
                     </div>
                     <div>
                       <span className="text-slate-400">Бэкграунд: </span>
-                      <span className="text-slate-800 font-medium">{annaMemoryBundle.profile.background}</span>
+                      <span className="text-slate-800 font-medium">{annaMemoryBundle.profile.background || annaMemoryBundle.profile.psychologicalBackground}</span>
                       <span className="ml-2 px-1.5 py-0.2 rounded text-[10px] bg-amber-50 text-amber-800 border border-amber-200">
-                        {annaMemoryBundle.profile.backgroundVerification}
+                        {annaMemoryBundle.profile.backgroundVerification || 'Подтверждено в диалоге'}
                       </span>
                     </div>
                     <div>
                       <span className="text-slate-400">Стиль общения: </span>
-                      <span className="text-slate-800">{annaMemoryBundle.profile.communicationTone}</span>
+                      <span className="text-slate-800">{annaMemoryBundle.profile.communicationTone || annaMemoryBundle.profile.communicationStyle}</span>
                     </div>
                   </div>
                 </div>
@@ -2947,7 +2947,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     <div>
                       <span className="text-slate-400">Любимая палитра: </span>
                       <div className="inline-flex items-center gap-1.5 ml-1 align-middle">
-                        {annaMemoryBundle.preferences.aesthetic.palette.map((color) => (
+                        {['#FFD1DC', '#BAE6FD', '#FFF7ED', '#E9D5FF'].map((color) => (
                           <span
                             key={color}
                             style={{ backgroundColor: color }}
@@ -2960,13 +2960,13 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     <div>
                       <span className="text-slate-400">Свет и стиль: </span>
                       <span className="text-slate-800">
-                        {annaMemoryBundle.preferences.aesthetic.notes}
+                        {annaMemoryBundle.preferences.find((p) => p.category === 'visual')?.description || 'Мягкий, эстетичный, воздушный стиль без агрессивных неоновых цветов'}
                       </span>
                     </div>
                     <div>
                       <span className="text-slate-400">Тон диалога: </span>
                       <span className="text-slate-800">
-                        {annaMemoryBundle.preferences.interaction.tonePreference}
+                        {annaMemoryBundle.preferences.find((p) => p.category === 'speech' || p.category === 'work')?.description || 'Спокойный, уважительный, тёплый диалог'}
                       </span>
                     </div>
                   </div>
@@ -3017,7 +3017,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                     {filteredAnnaMemories.map((mem) => {
-                      const isConfirmed = mem.status === 'confirmed_fact';
+                      const isConfirmed = mem.status === 'confirmed' || mem.status === 'confirmed_fact';
                       return (
                         <div
                           key={mem.id}
@@ -3026,21 +3026,21 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                           <div className="space-y-1.5">
                             <div className="flex items-start justify-between gap-2">
                               <span className="font-bold text-xs text-slate-900 leading-snug">
-                                {mem.title}
+                                {mem.title || mem.content.slice(0, 45)}
                               </span>
                               <div className="flex items-center gap-1 shrink-0">
                                 <span
                                   className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                                     isConfirmed
                                       ? 'bg-emerald-100 text-emerald-800'
-                                      : mem.status === 'observation'
+                                      : mem.status === 'observation' || mem.status === 'hypothesis' || mem.status === 'needs_verification'
                                         ? 'bg-purple-100 text-purple-800'
                                         : 'bg-sky-100 text-sky-800'
                                   }`}
                                 >
                                   {isConfirmed
                                     ? 'Проверено'
-                                    : mem.status === 'observation'
+                                    : mem.status === 'observation' || mem.status === 'hypothesis' || mem.status === 'needs_verification'
                                       ? 'Наблюдение'
                                       : 'Заметка'}
                                 </span>
@@ -3080,7 +3080,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleDeleteMemoryItem(mem.id, mem.title)}
+                                onClick={() => handleDeleteMemoryItem(mem.id, mem.title || mem.content.slice(0, 30))}
                                 className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
                                 title="Удалить"
                               >

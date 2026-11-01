@@ -64,55 +64,126 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
     return unsub;
   }, [controlledEmotion, onEmotionChange]);
 
-  // Sync external voice and thinking states
+  // Sync external voice and thinking states only for active interactive instance to avoid conflicts
   useEffect(() => {
+    if (!interactive) return;
     pixelEmotionManager.setVoiceState({ isListening, isSpeaking });
-  }, [isListening, isSpeaking]);
+  }, [interactive, isListening, isSpeaking]);
 
   useEffect(() => {
+    if (!interactive) return;
     pixelEmotionManager.setThinkingState(isThinking);
-  }, [isThinking]);
+  }, [interactive, isThinking]);
 
-  // Real-time speech lip-sync: audio level (0..1) + organic harmonic rhythm
-  const [mouthOpenness, setMouthOpenness] = useState<number>(0);
-  const [speechHarmonic, setSpeechHarmonic] = useState<number>(0);
-  const speechHarmonicRef = useRef<number | null>(null);
+  // 6 natural mouth shapes: 'closed' | 'smile' | 'small_open' | 'wide_open' | 'rounded_o' | 'resting'
+  type PixelMouthShape =
+    | 'closed'
+    | 'smile'
+    | 'small_open'
+    | 'wide_open'
+    | 'rounded_o'
+    | 'resting';
+
+  const [mouthShape, setMouthShape] = useState<PixelMouthShape>('smile');
+  const audioLevelRef = useRef<number>(0);
+  const silenceTimerRef = useRef<number | null>(null);
+  const syllableTimerRef = useRef<number | null>(null);
+  const syllableStepRef = useRef<number>(0);
 
   useEffect(() => {
-    if (isListening || (activeEmotion !== 'speaking' && !isSpeaking)) {
-      setMouthOpenness(0);
-      setSpeechHarmonic(0);
-      if (speechHarmonicRef.current) {
-        cancelAnimationFrame(speechHarmonicRef.current);
-        speechHarmonicRef.current = null;
+    const isSpeakingNow = isSpeaking || activeEmotion === 'speaking';
+    if (!isSpeakingNow || isListening) {
+      if (silenceTimerRef.current) {
+        window.clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
       }
+      if (syllableTimerRef.current) {
+        window.clearInterval(syllableTimerRef.current);
+        syllableTimerRef.current = null;
+      }
+      setMouthShape('smile');
       return;
     }
 
-    // Subscribe to real audio levels
+    // Subscribe to real audio levels (TTS or Gemini Live)
     const unsub = voiceManager.onAudioLevelChange((level) => {
-      if (isListening) {
-        setMouthOpenness(0);
+      audioLevelRef.current = level;
+      if (level < 0.04) {
+        if (!silenceTimerRef.current) {
+          silenceTimerRef.current = window.setTimeout(() => {
+            // Speech pause between words or sentences: resting position
+            setMouthShape('resting');
+            silenceTimerRef.current = null;
+          }, 90);
+        }
       } else {
-        // Natural smoothing and clamping
-        setMouthOpenness(Math.max(0, Math.min(1, level)));
+        if (silenceTimerRef.current) {
+          window.clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
       }
     });
 
-    // Animate subtle vowel modulation while speaking
-    const animateSpeech = () => {
-      setSpeechHarmonic((Date.now() / 120) % (Math.PI * 2));
-      speechHarmonicRef.current = requestAnimationFrame(animateSpeech);
+    // Syllable cadence timer (~160ms interval for natural Russian syllable pace)
+    const runSyllableCadence = () => {
+      const level = audioLevelRef.current;
+      if (level < 0.04) {
+        // Paused/silent: hold resting position, do not flap
+        setMouthShape('resting');
+        return;
+      }
+
+      syllableStepRef.current = (syllableStepRef.current + 1) % 6;
+      const step = syllableStepRef.current;
+
+      if (level > 0.42) {
+        // High volume / accented vowel: wide open and rounded shapes
+        const highShapes: PixelMouthShape[] = [
+          'wide_open',
+          'small_open',
+          'rounded_o',
+          'wide_open',
+          'small_open',
+          'rounded_o',
+        ];
+        setMouthShape(highShapes[step]);
+      } else if (level > 0.15) {
+        // Moderate volume: gentle open, rounded, small open
+        const medShapes: PixelMouthShape[] = [
+          'small_open',
+          'rounded_o',
+          'small_open',
+          'resting',
+          'small_open',
+          'rounded_o',
+        ];
+        setMouthShape(medShapes[step]);
+      } else {
+        // Low volume / consonant transitions
+        const lowShapes: PixelMouthShape[] = [
+          'small_open',
+          'closed',
+          'small_open',
+          'resting',
+          'small_open',
+          'closed',
+        ];
+        setMouthShape(lowShapes[step]);
+      }
     };
-    speechHarmonicRef.current = requestAnimationFrame(animateSpeech);
+
+    syllableTimerRef.current = window.setInterval(runSyllableCadence, 160);
 
     return () => {
       unsub();
-      if (speechHarmonicRef.current) {
-        cancelAnimationFrame(speechHarmonicRef.current);
-        speechHarmonicRef.current = null;
+      if (silenceTimerRef.current) {
+        window.clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
       }
-      setMouthOpenness(0);
+      if (syllableTimerRef.current) {
+        window.clearInterval(syllableTimerRef.current);
+        syllableTimerRef.current = null;
+      }
     };
   }, [activeEmotion, isSpeaking, isListening]);
 
@@ -319,11 +390,7 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
       ? 0.85
       : 0.5;
 
-  // Dynamic speech mouth coordinates calculation
-  // Varies aperture organically based on voice volume + harmonic wave
-  const speechRx = Math.max(3.2, Math.min(6.2, 3.6 + mouthOpenness * 2.2 + Math.sin(speechHarmonic) * 0.6));
-  const speechRy = Math.max(0.8, Math.min(4.8, 1.0 + mouthOpenness * 3.6 + Math.cos(speechHarmonic) * 0.4));
-  const speechCy = 63.5 + mouthOpenness * 0.6;
+
 
   return (
     <div
@@ -465,36 +532,91 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
             microBehavior={microBehavior}
           />
 
-          {/* 5. MOUTH / EMOTION EXPRESSION CURVE (With Speech Lip-Sync & Attentive Listening) */}
-          {activeEmotion === 'speaking' && !isListening ? (
-            mouthOpenness > 0.05 ? (
+          {/* 5. MOUTH / EMOTION EXPRESSION CURVE (6 Natural Mouth Shapes & Speech Lip-Sync) */}
+          {(activeEmotion === 'speaking' || isSpeaking) && !isListening ? (
+            mouthShape === 'wide_open' ? (
               <g className="pixel-speaking-mouth">
-                {/* Outer mouth opening */}
-                <ellipse
-                  cx="50"
-                  cy={Number(speechCy.toFixed(2))}
-                  rx={Number(speechRx.toFixed(2))}
-                  ry={Number(speechRy.toFixed(2))}
+                {/* Wide open mouth for stressed open vowels ('А', 'Э') */}
+                <path
+                  d="M 43.5 61.8 Q 50 61 56.5 61.8 Q 55 68.6 50 68.6 Q 45 68.6 43.5 61.8 Z"
                   fill="#1E293B"
                   stroke="#38BDF8"
-                  strokeWidth="1.2"
+                  strokeWidth="0.9"
+                  strokeLinejoin="round"
                 />
-                {/* Delicate pink tongue gleam inside mouth on vowels */}
-                {mouthOpenness > 0.28 && (
-                  <ellipse
-                    cx="50"
-                    cy={Number((speechCy + speechRy * 0.35).toFixed(2))}
-                    rx={Number((speechRx * 0.55).toFixed(2))}
-                    ry={Number((speechRy * 0.45).toFixed(2))}
-                    fill="#F472B6"
-                    opacity="0.85"
-                  />
-                )}
+                <ellipse
+                  cx="50"
+                  cy="66.2"
+                  rx="3.4"
+                  ry="1.6"
+                  fill="#F472B6"
+                  opacity="0.9"
+                />
               </g>
-            ) : (
-              /* Brief consonant resting pause during speech */
+            ) : mouthShape === 'rounded_o' ? (
+              <g className="pixel-speaking-mouth">
+                {/* Rounded mouth for 'О', 'У' */}
+                <ellipse
+                  cx="50"
+                  cy="63.6"
+                  rx="3.3"
+                  ry="4.3"
+                  fill="#1E293B"
+                  stroke="#38BDF8"
+                  strokeWidth="0.9"
+                />
+                <ellipse
+                  cx="50"
+                  cy="65.2"
+                  rx="1.8"
+                  ry="1.5"
+                  fill="#F472B6"
+                  opacity="0.85"
+                />
+              </g>
+            ) : mouthShape === 'small_open' ? (
+              <g className="pixel-speaking-mouth">
+                {/* Small open mouth for unstressed vowels & soft consonants */}
+                <ellipse
+                  cx="50"
+                  cy="63.6"
+                  rx="3.6"
+                  ry="2"
+                  fill="#1E293B"
+                  stroke="#38BDF8"
+                  strokeWidth="0.8"
+                />
+                <ellipse
+                  cx="50"
+                  cy="64.3"
+                  rx="2"
+                  ry="0.8"
+                  fill="#F472B6"
+                  opacity="0.85"
+                />
+              </g>
+            ) : mouthShape === 'closed' ? (
+              /* Closed neutral lips */
               <path
-                d="M 45.2 63.2 Q 50 65.6 54.8 63.2"
+                d="M 45 63.5 L 55 63.5"
+                fill="none"
+                stroke="#1E293B"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            ) : mouthShape === 'smile' ? (
+              /* Warm soft smile */
+              <path
+                d="M 43.5 62.5 Q 50 67 56.5 62.5"
+                fill="none"
+                stroke="#1E293B"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            ) : (
+              /* Resting position during pauses between words / phrases */
+              <path
+                d="M 44.8 63.2 Q 50 65.5 55.2 63.2"
                 fill="none"
                 stroke="#1E293B"
                 strokeWidth="1.8"
@@ -504,7 +626,7 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
           ) : isListening ? (
             /* ATTENTIVE LISTENING: Mouth calmly closed, gentle receptive presence */
             <path
-              d="M 46 63.5 Q 50 65.4 54 63.5"
+              d="M 45.5 63.5 Q 50 65.2 54.5 63.5"
               fill="none"
               stroke="#1E293B"
               strokeWidth="1.8"
@@ -525,8 +647,10 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
               cx="50"
               cy="63.8"
               rx="3.2"
-              ry="3.6"
+              ry="3.8"
               fill="#1E293B"
+              stroke="#38BDF8"
+              strokeWidth="0.8"
             />
           ) : activeEmotion === 'sadness' ? (
             /* Downturned gentle comforting mouth */

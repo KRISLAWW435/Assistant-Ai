@@ -129,6 +129,26 @@ export class VoiceManager {
     return this.currentAudioLevel;
   }
 
+  public getCurrentSpokenText(): string | null {
+    if (
+      this.currentPlaybackState.status !== 'playing' &&
+      this.currentPlaybackState.status !== 'loading'
+    ) {
+      return null;
+    }
+    if (!this.activeReadingSession) return null;
+    const { chunks, resumeChunkIndex, cleanedText } = this.activeReadingSession;
+    if (
+      chunks &&
+      chunks.length > 0 &&
+      typeof resumeChunkIndex === 'number' &&
+      chunks[resumeChunkIndex]
+    ) {
+      return chunks[resumeChunkIndex];
+    }
+    return cleanedText || null;
+  }
+
   public onAudioLevelChange(callback: (level: number) => void): () => void {
     this.audioLevelListeners.add(callback);
     callback(this.currentAudioLevel);

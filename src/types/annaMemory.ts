@@ -13,11 +13,15 @@ export type AnnaMemoryCategory =
 
 export type AnnaMemoryStatus =
   | 'confirmed'         // Подтверждено Анной
+  | 'confirmed_fact'    // Совместимость с UI статусом проверенного факта
   | 'hypothesis'        // Рабочая гипотеза Пикселя
+  | 'observation'       // Наблюдение (требует проверки)
+  | 'temporary_note'    // Черновик / временная заметка
   | 'needs_verification'; // Требует деликатного уточнения в диалоге
 
 export interface AnnaMemoryItem {
   id: string;
+  title?: string;
   category: AnnaMemoryCategory;
   content: string;
   status: AnnaMemoryStatus;
@@ -33,9 +37,13 @@ export interface AnnaProfile {
   name: string;
   preferredName: string;
   role: string;
+  schools?: string[];
+  background?: string;
+  backgroundVerification?: string;
   backgroundSummary: string;
   psychologicalBackground: string;
   communicationStyle: string;
+  communicationTone?: string;
   updatedAt: string;
 }
 
@@ -82,9 +90,13 @@ export const INITIAL_ANNA_PROFILE: AnnaProfile = {
   name: 'Анна',
   preferredName: 'Анна',
   role: 'Управляющая кибершколами KIBERone и Renderia',
+  schools: ['KIBERone', 'Renderia'],
+  background: 'Высшее образование детского психолога',
+  backgroundVerification: 'Подтверждено в диалоге',
   backgroundSummary: 'Чуткий, тёплый и ответственный руководитель. Бережно относится к детям и образовательному процессу.',
   psychologicalBackground: 'Высшее образование детского психолога (чуткое понимание возрастной психологии и бережный контакт с учениками и родителями)',
   communicationStyle: 'Спокойный, уважительный, тёплый, поддерживающий диалог без фамильярности и без сухого корпоративного тона',
+  communicationTone: 'Спокойный, тёплый, поддерживающий',
   updatedAt: new Date().toISOString(),
 };
 
@@ -130,6 +142,7 @@ export const INITIAL_ANNA_INTERESTS: AnnaInterest[] = [
 export const INITIAL_ANNA_MEMORIES: AnnaMemoryItem[] = [
   {
     id: 'mem-warm-character',
+    title: 'Чуткий характер и теплота',
     category: 'confirmed_fact',
     content: 'Анна — тёплый, деликатный и чуткий человек, с душой относящийся к детям и своей работе.',
     status: 'confirmed',
@@ -140,6 +153,7 @@ export const INITIAL_ANNA_MEMORIES: AnnaMemoryItem[] = [
   },
   {
     id: 'mem-psych-degree',
+    title: 'Психологическое образование',
     category: 'observation',
     content: 'Имеет психологическое образование (детский психолог). В беседах проявляет понимание детской мотивации.',
     status: 'needs_verification',
@@ -150,6 +164,7 @@ export const INITIAL_ANNA_MEMORIES: AnnaMemoryItem[] = [
   },
   {
     id: 'mem-pastel-palette',
+    title: 'Пастельная цветовая палитра',
     category: 'preference',
     content: 'Предпочитает светлые пастельные тона (розовый, небесно-голубой, молочный, лавандовый) в визуальных решениях.',
     status: 'confirmed',
@@ -160,6 +175,7 @@ export const INITIAL_ANNA_MEMORIES: AnnaMemoryItem[] = [
   },
   {
     id: 'mem-kiber-renderia',
+    title: 'Руководство двумя школами',
     category: 'work_context',
     content: 'Руководит направлениями двух школ: кибершколы KIBERone и школы креативных индустрий Renderia.',
     status: 'confirmed',

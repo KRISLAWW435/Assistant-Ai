@@ -13,6 +13,7 @@ import {
   AnnaMemoryBundle,
   AnnaMemoryCategory,
   AnnaMemoryItem,
+  AnnaMemoryStatus,
   AnnaPreference,
   AnnaProfile,
   AnnaProjectContext,
@@ -24,6 +25,16 @@ import {
 
 const WEB_STORAGE_KEY = 'kiber_anna_long_term_memory_v1';
 const AUTO_MEMORY_FLAG_KEY = 'kiber_anna_auto_memory_enabled';
+
+export interface AnnaStorageInfo {
+  isElectron: boolean;
+  basePath: string;
+  storagePath: string;
+  isAutoSaveEnabled: boolean;
+  autoSaveEnabled: boolean;
+  itemCount: number;
+  lastSavedAt: string;
+}
 
 class AnnaMemoryManager {
   private bundle: AnnaMemoryBundle | null = null;
@@ -42,24 +53,94 @@ class AnnaMemoryManager {
     return Boolean(window.electronAPI?.annaMemory);
   }
 
-  public async getStorageInfo(): Promise<{
-    isElectron: boolean;
-    storagePath: string;
-    autoSaveEnabled: boolean;
-    itemCount: number;
-    lastSavedAt: string;
-  }> {
-    if (this.isElectron() && window.electronAPI?.annaMemory) {
-      return await window.electronAPI.annaMemory.getStorageInfo();
+  public getAll(): AnnaMemoryBundle {
+    if (this.bundle) return this.bundle;
+    return this.loadBundleSync();
+  }
+
+  public loadBundleSync(): AnnaMemoryBundle {
+    if (this.bundle) return this.bundle;
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(WEB_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as AnnaMemoryBundle;
+          this.bundle = parsed;
+          return parsed;
+        }
+      } catch {
+        // ignore parse error
+      }
     }
-    const bundle = await this.loadBundle();
+
+    const initialBundle: AnnaMemoryBundle = {
+      profile: { ...INITIAL_ANNA_PROFILE },
+      interests: [...INITIAL_ANNA_INTERESTS],
+      preferences: [...INITIAL_ANNA_PREFERENCES],
+      projects: [
+        {
+          id: 'proj-kiberone-start',
+          schoolId: 'kiberone',
+          name: 'Учебный год KIBERone',
+          description: 'Сопровождение групп, открытые уроки, контроль посещаемости и работы с родителями',
+          status: 'active',
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'proj-renderia-start',
+          schoolId: 'renderia',
+          name: 'Развитие направлений Renderia',
+          description: 'Курсы 3D-графики, анимации и цифрового творчества, мастер-классы',
+          status: 'active',
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      memories: [...INITIAL_ANNA_MEMORIES],
+      storageInfo: {
+        isElectron: false,
+        storagePath: 'Локальное изолированное хранилище браузера (IndexedDB / Web Storage)',
+        autoSaveEnabled: this.autoSaveEnabled,
+        lastSavedAt: new Date().toISOString(),
+        version: '1.0.0',
+      },
+    };
+
+    this.bundle = initialBundle;
+    this.persistWebBundle(initialBundle);
+    return initialBundle;
+  }
+
+  public getStorageInfoSync(): AnnaStorageInfo {
+    const isElec = this.isElectron();
+    const bundle = this.getAll();
+    const pathStr = isElec
+      ? 'AppData/Roaming/kiberone-renderia-assistant/PixelData/Anna/'
+      : 'Локальное изолированное хранилище браузера (IndexedDB / Web Storage)';
     return {
-      isElectron: false,
-      storagePath: 'Локальное изолированное хранилище браузера (IndexedDB / Web Storage)',
+      isElectron: isElec,
+      basePath: pathStr,
+      storagePath: pathStr,
+      isAutoSaveEnabled: this.autoSaveEnabled,
       autoSaveEnabled: this.autoSaveEnabled,
       itemCount: bundle.memories.length,
-      lastSavedAt: bundle.storageInfo.lastSavedAt,
+      lastSavedAt: bundle.storageInfo?.lastSavedAt || new Date().toISOString(),
     };
+  }
+
+  public async getStorageInfo(): Promise<AnnaStorageInfo> {
+    if (this.isElectron() && window.electronAPI?.annaMemory) {
+      const elecInfo = await window.electronAPI.annaMemory.getStorageInfo();
+      return {
+        isElectron: true,
+        basePath: elecInfo.storagePath,
+        storagePath: elecInfo.storagePath,
+        isAutoSaveEnabled: elecInfo.autoSaveEnabled,
+        autoSaveEnabled: elecInfo.autoSaveEnabled,
+        itemCount: elecInfo.itemCount,
+        lastSavedAt: elecInfo.lastSavedAt,
+      };
+    }
+    return this.getStorageInfoSync();
   }
 
   public isAutoSaveEnabled(): boolean {
@@ -248,6 +329,10 @@ class AnnaMemoryManager {
     return JSON.stringify(bundle, null, 2);
   }
 
+  public async exportBackup(): Promise<string> {
+    return this.exportBackupJson();
+  }
+
   public async importBackupJson(jsonString: string): Promise<boolean> {
     try {
       const parsed = JSON.parse(jsonString) as AnnaMemoryBundle;
@@ -267,6 +352,55 @@ class AnnaMemoryManager {
     } catch {
       return false;
     }
+  }
+
+  public async importBackup(jsonString: string): Promise<boolean> {
+    return this.importBackupJson(jsonString);
+  }
+
+  public subscribe(callback: (bundle: AnnaMemoryBundle) => void): () => void {
+    return this.onBundleChange(callback);
+  }
+
+  public async addItem(item: {
+    category: AnnaMemoryCategory;
+    status: AnnaMemoryStatus;
+    title?: string;
+    content: string;
+    confidence?: number;
+    source?: string;
+  }): Promise<AnnaMemoryItem> {
+    return this.addMemory({
+      category: item.category,
+      status: item.status,
+      title: item.title,
+      content: item.content,
+      confidence: item.confidence ?? 1.0,
+      sourceContext: item.source || 'manual',
+    });
+  }
+
+  public async updateItem(id: string, updates: Partial<AnnaMemoryItem>): Promise<void> {
+    const bundle = await this.loadBundle();
+    const target = bundle.memories.find((m) => m.id === id);
+    if (!target) return;
+
+    Object.assign(target, updates);
+    target.updatedAt = new Date().toISOString();
+    if (updates.status) {
+      target.lastVerifiedAt = new Date().toISOString();
+    }
+
+    if (this.isElectron() && window.electronAPI?.annaMemory) {
+      await window.electronAPI.annaMemory.updateMemory(target);
+    } else {
+      this.persistWebBundle(bundle);
+    }
+    this.notify();
+  }
+
+  public async deleteItem(id: string): Promise<void> {
+    return this.deleteMemory(id);
   }
 
   /**

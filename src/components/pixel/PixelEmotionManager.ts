@@ -150,6 +150,14 @@ export class PixelEmotionManager {
     }, 850);
   }
 
+  /**
+   * Trigger reaction when user clicks / pets Pixel
+   */
+  public triggerPetInteraction(): void {
+    this.reportUserActivity();
+    this.setEmotion('happy', 1800, true);
+  }
+
   public setVoiceState({
     isListening,
     isSpeaking,

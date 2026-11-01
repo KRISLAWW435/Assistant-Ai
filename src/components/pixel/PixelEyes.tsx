@@ -177,82 +177,34 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
     emotion === 'happy' || emotion === 'joy' || emotion === 'interacting';
 
   // Eyebrow paths calculation
-  const eyebrowStroke = '#475569';
-  const eyebrowWidth = 1.8;
-
-  // Dynamic eyebrow geometry based on active emotion
-  const getEyebrows = () => {
-    const browBaseY = eyeCy - ryPct * 1.28;
-
-    if (emotion === 'joy' || emotion === 'happy' || emotion === 'interacting') {
-      // Cheerful arched eyebrows
-      return {
-        left: `M ${leftEyeCx - rxPct * 0.8} ${browBaseY + 1} Q ${leftEyeCx} ${browBaseY - 3.2} ${leftEyeCx + rxPct * 0.8} ${browBaseY + 0.8}`,
-        right: `M ${rightEyeCx - rxPct * 0.8} ${browBaseY + 0.8} Q ${rightEyeCx} ${browBaseY - 3.2} ${rightEyeCx + rxPct * 0.8} ${browBaseY + 1}`,
-      };
-    }
+  // Subtle, delicate eyebrow accents only for inquiry/surprise states;
+  // hidden completely for idle, calm, joy, speaking, listening, sleepy
+  const getEyebrows = (): { left: string; right: string } | null => {
+    const browBaseY = eyeCy - ryPct * 1.22;
 
     if (emotion === 'surprise' || emotion === 'surprised') {
-      // High raised surprised arches
       return {
-        left: `M ${leftEyeCx - rxPct * 0.85} ${browBaseY - 2.5} Q ${leftEyeCx} ${browBaseY - 5.5} ${leftEyeCx + rxPct * 0.85} ${browBaseY - 2.5}`,
-        right: `M ${rightEyeCx - rxPct * 0.85} ${browBaseY - 2.5} Q ${rightEyeCx} ${browBaseY - 5.5} ${rightEyeCx + rxPct * 0.85} ${browBaseY - 2.5}`,
+        left: `M ${leftEyeCx - rxPct * 0.6} ${browBaseY - 1.2} Q ${leftEyeCx} ${browBaseY - 2.8} ${leftEyeCx + rxPct * 0.6} ${browBaseY - 1.2}`,
+        right: `M ${rightEyeCx - rxPct * 0.6} ${browBaseY - 1.2} Q ${rightEyeCx} ${browBaseY - 2.8} ${rightEyeCx + rxPct * 0.6} ${browBaseY - 1.2}`,
       };
     }
 
     if (emotion === 'thoughtful' || emotion === 'thinking') {
-      // Asymmetric contemplative eyebrows: right raised quizzically, left flat
       return {
-        left: `M ${leftEyeCx - rxPct * 0.75} ${browBaseY} Q ${leftEyeCx} ${browBaseY - 0.5} ${leftEyeCx + rxPct * 0.75} ${browBaseY + 0.5}`,
-        right: `M ${rightEyeCx - rxPct * 0.75} ${browBaseY - 2} Q ${rightEyeCx} ${browBaseY - 4.2} ${rightEyeCx + rxPct * 0.75} ${browBaseY - 1.5}`,
-      };
-    }
-
-    if (emotion === 'sadness') {
-      // Empathetic/concerned brows: inner tips raised, outer tips dipping
-      return {
-        left: `M ${leftEyeCx - rxPct * 0.8} ${browBaseY + 1.2} Q ${leftEyeCx} ${browBaseY - 1.8} ${leftEyeCx + rxPct * 0.8} ${browBaseY - 3.2}`,
-        right: `M ${rightEyeCx - rxPct * 0.8} ${browBaseY - 3.2} Q ${rightEyeCx} ${browBaseY - 1.8} ${rightEyeCx + rxPct * 0.8} ${browBaseY + 1.2}`,
-      };
-    }
-
-    if (emotion === 'empathy' || emotion === 'empathetic') {
-      // Gentle caring slight inner tilt
-      return {
-        left: `M ${leftEyeCx - rxPct * 0.75} ${browBaseY + 0.5} Q ${leftEyeCx} ${browBaseY - 1.8} ${leftEyeCx + rxPct * 0.75} ${browBaseY - 2.2}`,
-        right: `M ${rightEyeCx - rxPct * 0.75} ${browBaseY - 2.2} Q ${rightEyeCx} ${browBaseY - 1.8} ${rightEyeCx + rxPct * 0.75} ${browBaseY + 0.5}`,
+        left: `M ${leftEyeCx - rxPct * 0.55} ${browBaseY} Q ${leftEyeCx} ${browBaseY - 0.4} ${leftEyeCx + rxPct * 0.55} ${browBaseY + 0.3}`,
+        right: `M ${rightEyeCx - rxPct * 0.55} ${browBaseY - 1.0} Q ${rightEyeCx} ${browBaseY - 2.2} ${rightEyeCx + rxPct * 0.55} ${browBaseY - 0.8}`,
       };
     }
 
     if (emotion === 'curiosity' || emotion === 'curious') {
-      // Inquisitive tilt
       return {
-        left: `M ${leftEyeCx - rxPct * 0.8} ${browBaseY - 1} Q ${leftEyeCx} ${browBaseY - 3.5} ${leftEyeCx + rxPct * 0.8} ${browBaseY - 1.5}`,
-        right: `M ${rightEyeCx - rxPct * 0.8} ${browBaseY - 2} Q ${rightEyeCx} ${browBaseY - 4.2} ${rightEyeCx + rxPct * 0.8} ${browBaseY - 2}`,
+        left: `M ${leftEyeCx - rxPct * 0.55} ${browBaseY - 0.4} Q ${leftEyeCx} ${browBaseY - 1.6} ${leftEyeCx + rxPct * 0.55} ${browBaseY - 0.6}`,
+        right: `M ${rightEyeCx - rxPct * 0.55} ${browBaseY - 0.8} Q ${rightEyeCx} ${browBaseY - 2.0} ${rightEyeCx + rxPct * 0.55} ${browBaseY - 1.0}`,
       };
     }
 
-    if (emotion === 'shy' || emotion === 'bashful') {
-      // Shy soft gentle lowered brows
-      return {
-        left: `M ${leftEyeCx - rxPct * 0.7} ${browBaseY + 0.8} Q ${leftEyeCx} ${browBaseY - 0.8} ${leftEyeCx + rxPct * 0.7} ${browBaseY + 0.5}`,
-        right: `M ${rightEyeCx - rxPct * 0.7} ${browBaseY + 0.5} Q ${rightEyeCx} ${browBaseY - 0.8} ${rightEyeCx + rxPct * 0.7} ${browBaseY + 0.8}`,
-      };
-    }
-
-    if (emotion === 'sleepy' || emotion === 'sleeping' || microBehavior === 'doze') {
-      // Relaxed sleeping brows
-      return {
-        left: `M ${leftEyeCx - rxPct * 0.75} ${browBaseY + 1} Q ${leftEyeCx} ${browBaseY} ${leftEyeCx + rxPct * 0.75} ${browBaseY + 1.2}`,
-        right: `M ${rightEyeCx - rxPct * 0.75} ${browBaseY + 1.2} Q ${rightEyeCx} ${browBaseY} ${rightEyeCx + rxPct * 0.75} ${browBaseY + 1}`,
-      };
-    }
-
-    // Default / Calm / Idle: natural gentle arc
-    return {
-      left: `M ${leftEyeCx - rxPct * 0.75} ${browBaseY} Q ${leftEyeCx} ${browBaseY - 2} ${leftEyeCx + rxPct * 0.75} ${browBaseY}`,
-      right: `M ${rightEyeCx - rxPct * 0.75} ${browBaseY} Q ${rightEyeCx} ${browBaseY - 2} ${rightEyeCx + rxPct * 0.75} ${browBaseY}`,
-    };
+    // Completely no eyebrows for calm, idle, speaking, listening, happy, sleepy, etc.
+    return null;
   };
 
   const eyebrows = getEyebrows();
@@ -292,18 +244,20 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
         </radialGradient>
       </defs>
 
-      {/* EXPRESSIVE EYEBROWS */}
-      <g
-        fill="none"
-        stroke={eyebrowStroke}
-        strokeWidth={eyebrowWidth}
-        strokeLinecap="round"
-        opacity="0.85"
-        className="transition-all duration-300 ease-out"
-      >
-        <path d={eyebrows.left} />
-        <path d={eyebrows.right} />
-      </g>
+      {/* ULTRA-THIN DELICATE ACCENT EYEBROWS (Only for subtle thinking/curiosity/surprise) */}
+      {eyebrows && (
+        <g
+          fill="none"
+          stroke="#94A3B8"
+          strokeWidth="0.8"
+          strokeLinecap="round"
+          opacity="0.32"
+          className="transition-all duration-300 ease-out"
+        >
+          <path d={eyebrows.left} />
+          <path d={eyebrows.right} />
+        </g>
+      )}
 
       {/* 1. HAPPY CRESCENTS MODE: Joyful upward curved smiling eyes (^ ^) */}
       {isHappyCrescents ? (

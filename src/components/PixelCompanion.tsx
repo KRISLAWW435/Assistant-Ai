@@ -68,6 +68,10 @@ import { MarkdownMessageContent } from './MarkdownMessageContent';
 import { browserSpeechInput } from '../providers/voice/browserSpeechInputProvider';
 import { voiceManager } from '../providers/voice/voiceManager';
 import {
+  CoordinatorSnapshot,
+  pixelVoiceCoordinator,
+} from '../providers/voice/pixelVoiceCoordinator';
+import {
   SpeechInputStatus,
   SpeechRecognitionResultEvent,
 } from '../types/voice';
@@ -170,75 +174,34 @@ function formatTimeOnly(date: Date = new Date()): string {
   });
 }
 
-function readStoredCustomPosition(): CompanionCustomPosition | null {
-  try {
-    const raw = window.localStorage.getItem(PIXEL_POSITION_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      typeof parsed.x === 'number' &&
-      typeof parsed.y === 'number' &&
-      Number.isFinite(parsed.x) &&
-      Number.isFinite(parsed.y)
-    ) {
-      return { x: parsed.x, y: parsed.y };
-    }
-  } catch {
-    // ignore storage errors
-  }
-  return null;
+function cleanSpeechBubbleText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/^\[(?:Отправлено через Пикселя|GeminiProvider|Specialist)\]\s*/i, '')
+    .replace(
+      /\n*\[(?:Остановлено|Генерация остановлена|Генерация ответа Пикселя остановлена)\]\s*$/i,
+      ''
+    )
+    .replace(/\s*\(ID:\s*[a-zA-Z0-9_-]+\)/gi, '')
+    .replace(/```[\s\S]*?```/g, ' [таблица/код] ')
+    .trim();
 }
 
-function writeStoredCustomPosition(pos: CompanionCustomPosition | null): void {
-  try {
-    if (!pos) {
-      window.localStorage.removeItem(PIXEL_POSITION_STORAGE_KEY);
-    } else {
-      window.localStorage.setItem(
-        PIXEL_POSITION_STORAGE_KEY,
-        JSON.stringify(pos)
-      );
-    }
-  } catch {
-    // ignore storage errors
-  }
-}
-
-function getPetDimensionsPx(): { width: number; height: number } {
-  if (typeof window === 'undefined') return { width: 72, height: 72 };
-  if (window.innerWidth < 640) return { width: 54, height: 54 };
-  if (window.innerWidth < 1024) return { width: 64, height: 64 };
-  return { width: 74, height: 74 };
-}
-
-function clampPositionToCentralWorkspace(
-  pos: CompanionCustomPosition,
-  sidebarCollapsed: boolean,
-  rightPanelOpen: boolean
-): CompanionCustomPosition {
-  if (typeof window === 'undefined') return pos;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const { width: petW, height: petH } = getPetDimensionsPx();
-
-  // Left boundary of the central workspace (respects Sidebar on lg+)
-  const sidebarWidth = vw >= 1024 ? (sidebarCollapsed ? 68 : 288) : 0;
-  // Right boundary of the central workspace (respects RightWorkspacePanel on xl+)
-  const rightPanelWidth = vw >= 1280 && rightPanelOpen ? 340 : 0;
-  // Top boundary (respects TopBar)
-  const topBarHeight = 64;
-
-  const minX = sidebarWidth + 12;
-  const maxX = Math.max(minX, vw - rightPanelWidth - petW - 12);
-  const minY = topBarHeight + 12;
-  const maxY = Math.max(minY, vh - petH - 12);
-
-  return {
-    x: Math.round(Math.min(maxX, Math.max(minX, pos.x))),
-    y: Math.round(Math.min(maxY, Math.max(minY, pos.y))),
-  };
+function isTechnicalOrErrorMessage(text: string): boolean {
+  if (!text) return true;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes('quota exceeded') ||
+    lower.includes('rate limit') ||
+    lower.includes('websocket error') ||
+    lower.includes('network error') ||
+    lower.includes('429') ||
+    lower.includes('500 internal') ||
+    lower.includes('stack trace') ||
+    lower.includes('api_key') ||
+    lower.startsWith('error:') ||
+    lower.startsWith('{')
+  );
 }
 
 export const PixelCompanion: React.FC<PixelCompanionProps> = ({
@@ -380,25 +343,18 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     y: 0,
   });
 
-  // Drag-and-drop position state (Part 3)
-  const [customPos, setCustomPos] = useState<CompanionCustomPosition | null>(
-    () => {
-      const fromLocal = readStoredCustomPosition();
-      if (fromLocal) return fromLocal;
-      return companionPreferences.customPosition || null;
+  // Clear legacy custom drag position from localStorage on mount
+  useEffect(() => {
+    try {
+      window.localStorage.removeItem('kiber_renderia_pixel_custom_position_v1');
+    } catch {
+      // ignore
     }
-  );
-  const [isDragging, setIsDragging] = useState(false);
-  const [controlsVisibleByTap, setControlsVisibleByTap] = useState(false);
+  }, []);
 
-  const dragStartRef = useRef<{
-    pointerId: number;
-    startClientX: number;
-    startClientY: number;
-    originX: number;
-    originY: number;
-    hasMovedBeyondThreshold: boolean;
-  } | null>(null);
+  const [controlsVisibleByTap, setControlsVisibleByTap] = useState(false);
+  const [isRecentHistoryExpanded, setIsRecentHistoryExpanded] = useState(false);
+  const [dismissedBubbleTurnId, setDismissedBubbleTurnId] = useState<string | null>(null);
 
   // Chat input & streaming state
   const [chatInput, setChatInput] = useState('');
@@ -459,13 +415,14 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const [currentlySpeakingMsgId, setCurrentlySpeakingMsgId] = useState<
     string | null
   >(null);
-  const [isSpeakingActive, setIsSpeakingActive] = useState(false);
   const [playbackState, setPlaybackState] = useState(() =>
     voiceManager.getPlaybackState()
   );
   const [stoppedReadingSession, setStoppedReadingSession] = useState(() =>
     voiceManager.getStoppedReadingSession()
   );
+  const [coordinatorSnapshot, setCoordinatorSnapshot] =
+    useState<CoordinatorSnapshot>(() => pixelVoiceCoordinator.getSnapshot());
 
   // Store pre-speech text to avoid ever duplicating/accumulating interim recognition chunks
   const speechSessionBaseTextRef = useRef<string>('');
@@ -478,7 +435,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     []
   );
 
-  // Subscribe to speech recognition and speech synthesis events
+  // Subscribe to speech recognition, TTS and Gemini Live coordinator events
   useEffect(() => {
     const unsubStatus = browserSpeechInput.onStatusChange((status) => {
       setSpeechInputStatus(status);
@@ -518,12 +475,15 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
     const unsubPlayback = voiceManager.onPlaybackStateChange((st) => {
       setPlaybackState(st);
-      setIsSpeakingActive(st.status === 'playing' || st.status === 'loading');
       setCurrentlySpeakingMsgId(st.messageId);
     });
 
     const unsubStoppedReading = voiceManager.onStoppedReadingChange((sess) => {
       setStoppedReadingSession(sess);
+    });
+
+    const unsubCoordinator = pixelVoiceCoordinator.onStateChange((snap) => {
+      setCoordinatorSnapshot(snap);
     });
 
     return () => {
@@ -532,8 +492,38 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       unsubResult();
       unsubPlayback();
       unsubStoppedReading();
+      unsubCoordinator();
     };
   }, []);
+
+  // Unified voice states across TTS, STT, and Gemini Live
+  const isSpeakingUnified =
+    playbackState.status === 'playing' ||
+    coordinatorSnapshot.liveState === 'speaking';
+
+  const isListeningUnified =
+    speechInputStatus === 'listening' ||
+    speechInputStatus === 'recognizing' ||
+    coordinatorSnapshot.liveState === 'listening';
+
+  const isThinkingUnified =
+    isPixelGenerating ||
+    coordinatorSnapshot.liveState === 'thinking';
+
+  // Synchronize emotion manager across whole application (both main screen and dialog)
+  useEffect(() => {
+    pixelEmotionManager.setVoiceState({
+      isListening: isListeningUnified,
+      isSpeaking: isSpeakingUnified,
+    });
+  }, [isListeningUnified, isSpeakingUnified]);
+
+  useEffect(() => {
+    pixelEmotionManager.setThinkingState(isThinkingUnified);
+  }, [isThinkingUnified]);
+
+  // Backward compatibility alias for any existing callbacks
+  const isSpeakingActive = isSpeakingUnified;
 
   const handleToggleVoiceRecord = async () => {
     if (speechInputStatus === 'listening' || speechInputStatus === 'recognizing') {
@@ -616,45 +606,152 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     prefsRef.current = companionPreferences;
   }, [companionPreferences]);
 
-  // Sync customPosition if restored from backup or loaded from IndexedDB
-  useEffect(() => {
-    if (companionPreferences.customPosition !== undefined) {
-      const incoming = companionPreferences.customPosition || null;
-      if (incoming) {
-        const clamped = clampPositionToCentralWorkspace(
-          incoming,
-          sidebarCollapsed,
-          rightPanelOpen
+  // Resolve active conversational speech bubble turn for main screen
+  const activeConversationBubble = useMemo(() => {
+    // 1. If currently speaking (Gemini Live or TTS)
+    if (isSpeakingUnified) {
+      if (coordinatorSnapshot.liveState === 'speaking') {
+        const lastModelTurn = [...coordinatorSnapshot.transcripts]
+          .reverse()
+          .find((t) => t.role === 'pixel' && t.text.trim());
+        if (lastModelTurn) {
+          const clean = cleanSpeechBubbleText(lastModelTurn.text);
+          if (clean && !isTechnicalOrErrorMessage(clean)) {
+            return {
+              id: lastModelTurn.id || `live-${lastModelTurn.timestamp}`,
+              speaker: 'Пиксель',
+              text: clean,
+              isSpeaking: true,
+              isListening: false,
+              isUser: false,
+            };
+          }
+        }
+      }
+      const spokenTts = voiceManager.getCurrentSpokenText();
+      if (spokenTts) {
+        const clean = cleanSpeechBubbleText(spokenTts);
+        if (clean && !isTechnicalOrErrorMessage(clean)) {
+          return {
+            id: `tts-${playbackState.messageId || 'current'}`,
+            speaker: 'Пиксель',
+            text: clean,
+            isSpeaking: true,
+            isListening: false,
+            isUser: false,
+          };
+        }
+      }
+      if (playbackState.messageId) {
+        const msg = companionMessages.find(
+          (m) => m.id === playbackState.messageId
         );
-        setCustomPos(clamped);
-        writeStoredCustomPosition(clamped);
+        if (msg) {
+          const clean = cleanSpeechBubbleText(msg.content);
+          if (clean && !isTechnicalOrErrorMessage(clean)) {
+            return {
+              id: msg.id,
+              speaker: 'Пиксель',
+              text: clean,
+              isSpeaking: true,
+              isListening: false,
+              isUser: false,
+            };
+          }
+        }
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companionPreferences.customPosition]);
 
-  // Re-clamp custom position on window resize or when panels open/close
-  useEffect(() => {
-    const handleReclamp = () => {
-      setCustomPos((prev) => {
-        if (!prev) return null;
-        const clamped = clampPositionToCentralWorkspace(
-          prev,
-          sidebarCollapsed,
-          rightPanelOpen
-        );
-        if (clamped.x !== prev.x || clamped.y !== prev.y) {
-          writeStoredCustomPosition(clamped);
-          return clamped;
+    // 2. If user is actively speaking (Listening state)
+    if (isListeningUnified) {
+      if (chatInput.trim()) {
+        return {
+          id: 'user-dictating-active',
+          speaker: 'Анна (слушаю...)',
+          text: chatInput.trim(),
+          isSpeaking: false,
+          isListening: true,
+          isUser: true,
+        };
+      }
+      if (coordinatorSnapshot.liveState === 'listening') {
+        const lastUserTurn = [...coordinatorSnapshot.transcripts]
+          .reverse()
+          .find((t) => t.role === 'user' && t.text.trim());
+        if (lastUserTurn) {
+          return {
+            id: lastUserTurn.id || `user-live-${lastUserTurn.timestamp}`,
+            speaker: 'Анна (слушаю...)',
+            text: lastUserTurn.text.trim(),
+            isSpeaking: false,
+            isListening: true,
+            isUser: true,
+          };
         }
-        return prev;
-      });
-    };
+      }
+      return {
+        id: 'user-listening-idle',
+        speaker: 'Анна',
+        text: 'Слушаю вас, Анна...',
+        isSpeaking: false,
+        isListening: true,
+        isUser: true,
+      };
+    }
 
-    handleReclamp();
-    window.addEventListener('resize', handleReclamp);
-    return () => window.removeEventListener('resize', handleReclamp);
-  }, [sidebarCollapsed, rightPanelOpen]);
+    // 3. Autonomous reminder, break reminder, or petting reaction
+    if (speechBubble) {
+      return {
+        id: `bubble-${speechBubble.text.slice(0, 16)}`,
+        speaker: 'Пиксель',
+        text: speechBubble.text,
+        isBreakReminder: Boolean(speechBubble.isBreakReminder),
+        isSpeaking: false,
+        isListening: false,
+        isUser: false,
+      };
+    }
+
+    // 4. Most recent conversation turn between Anna and Pixel
+    if (companionMessages.length > 0) {
+      const lastMsg = companionMessages[companionMessages.length - 1];
+      if (lastMsg && lastMsg.id !== dismissedBubbleTurnId) {
+        const clean = cleanSpeechBubbleText(lastMsg.content);
+        if (clean && !isTechnicalOrErrorMessage(clean)) {
+          return {
+            id: lastMsg.id,
+            speaker: lastMsg.role === 'pixel' ? 'Пиксель' : 'Анна',
+            text: clean,
+            isSpeaking: false,
+            isListening: false,
+            isUser: lastMsg.role === 'user',
+          };
+        }
+      }
+    }
+
+    return null;
+  }, [
+    isSpeakingUnified,
+    isListeningUnified,
+    coordinatorSnapshot.liveState,
+    coordinatorSnapshot.transcripts,
+    playbackState.messageId,
+    companionMessages,
+    chatInput,
+    speechBubble,
+    dismissedBubbleTurnId,
+  ]);
+
+  // Last 3 non-technical conversational turns for compact history viewing
+  const recentTurns = useMemo(() => {
+    return companionMessages
+      .filter((m) => {
+        const clean = cleanSpeechBubbleText(m.content);
+        return Boolean(clean) && !isTechnicalOrErrorMessage(clean);
+      })
+      .slice(-3);
+  }, [companionMessages]);
 
   const lastUserActivityMsRef = useRef<number>(Date.now());
   const lastTypingMsRef = useRef<number>(0);
@@ -968,108 +1065,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     }
   };
 
-  // ============================================================================
-  // DRAG-AND-DROP VS. CLICK (PETTING) HANDLERS (Part 3)
-  // ============================================================================
 
-  const handleCharacterPointerDown = (
-    e: React.PointerEvent<HTMLDivElement>
-  ) => {
-    // Only primary button for mouse
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (!petContainerRef.current) return;
-
-    const rect = petContainerRef.current.getBoundingClientRect();
-    dragStartRef.current = {
-      pointerId: e.pointerId,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      originX: rect.left,
-      originY: rect.top,
-      hasMovedBeyondThreshold: false,
-    };
-
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // ignore pointer capture errors
-    }
-  };
-
-  const handleCharacterPointerMove = (
-    e: React.PointerEvent<HTMLDivElement>
-  ) => {
-    const dragState = dragStartRef.current;
-    if (!dragState || dragState.pointerId !== e.pointerId) return;
-
-    const dx = e.clientX - dragState.startClientX;
-    const dy = e.clientY - dragState.startClientY;
-    const dist = Math.hypot(dx, dy);
-
-    if (!dragState.hasMovedBeyondThreshold) {
-      if (dist < DRAG_THRESHOLD_PX) {
-        return;
-      }
-      dragState.hasMovedBeyondThreshold = true;
-      setIsDragging(true);
-    }
-
-    const nextCandidate: CompanionCustomPosition = {
-      x: dragState.originX + dx,
-      y: dragState.originY + dy,
-    };
-    const clamped = clampPositionToCentralWorkspace(
-      nextCandidate,
-      sidebarCollapsed,
-      rightPanelOpen
-    );
-    setCustomPos(clamped);
-  };
-
-  const handleCharacterPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const dragState = dragStartRef.current;
-    if (!dragState || dragState.pointerId !== e.pointerId) return;
-
-    try {
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      }
-    } catch {
-      // ignore
-    }
-
-    const wasDragged = dragState.hasMovedBeyondThreshold;
-    dragStartRef.current = null;
-    setIsDragging(false);
-
-    if (wasDragged) {
-      // Persist new dragged position; DO NOT trigger petting
-      if (customPos) {
-        writeStoredCustomPosition(customPos);
-        updatePreferences({
-          customPosition: customPos,
-        });
-      }
-      return;
-    }
-
-    // Normal click/tap without dragging -> Pet Pixel!
-    triggerPettingReaction();
-  };
-
-  const handleCharacterPointerCancel = () => {
-    dragStartRef.current = null;
-    setIsDragging(false);
-  };
-
-  const handleResetToCorner = (e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    setCustomPos(null);
-    writeStoredCustomPosition(null);
-    updatePreferences({
-      customPosition: null,
-    });
-  };
 
   // ============================================================================
   // BREAK REMINDER ACTIONS (Part 9)
@@ -1748,19 +1744,13 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     activeSection === 'methodist' ||
     activeSection === 'analyst';
 
-  // Default corner position when customPos is null:
-  // Placed in bottom-right of central workspace area, never overlapping input or right panel
-  const defaultVerticalClass = isChatSection
-    ? 'bottom-28 xl:bottom-4'
-    : 'bottom-4';
-  const defaultHorizontalClass = rightPanelOpen
-    ? 'right-3 xl:right-[354px]'
-    : 'right-3 sm:right-5';
+  // Anchored to bottom-left of central workspace, smoothly adjusting with sidebar width
+  const baseLeftClass = sidebarCollapsed
+    ? 'left-4 sm:left-6 lg:left-[84px]'
+    : 'left-4 sm:left-6 lg:left-[304px]';
 
-  // Fixed dialog anchor in bottom-right of central workspace so dialog is always comfortably on-screen
-  const dialogPositionClass = rightPanelOpen
-    ? 'bottom-24 xl:bottom-24 right-3 xl:right-[354px]'
-    : 'bottom-24 right-3 sm:right-5';
+  // Dialog anchored directly above Pixel in bottom-left
+  const dialogPositionClass = `bottom-24 ${baseLeftClass} transition-[left] duration-300 ease-out`;
 
   const school = SCHOOLS[activeSchool];
 
@@ -1829,17 +1819,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   <span>Молчать</span>
                 </button>
               )}
-              {customPos && (
-                <button
-                  type="button"
-                  onClick={handleResetToCorner}
-                  title="Вернуть Пикселя в правый нижний угол"
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-xl border border-slate-200 bg-white text-[10px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer"
-                >
-                  <RotateCcw className="w-3 h-3 text-slate-400" />
-                  <span>В угол</span>
-                </button>
-              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -3856,60 +3836,139 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       )}
 
       {/* ====================================================================
-          2. COMPACT DRAGGABLE DIGITAL PET «ПИКСЕЛЬ» (Parts 1–6, 8)
-          No rectangular background, no house, no yarn, no antenna!
+          2. ANCHORED DIGITAL PET «ПИКСЕЛЬ» IN BOTTOM-LEFT OF CENTRAL WORKSPACE
+          Strictly fixed in bottom-left; adjusts smoothly when sidebar collapses/expands.
+          No dragging displacement; clicks trigger petting & toggle dialog.
          ==================================================================== */}
       <div
         ref={petContainerRef}
-        style={
-          customPos
-            ? {
-                left: `${customPos.x}px`,
-                top: `${customPos.y}px`,
-              }
-            : undefined
-        }
-        className={`fixed z-30 flex flex-col items-end pointer-events-none select-none ${
-          customPos
-            ? ''
-            : `transition-all duration-200 ${defaultVerticalClass} ${defaultHorizontalClass}`
-        }`}
+        className={`fixed z-30 flex flex-col items-start pointer-events-none select-none bottom-4 sm:bottom-6 ${baseLeftClass} transition-[left] duration-300 ease-out`}
       >
-        {/* Compact Speech Bubble (Separate from Character, positioned strictly above Pixel, with 5s auto-hide) */}
-        {!dialogOpen && speechBubble && (
+        {/* Compact Conversational Speech Bubble (Positioned strictly above Pixel in bottom-left) */}
+        {!dialogOpen && activeConversationBubble && (
           <div
             role="status"
             aria-live="polite"
             onMouseEnter={handleBubbleMouseEnter}
             onMouseLeave={handleBubbleMouseLeave}
-            className={`pointer-events-auto relative mb-2 max-w-[215px] sm:max-w-[240px] rounded-2xl bg-white/98 border border-slate-200/90 shadow-xl px-3.5 py-2.5 text-xs text-slate-800 transition-all duration-300 select-text ${
+            className={`pointer-events-auto relative mb-2.5 max-w-[280px] sm:max-w-[340px] rounded-2xl bg-white/95 backdrop-blur-md border border-slate-200/90 shadow-xl px-3.5 py-2.5 text-xs text-slate-800 transition-all duration-300 select-text ${
               isBubbleFadingOut
                 ? 'opacity-0 scale-95 pointer-events-none'
-                : 'opacity-100 scale-100 animate-in fade-in slide-in-from-bottom-1 duration-150'
+                : 'opacity-100 scale-100 animate-in fade-in slide-in-from-bottom-2 duration-150'
             }`}
           >
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-[11px] sm:text-xs text-slate-800 leading-snug font-medium">
-                {speechBubble.text}
-              </p>
-              <button
-                type="button"
-                onClick={() => setSpeechBubble(null)}
-                title="Закрыть"
-                aria-label="Закрыть"
-                className="p-0.5 rounded-md text-slate-400 hover:text-slate-700 shrink-0 cursor-pointer"
-              >
-                <X className="w-3 h-3" />
-              </button>
+            {/* Header: Speaker identity + live activity indicators + mini actions */}
+            <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-slate-100">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    activeConversationBubble.isSpeaking
+                      ? 'bg-rose-500 animate-ping'
+                      : activeConversationBubble.isListening
+                        ? 'bg-sky-500 animate-pulse'
+                        : activeConversationBubble.isUser
+                          ? 'bg-emerald-500'
+                          : 'bg-pink-400'
+                  }`}
+                />
+                <span className="font-bold text-[11px] text-slate-900 truncate">
+                  {activeConversationBubble.speaker}
+                </span>
+                {activeConversationBubble.isSpeaking && (
+                  <span className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-semibold bg-rose-50 text-rose-600">
+                    <Volume2 className="w-2.5 h-2.5 animate-pulse" />
+                    <span>речь</span>
+                  </span>
+                )}
+                {activeConversationBubble.isListening && (
+                  <span className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-semibold bg-sky-50 text-sky-600">
+                    <Mic className="w-2.5 h-2.5 animate-pulse" />
+                    <span>слушает</span>
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1 shrink-0">
+                {recentTurns.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsRecentHistoryExpanded((v) => !v)}
+                    title={
+                      isRecentHistoryExpanded
+                        ? 'Скрыть историю'
+                        : 'Показать последние реплики'
+                    }
+                    className="px-1.5 py-0.5 rounded text-[10px] font-medium text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    {isRecentHistoryExpanded
+                      ? 'Скрыть'
+                      : `История (${recentTurns.length})`}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setDialogOpen(true)}
+                  title="Развернуть окно диалога"
+                  aria-label="Развернуть окно диалога"
+                  className="px-1.5 py-0.5 rounded text-[10px] font-semibold text-sky-600 hover:text-sky-800 hover:bg-sky-50 transition-colors cursor-pointer"
+                >
+                  Диалог
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDismissedBubbleTurnId(activeConversationBubble.id);
+                    setSpeechBubble(null);
+                  }}
+                  title="Закрыть облачко"
+                  aria-label="Закрыть облачко"
+                  className="p-0.5 rounded-md text-slate-400 hover:text-slate-700 shrink-0 cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
             </div>
 
+            {/* Main Current Spoken / Turn Text (Proper wrap, multiline support, comfortable font) */}
+            <div className="mt-2 text-[12px] sm:text-[13px] text-slate-800 leading-relaxed font-normal break-words whitespace-pre-wrap max-h-[140px] overflow-y-auto">
+              {activeConversationBubble.text}
+            </div>
+
+            {/* Expandable Mini-History Drawer (Last 2-3 Turns) */}
+            {isRecentHistoryExpanded && recentTurns.length > 0 && (
+              <div className="mt-2.5 pt-2 border-t border-slate-100/90 space-y-1.5 max-h-[130px] overflow-y-auto pr-1">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  Последние реплики:
+                </div>
+                {recentTurns.map((turn) => {
+                  const isUserTurn = turn.role === 'user';
+                  const cleanTurn = cleanSpeechBubbleText(turn.content);
+                  return (
+                    <div
+                      key={turn.id}
+                      className={`p-1.5 rounded-xl text-[11px] leading-snug break-words whitespace-pre-wrap ${
+                        isUserTurn
+                          ? 'bg-slate-100/80 text-slate-700'
+                          : 'bg-pink-50/70 text-slate-800 border border-pink-100/50'
+                      }`}
+                    >
+                      <span className="font-semibold text-slate-900 mr-1">
+                        {isUserTurn ? 'Анна:' : 'Пиксель:'}
+                      </span>
+                      <span>{cleanTurn}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {/* 60-Minute Active Work Break Actions */}
-            {speechBubble.isBreakReminder && (
+            {activeConversationBubble.isBreakReminder && (
               <div className="mt-2 pt-2 border-t border-slate-100 grid grid-cols-2 gap-1">
                 <button
                   type="button"
                   onClick={handleTakeBreakNow}
-                  className="col-span-2 inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-xl bg-slate-900 text-white text-[10px] font-semibold hover:bg-slate-800"
+                  className="col-span-2 inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-xl bg-slate-900 text-white text-[10px] font-semibold hover:bg-slate-800 cursor-pointer"
                 >
                   <Coffee className="w-3 h-3 text-[#FFD700]" />
                   <span>Отдохнуть сейчас</span>
@@ -3917,21 +3976,21 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 <button
                   type="button"
                   onClick={() => handleSnoozeBreak(15)}
-                  className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-semibold text-slate-700"
+                  className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-semibold text-slate-700 cursor-pointer"
                 >
                   Через 15 мин
                 </button>
                 <button
                   type="button"
                   onClick={() => handleSnoozeBreak(30)}
-                  className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-semibold text-slate-700"
+                  className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-semibold text-slate-700 cursor-pointer"
                 >
                   Через 30 мин
                 </button>
                 <button
                   type="button"
                   onClick={handleDisableBreakReminders}
-                  className="col-span-2 inline-flex items-center justify-center gap-1 py-0.5 text-[10px] text-slate-400 hover:text-slate-700"
+                  className="col-span-2 inline-flex items-center justify-center gap-1 py-0.5 text-[10px] text-slate-400 hover:text-slate-700 cursor-pointer"
                 >
                   <BellOff className="w-2.5 h-2.5" />
                   <span>Отключить напоминания</span>
@@ -3970,24 +4029,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 </span>
               )}
             </button>
-
-            {/* Return to Corner Button (Only shown on hover when Pixel was dragged from default corner) */}
-            {customPos && (
-              <button
-                type="button"
-                onClick={handleResetToCorner}
-                title="Вернуть в угол"
-                aria-label="Вернуть в угол"
-                className="opacity-0 group-hover:opacity-100 h-6 px-2 rounded-full bg-white/95 border border-slate-200 text-slate-600 hover:text-slate-900 shadow-sm text-[10px] font-medium inline-flex items-center gap-1 transition-all hover:scale-105 whitespace-nowrap cursor-pointer"
-              >
-                <RotateCcw className="w-2.5 h-2.5 text-slate-400" />
-                <span>В угол</span>
-              </button>
-            )}
           </div>
 
-
-          {/* Floating Hearts on Petting (2-4 hearts that rise & fade out) */}
+          {/* Floating Hearts on Petting */}
           {floatingHearts.length > 0 && (
             <div
               className="pointer-events-none absolute inset-0 overflow-visible z-30"
@@ -4011,29 +4055,24 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
             </div>
           )}
 
-          {/* Interactive Draggable & Pettable Little Fantasy Creature */}
+          {/* Interactive Fixed & Pettable Fantasy Creature (No Dragging displacement!) */}
           <div
-            onPointerDown={handleCharacterPointerDown}
-            onPointerMove={handleCharacterPointerMove}
-            onPointerUp={handleCharacterPointerUp}
-            onPointerCancel={handleCharacterPointerCancel}
-            style={{ touchAction: 'none' }}
-            title="Нажмите, чтобы погладить Пикселя · Перетащите, чтобы переместить"
-            className={`bg-transparent overflow-visible ${
-              isDragging ? 'cursor-grabbing scale-105' : 'cursor-grab'
-            } transition-transform duration-150`}
+            onClick={(e) => {
+              e.stopPropagation();
+              triggerPettingReaction();
+              setDialogOpen((v) => !v);
+            }}
+            title="Нажмите, чтобы погладить Пикселя и открыть диалог"
+            className="bg-transparent overflow-visible cursor-pointer transition-transform duration-150 hover:scale-105 active:scale-95"
           >
-            {/* 3D Glowing Sphere Character (Stage 7: Living Animated AI Companion) */}
+            {/* 3D Glowing Sphere Character */}
             <div className="w-[54px] h-[54px] sm:w-[64px] sm:h-[64px] lg:w-[74px] lg:h-[74px] flex items-center justify-center">
               <PixelCharacter
                 size={characterSize}
                 petTrigger={petTriggerCount}
-                isSpeaking={isSpeakingActive}
-                isListening={
-                  speechInputStatus === 'listening' ||
-                  speechInputStatus === 'recognizing'
-                }
-                isThinking={isPixelGenerating}
+                isSpeaking={isSpeakingUnified}
+                isListening={isListeningUnified}
+                isThinking={isThinkingUnified}
                 interactive={false}
               />
             </div>
