@@ -14,8 +14,10 @@ import {
   ListTodo,
   Loader2,
   MessageCircleHeart,
+  MessageSquare,
   Mic,
   MicOff,
+  Minus,
   Pause,
   Play,
   Plus,
@@ -229,9 +231,24 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const [speechBubble, setSpeechBubble] = useState<{
     text: string;
     isBreakReminder?: boolean;
+    isError?: boolean;
   } | null>(null);
   const [isBubbleHovered, setIsBubbleHovered] = useState(false);
   const [isBubbleFadingOut, setIsBubbleFadingOut] = useState(false);
+  const [isBubbleDismissedByUser, setIsBubbleDismissedByUser] = useState(false);
+  const [dismissedBubbleKey, setDismissedBubbleKey] = useState<string | null>(null);
+  const [isBubbleTextExpanded, setIsBubbleTextExpanded] = useState(false);
+  const [lastSavedBubble, setLastSavedBubble] = useState<{
+    id: string;
+    speaker: string;
+    text: string;
+    isSpeaking?: boolean;
+    isListening?: boolean;
+    isUser?: boolean;
+    isBreakReminder?: boolean;
+    isError?: boolean;
+  } | null>(null);
+  const lastResolvedKeyRef = useRef<string | null>(null);
   const bubbleAutoHideTimeoutRef = useRef<number | null>(null);
 
   const clearBubbleTimer = () => {
@@ -241,36 +258,28 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     }
   };
 
-  const scheduleBubbleAutoHide = (delayMs = 5000) => {
+  const scheduleBubbleAutoHide = (delayMs = 8000) => {
     clearBubbleTimer();
     setIsBubbleFadingOut(false);
     bubbleAutoHideTimeoutRef.current = window.setTimeout(() => {
       setIsBubbleFadingOut(true);
       window.setTimeout(() => {
+        setIsBubbleDismissedByUser(true);
+        if (lastResolvedKeyRef.current) {
+          setDismissedBubbleKey(lastResolvedKeyRef.current);
+        }
         setSpeechBubble(null);
         setIsBubbleFadingOut(false);
-      }, 300);
+      }, 250);
     }, delayMs);
   };
 
   useEffect(() => {
-    if (speechBubble) {
-      if (!isBubbleHovered) {
-        scheduleBubbleAutoHide(5000);
-      }
-    } else {
-      clearBubbleTimer();
-      setIsBubbleFadingOut(false);
-    }
-    return () => {
-      clearBubbleTimer();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [speechBubble]);
-
-  useEffect(() => {
     pixelAgentCoordinator.setBubbleHandler((text) => {
       setSpeechBubble({ text });
+      setIsBubbleDismissedByUser(false);
+      setDismissedBubbleKey(null);
+      setIsBubbleTextExpanded(false);
     });
     return () => {
       pixelAgentCoordinator.setBubbleHandler(null);
@@ -285,9 +294,34 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
   const handleBubbleMouseLeave = () => {
     setIsBubbleHovered(false);
-    if (speechBubble) {
-      scheduleBubbleAutoHide(5000);
+    if (!isBubbleDismissedByUser) {
+      scheduleBubbleAutoHide(6000);
     }
+  };
+
+  const handleCloseSpeechBubble = (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    clearBubbleTimer();
+    setIsBubbleDismissedByUser(true);
+    if (lastResolvedKeyRef.current) {
+      setDismissedBubbleKey(lastResolvedKeyRef.current);
+    }
+    setSpeechBubble(null);
+    setIsBubbleFadingOut(false);
+  };
+
+  const handleReopenLastBubble = (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    setIsBubbleDismissedByUser(false);
+    setDismissedBubbleKey(null);
+    setIsBubbleFadingOut(false);
+    scheduleBubbleAutoHide(8000);
   };
 
   // Personal assistant dialog window state
@@ -354,7 +388,6 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
   const [controlsVisibleByTap, setControlsVisibleByTap] = useState(false);
   const [isRecentHistoryExpanded, setIsRecentHistoryExpanded] = useState(false);
-  const [dismissedBubbleTurnId, setDismissedBubbleTurnId] = useState<string | null>(null);
 
   // Chat input & streaming state
   const [chatInput, setChatInput] = useState('');
@@ -368,6 +401,22 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   );
   const pixelAbortRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const isNearBottomRef = useRef<boolean>(true);
+
+  const handleMessagesScroll = () => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isNearBottomRef.current = distanceToBottom < 90;
+  };
+
+  useEffect(() => {
+    if (isNearBottomRef.current && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [companionMessages, isPixelGenerating]);
 
   useEffect(() => {
     if (!isPixelGenerating) {
@@ -715,7 +764,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     // 4. Most recent conversation turn between Anna and Pixel
     if (companionMessages.length > 0) {
       const lastMsg = companionMessages[companionMessages.length - 1];
-      if (lastMsg && lastMsg.id !== dismissedBubbleTurnId) {
+      if (lastMsg) {
         const clean = cleanSpeechBubbleText(lastMsg.content);
         if (clean && !isTechnicalOrErrorMessage(clean)) {
           return {
@@ -740,8 +789,63 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     companionMessages,
     chatInput,
     speechBubble,
-    dismissedBubbleTurnId,
   ]);
+
+  const currentBubbleKey = activeConversationBubble
+    ? `${activeConversationBubble.speaker}::${activeConversationBubble.text.trim()}`
+    : null;
+
+  // Track new message arrival to reset dismissal
+  useEffect(() => {
+    if (!currentBubbleKey || !activeConversationBubble) return;
+
+    if (currentBubbleKey !== lastResolvedKeyRef.current) {
+      lastResolvedKeyRef.current = currentBubbleKey;
+      setIsBubbleDismissedByUser(false);
+      setDismissedBubbleKey(null);
+      setIsBubbleTextExpanded(false);
+      setLastSavedBubble(activeConversationBubble);
+    }
+  }, [currentBubbleKey, activeConversationBubble]);
+
+  const isCurrentBubbleDismissed =
+    isBubbleDismissedByUser ||
+    (currentBubbleKey !== null && currentBubbleKey === dismissedBubbleKey);
+
+  const visibleBubbleTurn = isCurrentBubbleDismissed
+    ? null
+    : activeConversationBubble;
+
+  // Auto-hide timer effect for visible bubble
+  useEffect(() => {
+    if (!visibleBubbleTurn) {
+      clearBubbleTimer();
+      setIsBubbleFadingOut(false);
+      return;
+    }
+
+    if (
+      visibleBubbleTurn.isBreakReminder ||
+      visibleBubbleTurn.isSpeaking ||
+      visibleBubbleTurn.isListening
+    ) {
+      clearBubbleTimer();
+      setIsBubbleFadingOut(false);
+      return;
+    }
+
+    if (!isBubbleHovered) {
+      scheduleBubbleAutoHide(8000);
+    } else {
+      clearBubbleTimer();
+      setIsBubbleFadingOut(false);
+    }
+
+    return () => {
+      clearBubbleTimer();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleBubbleTurn, isBubbleHovered]);
 
   // Last 3 non-technical conversational turns for compact history viewing
   const recentTurns = useMemo(() => {
@@ -1749,9 +1853,6 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     ? 'left-4 sm:left-6 lg:left-[84px]'
     : 'left-4 sm:left-6 lg:left-[304px]';
 
-  // Dialog anchored directly above Pixel in bottom-left
-  const dialogPositionClass = `bottom-24 ${baseLeftClass} transition-[left] duration-300 ease-out`;
-
   const school = SCHOOLS[activeSchool];
 
   const getBodyAnimationClass = (): string => {
@@ -1765,447 +1866,353 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       {/* ====================================================================
           1. PERSONAL ASSISTANT DIALOG WINDOW (Parts 6, 7, 8, 9, 11)
          ==================================================================== */}
-      {dialogOpen && (
-        <div
-          className={`fixed z-40 w-[336px] sm:w-[396px] max-h-[75vh] rounded-3xl bg-white/98 border border-slate-200/90 shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150 select-text ${dialogPositionClass}`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Window Header */}
-          <div className="px-4 py-3 bg-gradient-to-r from-pink-50/90 via-white to-sky-50/80 border-b border-slate-200/80 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="shrink-0">
-                <PixelCharacter
-                  size={32}
-                  showAura={false}
-                  interactive={false}
-                  isSpeaking={isSpeakingActive}
-                  isListening={
-                    speechInputStatus === 'listening' ||
-                    speechInputStatus === 'recognizing'
-                  }
-                  isThinking={isPixelGenerating}
-                />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-display font-bold text-sm text-slate-900 truncate">
-                    Пиксель
-                  </span>
-                  <span
-                    className={`px-1.5 py-0.2 rounded-md font-display font-bold text-[9px] tracking-wide shrink-0 ${
-                      activeSchool === 'kiberone'
-                        ? 'bg-amber-100 text-amber-900 border border-amber-200'
-                        : 'bg-lime-100 text-lime-900 border border-lime-200'
-                    }`}
-                  >
-                    {school.name}
-                  </span>
-                </div>
-                <div className="text-[10px] text-slate-500 truncate">
-                  Помощник управляющей Анны
-                </div>
-              </div>
-            </div>
+      {dialogOpen && (() => {
+        const activeChatCtx = pixelAgentCoordinator.getActiveChatContext();
+        const allWorkingChats = pixelAgentCoordinator.getAllWorkingChats();
+        const currentSchoolId = activeChatCtx?.schoolId || activeSchool;
+        const currentMode = activeChatCtx?.mode || 'marketer';
 
-            <div className="flex items-center gap-1 shrink-0">
-              {isSpeakingActive && (
-                <button
-                  type="button"
-                  onClick={() => voiceManager.stopSpeaking()}
-                  title="Остановить текущее озвучивание"
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-xl bg-pink-500 text-white text-[10px] font-bold hover:bg-pink-600 animate-pulse transition-colors cursor-pointer"
-                >
-                  <Square className="w-2.5 h-2.5 fill-current" />
-                  <span>Молчать</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  setDialogOpen(false);
-                }}
-                title="Свернуть окно Пикселя (разговор не прерывается)"
-                aria-label="Свернуть окно Пикселя"
-                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* 3 Navigation Tabs: Диалог | Задачи | Память */}
-          <div className="grid grid-cols-3 gap-1 p-1.5 bg-slate-100/80 border-b border-slate-200/70 text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => setActiveTab('chat')}
-              className={`flex items-center justify-center gap-1.5 py-1.5 rounded-xl transition-all ${
-                activeTab === 'chat'
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 md:p-6 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150"
+            onClick={() => setDialogOpen(false)}
+          >
+            <div
+              className="w-full max-w-[880px] h-[86vh] max-h-[820px] min-h-[560px] rounded-3xl bg-white border border-slate-200/90 shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-150 select-text"
+              onClick={(e) => e.stopPropagation()}
             >
-              <MessageCircleHeart className="w-3.5 h-3.5 text-amber-500" />
-              <span>Диалог</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('tasks')}
-              className={`flex items-center justify-center gap-1.5 py-1.5 rounded-xl transition-all ${
-                activeTab === 'tasks'
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <ListTodo className="w-3.5 h-3.5 text-[#00A8B5]" />
-              <span>Задачи</span>
-              {activeTasksList.length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-slate-200/80 text-slate-800 text-[10px] font-mono-tabular">
-                  {activeTasksList.length}
-                </span>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('memory')}
-              className={`flex items-center justify-center gap-1.5 py-1.5 rounded-xl transition-all ${
-                activeTab === 'memory'
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Brain className="w-3.5 h-3.5 text-purple-600" />
-              <span>Память</span>
-              {companionMemory.length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-slate-200/80 text-slate-800 text-[10px] font-mono-tabular">
-                  {companionMemory.length}
-                </span>
-              )}
-            </button>
-          </div>
-
-          {/* TAB 1: PERSONAL CHAT WITH PIXEL */}
-          {activeTab === 'chat' && (
-            <div className="flex-1 flex flex-col min-h-0 max-h-[52vh]">
-              {/* Stage 6.5 (1 & 2): Unified Working Chat Navigation & Context Panel */}
-              {(() => {
-                const activeChatCtx = pixelAgentCoordinator.getActiveChatContext();
-                const pendingDraft =
-                  pixelAgentCoordinator.getLatestAwaitingConfirmationDraft();
-                const allWorkingChats =
-                  pixelAgentCoordinator.getAllWorkingChats();
-                const currentSchoolId =
-                  activeChatCtx?.schoolId || activeSchool;
-                const currentMode = activeChatCtx?.mode || 'marketer';
-                const nextRecipientSchool = pendingDraft
-                  ? pendingDraft.targetSchool
-                  : currentSchoolId;
-                const nextRecipientMode = pendingDraft
-                  ? pendingDraft.targetMode
-                  : currentMode;
-
-                return (
-                  <div className="px-3 py-2 bg-slate-50/95 border-b border-slate-200/80 space-y-1.5 text-[10px] text-slate-600">
-                    {/* Row 1: Active School & Selected Specialist quick selectors */}
-                    <div className="flex flex-wrap items-center justify-between gap-1.5">
-                      <div className="inline-flex items-center gap-1">
-                        <span className="text-slate-500 font-semibold">
-                          Школа:
-                        </span>
-                        {(['kiberone', 'renderia'] as SchoolId[]).map((sId) => {
-                          const isCurrent = currentSchoolId === sId;
-                          return (
-                            <button
-                              key={sId}
-                              type="button"
-                              onClick={() => {
-                                void pixelAgentCoordinator.switchToWorkingChat({
-                                  schoolId: sId,
-                                  mode: currentMode,
-                                  announceInCompanion: true,
-                                });
-                              }}
-                              className={`px-1.5 py-0.5 rounded font-bold transition-colors cursor-pointer ${
-                                isCurrent
-                                  ? sId === 'renderia'
-                                    ? 'bg-[#84CC16] text-slate-950 shadow-2xs'
-                                    : 'bg-[#FFD700] text-slate-950 shadow-2xs'
-                                  : 'bg-white text-slate-500 border border-slate-200 hover:text-slate-900'
-                              }`}
-                            >
-                              {SCHOOLS[sId].name}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      <div className="inline-flex items-center gap-1 flex-wrap">
-                        <span className="text-slate-500 font-semibold">
-                          Специалист:
-                        </span>
-                        {(
-                          [
-                            'marketer',
-                            'manager',
-                            'methodist',
-                            'analyst',
-                          ] as AgentMode[]
-                        ).map((mId) => {
-                          const isCurrent =
-                            Boolean(activeChatCtx) && currentMode === mId;
-                          return (
-                            <button
-                              key={mId}
-                              type="button"
-                              onClick={() => {
-                                void pixelAgentCoordinator.switchToWorkingChat({
-                                  schoolId: currentSchoolId,
-                                  mode: mId,
-                                  announceInCompanion: true,
-                                });
-                              }}
-                              className={`px-1.5 py-0.5 rounded font-bold transition-colors cursor-pointer ${
-                                isCurrent
-                                  ? 'bg-slate-900 text-white shadow-2xs'
-                                  : 'bg-white text-slate-500 border border-slate-200 hover:text-slate-900'
-                              }`}
-                            >
-                              {AGENT_MODES[mId].shortTitle}
-                            </button>
-                          );
-                        })}
-                      </div>
+              {/* 1. UPPER PANEL: Header with School, Specialist, Chats, Voice & Window Controls */}
+              <div className="bg-gradient-to-r from-pink-50/70 via-white to-sky-50/70 border-b border-slate-200/80 shrink-0">
+                <div className="px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+                  {/* Left: Pixel identity */}
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="shrink-0 relative">
+                      <PixelCharacter
+                        size={36}
+                        showAura={false}
+                        interactive={false}
+                        isSpeaking={isSpeakingUnified}
+                        isListening={isListeningUnified}
+                        isThinking={isThinkingUnified}
+                      />
                     </div>
-
-                    {/* Row 2: Open Chat & Next Instruction Target */}
-                    <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 border-t border-slate-200/60">
-                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                        <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                        <span className="truncate">
-                          Открытый чат:{' '}
-                          <strong className="text-slate-900">
-                            {activeChatCtx
-                              ? `«${activeChatCtx.sessionTitle}» (${activeChatCtx.messagesCount} сообщ.)`
-                              : 'Не открыт'}
-                          </strong>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-display font-bold text-base text-slate-900">
+                          Пиксель
                         </span>
-                      </div>
-
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setIsQuickChatSwitcherOpen((prev) => !prev)
-                          }
-                          title="Показать список всех рабочих чатов для быстрого переключения"
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold transition-colors cursor-pointer"
+                        <span
+                          className={`px-2 py-0.5 rounded-md font-display font-bold text-[10px] tracking-wide shrink-0 ${
+                            currentSchoolId === 'kiberone'
+                              ? 'bg-amber-100 text-amber-900 border border-amber-200'
+                              : 'bg-lime-100 text-lime-900 border border-lime-200'
+                          }`}
                         >
-                          <FolderOpen className="w-2.5 h-2.5 text-[#00A8B5]" />
-                          <span>Чаты ({allWorkingChats.length})</span>
-                          <ChevronDown
-                            className={`w-2.5 h-2.5 transition-transform ${
-                              isQuickChatSwitcherOpen ? 'rotate-180' : ''
+                          {SCHOOLS[currentSchoolId].name}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 font-medium truncate">
+                        Помощник управляющей Анны
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Center: School switch & Specialist switch */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* School Selector Pills */}
+                    <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-100/90 border border-slate-200/70">
+                      {(['kiberone', 'renderia'] as SchoolId[]).map((sId) => {
+                        const isCurrent = currentSchoolId === sId;
+                        return (
+                          <button
+                            key={sId}
+                            type="button"
+                            onClick={() => {
+                              void pixelAgentCoordinator.switchToWorkingChat({
+                                schoolId: sId,
+                                mode: currentMode,
+                                announceInCompanion: true,
+                              });
+                            }}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                              isCurrent
+                                ? sId === 'renderia'
+                                  ? 'bg-[#84CC16] text-slate-950 shadow-2xs'
+                                  : 'bg-[#FFD700] text-slate-950 shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                             }`}
-                          />
-                        </button>
-
-                        {activeChatCtx && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void pixelAgentCoordinator.prepareChatDeletionForConfirmation(
-                                {
-                                  sessionId: activeChatCtx.sessionId,
-                                }
-                              );
-                            }}
-                            title="Удалить текущий открытый рабочий чат (с подтверждением)"
-                            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-white hover:bg-rose-50 text-slate-500 hover:text-rose-700 border border-slate-200 hover:border-rose-200 font-medium transition-colors cursor-pointer"
                           >
-                            <Trash2 className="w-2.5 h-2.5" />
+                            {SCHOOLS[sId].name}
                           </button>
-                        )}
-                      </div>
+                        );
+                      })}
                     </div>
 
-                    {/* Row 3: Next Instruction Target + Read Aloud / Resume buttons */}
-                    <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 border-t border-slate-200/60">
-                      <div className="truncate text-slate-600">
-                        Следующее поручение:{' '}
-                        <strong className="text-[#007A85]">
-                          {AGENT_MODES[nextRecipientMode].shortTitle} ·{' '}
-                          {SCHOOLS[nextRecipientSchool].name}
-                        </strong>
-                        {pendingDraft && (
-                          <span className="ml-1 text-amber-700 font-semibold">
-                            (ждёт «Да, отправляй»)
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-1 shrink-0">
-                        {stoppedReadingSession && !isSpeakingActive && (
+                    {/* Specialist Segmented Control */}
+                    <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-100/90 border border-slate-200/70 flex-wrap">
+                      {(
+                        ['marketer', 'manager', 'methodist', 'analyst'] as AgentMode[]
+                      ).map((mId) => {
+                        const isCurrent = currentMode === mId;
+                        return (
                           <button
+                            key={mId}
                             type="button"
                             onClick={() => {
-                              void voiceManager.resumeStoppedReading();
+                              void pixelAgentCoordinator.switchToWorkingChat({
+                                schoolId: currentSchoolId,
+                                mode: mId,
+                                announceInCompanion: true,
+                              });
                             }}
-                            title="Продолжить дословное чтение ответа с места остановки"
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold transition-colors cursor-pointer shrink-0"
+                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                              isCurrent
+                                ? 'bg-slate-900 text-white shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                            }`}
                           >
-                            <Play className="w-2.5 h-2.5 fill-current" />
-                            <span>
-                              Продолжить (
-                              {stoppedReadingSession.resumeChunkIndex + 1}/
-                              {stoppedReadingSession.totalChunks})
-                            </span>
+                            {AGENT_MODES[mId].shortTitle}
                           </button>
-                        )}
-                        {activeChatCtx?.lastSpecialistMessage && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void pixelAgentCoordinator.executeReadAloud(
-                                {
-                                  isReadAloud: true,
-                                  targetMode: activeChatCtx.mode,
-                                  targetSchool: activeChatCtx.schoolId,
-                                  originalText: 'Пиксель, прочитай ответ',
-                                },
-                                'text'
-                              );
-                            }}
-                            title="Дословно прочитать последний ответ открытого специалиста единым голосом Пикселя"
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#00A8B5]/10 hover:bg-[#00A8B5]/20 text-[#007A85] font-bold transition-colors cursor-pointer shrink-0"
-                          >
-                            <Volume2 className="w-3 h-3" />
-                            <span>Прочитать ответ</span>
-                          </button>
-                        )}
-                      </div>
+                        );
+                      })}
                     </div>
 
-                    {/* Expandable Quick Chat Switcher */}
-                    {isQuickChatSwitcherOpen && (
-                      <div className="pt-1.5 border-t border-slate-200 space-y-1 max-h-40 overflow-y-auto">
-                        <div className="flex items-center justify-between text-[10px] font-bold text-slate-700">
-                          <span>Быстрое переключение рабочих чатов:</span>
-                          <button
-                            type="button"
-                            onClick={() => setIsQuickChatSwitcherOpen(false)}
-                            className="text-slate-400 hover:text-slate-700"
-                          >
-                            Скрыть
-                          </button>
-                        </div>
-                        {allWorkingChats.length === 0 ? (
-                          <div className="text-slate-400 py-1">
-                            Пока нет созданных рабочих чатов. Выберите школу и
-                            специалиста выше, чтобы открыть новый чат.
-                          </div>
-                        ) : (
-                          allWorkingChats.map((chatItem) => (
-                            <div
-                              key={chatItem.sessionId}
-                              className={`flex items-center justify-between gap-1.5 p-1.5 rounded-lg border ${
-                                chatItem.isCurrentlyOpen
-                                  ? 'bg-cyan-50/80 border-cyan-300 text-slate-900'
-                                  : 'bg-white border-slate-200/80 text-slate-700'
-                              }`}
+                    {/* Working Chats Quick Switcher Popover Button */}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setIsQuickChatSwitcherOpen((v) => !v)}
+                        title="Рабочие чаты специалистов"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-semibold transition-colors cursor-pointer"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5 text-[#00A8B5]" />
+                        <span className="hidden sm:inline">Чаты ({allWorkingChats.length})</span>
+                        <ChevronDown
+                          className={`w-3 h-3 text-slate-400 transition-transform ${
+                            isQuickChatSwitcherOpen ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+
+                      {/* Working Chats Dropdown */}
+                      {isQuickChatSwitcherOpen && (
+                        <div className="absolute right-0 top-full mt-1.5 w-72 rounded-2xl bg-white border border-slate-200 shadow-xl p-2.5 z-30 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 pb-1 border-b border-slate-100">
+                            <span>Рабочие чаты специалистов</span>
+                            <button
+                              type="button"
+                              onClick={() => setIsQuickChatSwitcherOpen(false)}
+                              className="text-slate-400 hover:text-slate-700"
                             >
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsQuickChatSwitcherOpen(false);
-                                  void pixelAgentCoordinator.switchToWorkingChat(
-                                    {
-                                      schoolId: chatItem.schoolId,
-                                      mode: chatItem.mode,
-                                      sessionId: chatItem.sessionId,
-                                      announceInCompanion: true,
-                                    }
-                                  );
-                                }}
-                                className="flex-1 text-left truncate cursor-pointer"
-                              >
-                                <span
-                                  className={`inline-block px-1 py-0.2 rounded text-[9px] font-bold mr-1 ${
-                                    chatItem.schoolId === 'renderia'
-                                      ? 'bg-[#84CC16]/40 text-slate-900'
-                                      : 'bg-[#FFD700]/50 text-slate-900'
+                              Закрыть
+                            </button>
+                          </div>
+                          <div className="max-h-52 overflow-y-auto space-y-1 pr-1">
+                            {allWorkingChats.length === 0 ? (
+                              <div className="text-slate-400 py-2 text-center text-[11px]">
+                                Пока нет открытых чатов
+                              </div>
+                            ) : (
+                              allWorkingChats.map((chatItem) => (
+                                <div
+                                  key={chatItem.sessionId}
+                                  className={`flex items-center justify-between gap-1.5 p-2 rounded-xl border text-[11px] ${
+                                    chatItem.isCurrentlyOpen
+                                      ? 'bg-cyan-50/80 border-cyan-300 text-slate-900'
+                                      : 'bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50'
                                   }`}
                                 >
-                                  {chatItem.schoolName}
-                                </span>
-                                <strong className="font-semibold">
-                                  {chatItem.specialistTitle}:
-                                </strong>{' '}
-                                <span>«{chatItem.sessionTitle}»</span>{' '}
-                                <span className="text-slate-400">
-                                  ({chatItem.messagesCount})
-                                </span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsQuickChatSwitcherOpen(false);
-                                  void pixelAgentCoordinator.prepareChatDeletionForConfirmation(
-                                    chatItem.sessionId
-                                  );
-                                }}
-                                title="Удалить этот чат (с подтверждением)"
-                                className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsQuickChatSwitcherOpen(false);
+                                      void pixelAgentCoordinator.switchToWorkingChat({
+                                        schoolId: chatItem.schoolId,
+                                        mode: chatItem.mode,
+                                        sessionId: chatItem.sessionId,
+                                        announceInCompanion: true,
+                                      });
+                                    }}
+                                    className="flex-1 text-left truncate cursor-pointer"
+                                  >
+                                    <span
+                                      className={`inline-block px-1.5 py-0.2 rounded text-[9px] font-bold mr-1 ${
+                                        chatItem.schoolId === 'renderia'
+                                          ? 'bg-[#84CC16]/40 text-slate-900'
+                                          : 'bg-[#FFD700]/50 text-slate-900'
+                                      }`}
+                                    >
+                                      {chatItem.schoolName}
+                                    </span>
+                                    <strong className="font-semibold">
+                                      {chatItem.specialistTitle}:
+                                    </strong>{' '}
+                                    <span>«{chatItem.sessionTitle}»</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsQuickChatSwitcherOpen(false);
+                                      void pixelAgentCoordinator.prepareChatDeletionForConfirmation(
+                                        chatItem.sessionId
+                                      );
+                                    }}
+                                    title="Удалить чат"
+                                    className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer shrink-0"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                );
-              })()}
 
-              {dueOrOverdueTasks.length > 0 && (
-                <div className="px-3.5 py-2 bg-amber-50/90 border-b border-amber-200/80 flex items-center justify-between gap-2 text-[11px] text-amber-950">
-                  <div className="flex items-center gap-1.5 truncate">
-                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span className="truncate">
-                      Задач со сроком на сегодня:{' '}
-                      <strong>{dueOrOverdueTasks.length}</strong>
-                    </span>
+                  {/* Right: Actions (Silence, Voice Settings, Minimize, Close) */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {isSpeakingUnified && (
+                      <button
+                        type="button"
+                        onClick={() => voiceManager.stopSpeaking()}
+                        title="Остановить текущее озвучивание"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-pink-500 text-white text-xs font-bold hover:bg-pink-600 animate-pulse transition-colors cursor-pointer shadow-xs"
+                      >
+                        <Square className="w-3 h-3 fill-current" />
+                        <span>Молчать</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setIsVoiceSettingsOpen(true)}
+                      title="Настройки голоса Пикселя"
+                      aria-label="Настройки голоса"
+                      className="p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      <Sliders className="w-4 h-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDialogOpen(false)}
+                      title="Свернуть окно (разговор не прерывается)"
+                      aria-label="Свернуть окно"
+                      className="p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      <Minus className="w-4 h-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDialogOpen(false)}
+                      title="Закрыть окно"
+                      aria-label="Закрыть окно"
+                      className="p-2 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
+                </div>
+
+                {/* Navigation Tabs Bar */}
+                <div className="flex items-center gap-1 px-4 sm:px-6 bg-slate-50/60 border-t border-slate-200/60">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('chat')}
+                    className={`inline-flex items-center gap-2 py-2.5 px-4 border-b-2 text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                      activeTab === 'chat'
+                        ? 'border-sky-500 text-slate-900 bg-white shadow-2xs rounded-t-xl'
+                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <MessageCircleHeart className="w-4 h-4 text-amber-500" />
+                    <span>Диалог</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => setActiveTab('tasks')}
-                    className="font-semibold text-amber-900 underline shrink-0"
-                  >
-                    Открыть
-                  </button>
-                </div>
-              )}
-
-              {/* Messages Stream */}
-              <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-[#F9FAFB]/70">
-                {companionMessages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex flex-col ${
-                      msg.role === 'user' ? 'items-end' : 'items-start'
+                    className={`inline-flex items-center gap-2 py-2.5 px-4 border-b-2 text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                      activeTab === 'tasks'
+                        ? 'border-sky-500 text-slate-900 bg-white shadow-2xs rounded-t-xl'
+                        : 'border-transparent text-slate-500 hover:text-slate-800'
                     }`}
                   >
-                    <div
-                      className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed overflow-hidden ${
-                        msg.role === 'user'
-                          ? 'bg-slate-900 text-white rounded-br-xs'
-                          : msg.isError
-                            ? 'bg-red-50/90 border border-red-200 text-red-950 rounded-bl-xs shadow-2xs'
-                            : 'bg-white border border-slate-200/90 text-slate-800 rounded-bl-xs shadow-2xs'
-                      }`}
-                    >
+                    <ListTodo className="w-4 h-4 text-[#00A8B5]" />
+                    <span>Задачи</span>
+                    {activeTasksList.length > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-slate-200/80 text-slate-800 text-[10px] font-mono-tabular font-bold">
+                        {activeTasksList.length}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('memory')}
+                    className={`inline-flex items-center gap-2 py-2.5 px-4 border-b-2 text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                      activeTab === 'memory'
+                        ? 'border-sky-500 text-slate-900 bg-white shadow-2xs rounded-t-xl'
+                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <Brain className="w-4 h-4 text-purple-600" />
+                    <span>Память</span>
+                    {companionMemory.length > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-slate-200/80 text-slate-800 text-[10px] font-mono-tabular font-bold">
+                        {companionMemory.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* TAB 1: PERSONAL CHAT WITH PIXEL */}
+              {activeTab === 'chat' && (
+                <div className="flex-1 flex flex-col min-h-0 bg-[#F9FAFB]/70">
+                  {dueOrOverdueTasks.length > 0 && (
+                    <div className="px-4 sm:px-6 py-2 bg-amber-50/90 border-b border-amber-200/80 flex items-center justify-between gap-2 text-xs text-amber-950 shrink-0">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span className="truncate">
+                          Задач со сроком на сегодня: <strong>{dueOrOverdueTasks.length}</strong>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('tasks')}
+                        className="font-semibold text-amber-900 underline shrink-0 cursor-pointer"
+                      >
+                        Открыть задачи
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Messages Stream with Smart Scroll */}
+                  <div
+                    ref={messagesContainerRef}
+                    onScroll={handleMessagesScroll}
+                    className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-4 bg-gradient-to-b from-slate-50/50 to-white"
+                  >
+                    {companionMessages.map((msg) => (
+                      <div
+                        key={msg.id}
+                        className={`flex flex-col ${
+                          msg.role === 'user' ? 'items-end' : 'items-start'
+                        }`}
+                      >
+                        <div
+                          className={`rounded-2xl px-4 py-3 text-sm leading-relaxed overflow-hidden shadow-2xs ${
+                            msg.role === 'user'
+                              ? 'bg-slate-900 text-white rounded-br-xs max-w-[85%] sm:max-w-[78%]'
+                              : msg.isError
+                                ? 'bg-red-50/90 border border-red-200 text-red-950 rounded-bl-xs max-w-[90%] sm:max-w-[85%]'
+                                : 'bg-white border border-slate-200/90 text-slate-800 rounded-bl-xs max-w-[90%] sm:max-w-[85%]'
+                          }`}
+                        >
                       {msg.role === 'pixel' && msg.failoverNotice && (
                         <div className="mb-2 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200/80 text-[10px] text-amber-900">
                           {msg.failoverNotice}
@@ -3131,21 +3138,37 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 <div ref={chatEndRef} />
               </div>
 
-              {/* Quick Suggestions + Input Form */}
-              <div className="p-2.5 bg-white border-t border-slate-200/80 space-y-2">
-                <div className="flex items-center justify-between gap-1 overflow-x-auto pb-0.5">
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void executePixelChatRequest(
-                          'Пиксель, прочитай ответ'
-                        );
-                      }}
-                      className="px-2 py-1 rounded-lg bg-[#00A8B5]/10 hover:bg-[#00A8B5]/20 text-[10px] font-semibold text-[#007A85] whitespace-nowrap"
-                    >
-                      🔊 Прочитай ответ
-                    </button>
+              {/* ZONE 3: LOWER INPUT PANEL */}
+              <div className="border-t border-slate-200/80 bg-white px-4 sm:px-6 py-3 space-y-2.5 shrink-0">
+                {/* Quick Action Chips & History Actions */}
+                <div className="flex items-center justify-between gap-2 overflow-x-auto pb-0.5">
+                  <div className="flex items-center gap-1.5 flex-nowrap">
+                    {activeChatCtx?.lastSpecialistMessage && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void executePixelChatRequest('Пиксель, прочитай ответ');
+                        }}
+                        className="px-2.5 py-1 rounded-xl bg-[#00A8B5]/10 hover:bg-[#00A8B5]/20 text-[11px] font-semibold text-[#007A85] whitespace-nowrap transition-colors cursor-pointer inline-flex items-center gap-1"
+                      >
+                        <Volume2 className="w-3 h-3" />
+                        <span>Прочитай ответ</span>
+                      </button>
+                    )}
+                    {stoppedReadingSession && !isSpeakingUnified && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void voiceManager.resumeStoppedReading();
+                        }}
+                        className="px-2.5 py-1 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer inline-flex items-center gap-1"
+                      >
+                        <Play className="w-2.5 h-2.5 fill-current" />
+                        <span>
+                          Продолжить чтение ({stoppedReadingSession.resumeChunkIndex + 1}/{stoppedReadingSession.totalChunks})
+                        </span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -3156,29 +3179,36 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                         setChatInput(
                           `Спроси ${genName}: какие 3 главных шага стоит запустить в первую очередь?`
                         );
+                        if (textareaRef.current) {
+                          textareaRef.current.focus();
+                        }
                       }}
-                      className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-medium text-slate-700 whitespace-nowrap"
+                      className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-[11px] font-medium text-slate-700 whitespace-nowrap transition-colors cursor-pointer"
                     >
                       + Уточнить в чате...
                     </button>
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
                         setChatInput(
-                          `Пиксель, напомни мне завтра проверить презентацию для ${school.name}`
-                        )
-                      }
-                      className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-medium text-slate-700 whitespace-nowrap"
+                          `Пиксель, напомни мне завтра проверить презентацию для ${SCHOOLS[currentSchoolId].name}`
+                        );
+                        if (textareaRef.current) {
+                          textareaRef.current.focus();
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-[11px] font-medium text-slate-700 whitespace-nowrap transition-colors cursor-pointer"
                     >
                       + Напомнить завтра...
                     </button>
                   </div>
+
                   {companionMessages.length > 1 && (
                     <button
                       type="button"
                       onClick={onClearCompanionMessages}
-                      title="Очистить историю переписки с Пикселем"
-                      className="p-1 text-slate-400 hover:text-red-600 shrink-0"
+                      title="Очистить историю диалога с Пикселем"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 shrink-0 transition-colors cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -3189,15 +3219,12 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 {(speechInputStatus === 'listening' || speechInputStatus === 'recognizing') && (
                   <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-900">
                     <div className="flex items-center gap-2 truncate">
-                      <span className="w-2 h-2 rounded-full bg-red-600 animate-ping shrink-0" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping shrink-0" />
                       <span className="font-semibold">
-                        {speechInputStatus === 'listening' ? 'Слушаю вас... Говорите' : 'Распознавание...'}
+                        {speechInputStatus === 'listening' ? 'Слушаю вас... Говорите' : 'Распознавание речи...'}
                       </span>
                       {isRemoteSpeechService && (
-                        <span
-                          className="text-[10px] text-red-700 bg-red-100 px-1.5 py-0.5 rounded font-mono"
-                          title="Распознавание выполняется через службу браузера"
-                        >
+                        <span className="text-[10px] text-red-700 bg-red-100 px-1.5 py-0.5 rounded font-mono">
                           Браузерная служба
                         </span>
                       )}
@@ -3206,14 +3233,14 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                       <button
                         type="button"
                         onClick={() => browserSpeechInput.stop()}
-                        className="px-2 py-0.5 rounded-lg bg-red-600 text-white text-[11px] font-bold hover:bg-red-700 transition-colors"
+                        className="px-2.5 py-0.5 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 transition-colors cursor-pointer"
                       >
                         Готово
                       </button>
                       <button
                         type="button"
                         onClick={() => browserSpeechInput.cancel()}
-                        className="px-1.5 py-0.5 rounded-lg text-red-700 hover:bg-red-100 text-[11px]"
+                        className="px-2 py-0.5 rounded-lg text-red-700 hover:bg-red-100 text-xs cursor-pointer"
                       >
                         Отмена
                       </button>
@@ -3231,7 +3258,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                     <button
                       type="button"
                       onClick={() => setSpeechInputError(null)}
-                      className="p-0.5 hover:bg-amber-100 rounded text-amber-700 shrink-0"
+                      className="p-0.5 hover:bg-amber-100 rounded text-amber-700 shrink-0 cursor-pointer"
                       title="Закрыть уведомление"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -3239,23 +3266,40 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   </div>
                 )}
 
+                {/* Textarea Form */}
                 <form
                   onSubmit={handleSendCompanionMessage}
-                  className="flex items-center gap-1.5"
+                  className="flex items-end gap-2"
                 >
-                  <input
-                    type="text"
-                    value={chatInput}
-                    disabled={isPixelGenerating}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    placeholder={
-                      isPixelGenerating
-                        ? `${getGenerationStageLabelRu(pixelGenerationStage)} (${pixelElapsedSec} с)`
-                        : 'Напишите Пикселю задачу, вопрос или заметку...'
-                    }
-                    className="flex-1 min-w-0 rounded-xl border border-slate-300 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00A8B5] disabled:opacity-60"
-                  />
-                  {/* Microphone STT Button */}
+                  <div className="flex-1 min-w-0 relative">
+                    <textarea
+                      ref={textareaRef}
+                      rows={1}
+                      value={chatInput}
+                      disabled={isPixelGenerating}
+                      onChange={(e) => {
+                        setChatInput(e.target.value);
+                        if (textareaRef.current) {
+                          textareaRef.current.style.height = 'auto';
+                          textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          void handleSendCompanionMessage(e);
+                        }
+                      }}
+                      placeholder={
+                        isPixelGenerating
+                          ? `${getGenerationStageLabelRu(pixelGenerationStage)} (${pixelElapsedSec} с)...`
+                          : 'Напишите задачу, вопрос или поручение... (Enter — отправить, Shift+Enter — перенос)'
+                      }
+                      className="w-full rounded-2xl border border-slate-300 bg-slate-50/80 px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00A8B5] focus:border-transparent resize-none leading-relaxed transition-all max-h-32 min-h-[42px]"
+                    />
+                  </div>
+
+                  {/* STT Button */}
                   <button
                     type="button"
                     onClick={handleToggleVoiceRecord}
@@ -3267,38 +3311,40 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                           ? 'Остановить запись голоса'
                           : 'Голосовой ввод (нажмите и говорите)'
                     }
-                    className={`p-2 rounded-xl transition-colors shrink-0 ${
+                    className={`p-2.5 rounded-2xl transition-all shrink-0 cursor-pointer ${
                       speechInputStatus === 'listening' || speechInputStatus === 'recognizing'
-                        ? 'bg-red-600 text-white animate-pulse'
+                        ? 'bg-red-600 text-white animate-pulse shadow-md scale-105'
                         : !isMicSupported
                           ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
                           : 'bg-slate-100 text-slate-700 hover:text-slate-900 hover:bg-slate-200'
                     }`}
                   >
                     {speechInputStatus === 'listening' || speechInputStatus === 'recognizing' ? (
-                      <MicOff className="w-3.5 h-3.5" />
+                      <MicOff className="w-4 h-4" />
                     ) : (
-                      <Mic className="w-3.5 h-3.5" />
+                      <Mic className="w-4 h-4" />
                     )}
                   </button>
+
+                  {/* Send or Stop Button */}
                   {isPixelGenerating ? (
                     <button
                       type="button"
                       onClick={handleStopPixelGeneration}
-                      className="p-2 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-colors shrink-0"
+                      className="p-2.5 rounded-2xl bg-red-600 text-white hover:bg-red-700 transition-colors shrink-0 cursor-pointer shadow-xs"
                       aria-label="Остановить ответ Пикселя"
                       title="Остановить генерацию ответа"
                     >
-                      <Square className="w-3.5 h-3.5 fill-current" />
+                      <Square className="w-4 h-4 fill-current" />
                     </button>
                   ) : (
                     <button
                       type="submit"
                       disabled={!chatInput.trim() || isPixelGenerating}
-                      className="p-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 transition-colors shrink-0"
+                      className="p-2.5 rounded-2xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 transition-all shrink-0 cursor-pointer shadow-xs hover:scale-102 active:scale-98"
                       aria-label="Отправить сообщение Пикселю"
                     >
-                      <Send className="w-3.5 h-3.5 text-[#FFD700]" />
+                      <Send className="w-4 h-4 text-[#FFD700]" />
                     </button>
                   )}
                 </form>
@@ -3308,7 +3354,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
           {/* TAB 2: ANNA'S TO-DO LIST */}
           {activeTab === 'tasks' && (
-            <div className="flex-1 flex flex-col min-h-0 max-h-[52vh] p-3.5 space-y-3 overflow-y-auto bg-[#F9FAFB]/70">
+            <div className="flex-1 flex flex-col min-h-0 p-4 sm:p-6 space-y-4 overflow-y-auto bg-[#F9FAFB]/70">
               <div className="flex items-center justify-between gap-2">
                 <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-200/70 text-[11px] font-semibold">
                   <button
@@ -3556,7 +3602,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
           {/* TAB 3: WHAT PIXEL REMEMBERS ABOUT ANNA */}
           {activeTab === 'memory' && (
-            <div className="flex-1 flex flex-col min-h-0 max-h-[52vh] p-3.5 space-y-3 overflow-y-auto bg-[#F9FAFB]/70">
+            <div className="flex-1 flex flex-col min-h-0 p-4 sm:p-6 space-y-4 overflow-y-auto bg-[#F9FAFB]/70">
               <div className="rounded-xl p-2.5 bg-white border border-slate-200/80 flex items-start gap-2 text-[11px] text-slate-600">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                 <div>
@@ -3816,24 +3862,26 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
             </div>
           )}
 
-          {/* Window Footer: Break Reminder Settings Toggle */}
-          <div className="px-3.5 py-2 bg-slate-50 border-t border-slate-200/80 flex items-center justify-between text-[11px] text-slate-600">
-            <label className="inline-flex items-center gap-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={breakRemindersEnabled}
-                onChange={(e) =>
-                  updatePreferences({
-                    breakRemindersEnabled: e.target.checked,
-                  })
-                }
-                className="rounded border-slate-300 text-slate-900 focus:ring-0"
-              />
-              <span>Напоминать о перерыве каждые 60 мин. работы</span>
-            </label>
+              {/* Window Footer: Break Reminder Settings Toggle */}
+              <div className="px-4 sm:px-6 py-2.5 bg-slate-50 border-t border-slate-200/80 flex items-center justify-between text-xs text-slate-600 shrink-0">
+                <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={breakRemindersEnabled}
+                    onChange={(e) =>
+                      updatePreferences({
+                        breakRemindersEnabled: e.target.checked,
+                      })
+                    }
+                    className="rounded border-slate-300 text-slate-900 focus:ring-0"
+                  />
+                  <span>Напоминать о перерыве каждые 60 мин. работы</span>
+                </label>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ====================================================================
           2. ANCHORED DIGITAL PET «ПИКСЕЛЬ» IN BOTTOM-LEFT OF CENTRAL WORKSPACE
@@ -3845,13 +3893,13 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         className={`fixed z-30 flex flex-col items-start pointer-events-none select-none bottom-4 sm:bottom-6 ${baseLeftClass} transition-[left] duration-300 ease-out`}
       >
         {/* Compact Conversational Speech Bubble (Positioned strictly above Pixel in bottom-left) */}
-        {!dialogOpen && activeConversationBubble && (
+        {!dialogOpen && visibleBubbleTurn && (
           <div
             role="status"
             aria-live="polite"
             onMouseEnter={handleBubbleMouseEnter}
             onMouseLeave={handleBubbleMouseLeave}
-            className={`pointer-events-auto relative mb-2.5 max-w-[280px] sm:max-w-[340px] rounded-2xl bg-white/95 backdrop-blur-md border border-slate-200/90 shadow-xl px-3.5 py-2.5 text-xs text-slate-800 transition-all duration-300 select-text ${
+            className={`pointer-events-auto relative mb-2.5 max-w-[290px] sm:max-w-[360px] rounded-2xl bg-white/98 backdrop-blur-md border border-slate-200/90 shadow-xl px-3.5 py-2.5 text-xs text-slate-800 transition-all duration-200 select-text ${
               isBubbleFadingOut
                 ? 'opacity-0 scale-95 pointer-events-none'
                 : 'opacity-100 scale-100 animate-in fade-in slide-in-from-bottom-2 duration-150'
@@ -3862,25 +3910,25 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
               <div className="flex items-center gap-1.5 min-w-0">
                 <span
                   className={`w-2 h-2 rounded-full shrink-0 ${
-                    activeConversationBubble.isSpeaking
+                    visibleBubbleTurn.isSpeaking
                       ? 'bg-rose-500 animate-ping'
-                      : activeConversationBubble.isListening
+                      : visibleBubbleTurn.isListening
                         ? 'bg-sky-500 animate-pulse'
-                        : activeConversationBubble.isUser
+                        : visibleBubbleTurn.isUser
                           ? 'bg-emerald-500'
                           : 'bg-pink-400'
                   }`}
                 />
                 <span className="font-bold text-[11px] text-slate-900 truncate">
-                  {activeConversationBubble.speaker}
+                  {visibleBubbleTurn.speaker}
                 </span>
-                {activeConversationBubble.isSpeaking && (
+                {visibleBubbleTurn.isSpeaking && (
                   <span className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-semibold bg-rose-50 text-rose-600">
                     <Volume2 className="w-2.5 h-2.5 animate-pulse" />
                     <span>речь</span>
                   </span>
                 )}
-                {activeConversationBubble.isListening && (
+                {visibleBubbleTurn.isListening && (
                   <span className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-semibold bg-sky-50 text-sky-600">
                     <Mic className="w-2.5 h-2.5 animate-pulse" />
                     <span>слушает</span>
@@ -3916,22 +3964,43 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setDismissedBubbleTurnId(activeConversationBubble.id);
-                    setSpeechBubble(null);
-                  }}
+                  onClick={handleCloseSpeechBubble}
                   title="Закрыть облачко"
                   aria-label="Закрыть облачко"
-                  className="p-0.5 rounded-md text-slate-400 hover:text-slate-700 shrink-0 cursor-pointer"
+                  className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 shrink-0 cursor-pointer transition-colors"
                 >
-                  <X className="w-3 h-3" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
 
-            {/* Main Current Spoken / Turn Text (Proper wrap, multiline support, comfortable font) */}
-            <div className="mt-2 text-[12px] sm:text-[13px] text-slate-800 leading-relaxed font-normal break-words whitespace-pre-wrap max-h-[140px] overflow-y-auto">
-              {activeConversationBubble.text}
+            {/* Main Current Spoken / Turn Text with Preview / Truncation for long messages */}
+            <div className="mt-2 text-[12px] sm:text-[13px] text-slate-800 leading-relaxed font-normal break-words whitespace-pre-wrap max-h-[160px] overflow-y-auto">
+              {visibleBubbleTurn.text.length > 160 && !isBubbleTextExpanded ? (
+                <>
+                  <span>{visibleBubbleTurn.text.slice(0, 160)}...</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsBubbleTextExpanded(true)}
+                    className="ml-1 text-sky-600 font-semibold hover:underline cursor-pointer text-[11px]"
+                  >
+                    Подробнее
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span>{visibleBubbleTurn.text}</span>
+                  {visibleBubbleTurn.text.length > 160 && isBubbleTextExpanded && (
+                    <button
+                      type="button"
+                      onClick={() => setIsBubbleTextExpanded(false)}
+                      className="ml-1 text-slate-400 font-semibold hover:underline cursor-pointer text-[11px]"
+                    >
+                      Свернуть
+                    </button>
+                  )}
+                </>
+              )}
             </div>
 
             {/* Expandable Mini-History Drawer (Last 2-3 Turns) */}
@@ -3963,7 +4032,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
             )}
 
             {/* 60-Minute Active Work Break Actions */}
-            {activeConversationBubble.isBreakReminder && (
+            {visibleBubbleTurn.isBreakReminder && (
               <div className="mt-2 pt-2 border-t border-slate-100 grid grid-cols-2 gap-1">
                 <button
                   type="button"
@@ -4000,12 +4069,12 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
           </div>
         )}
 
-        {/* Pet Wrapper with Single Compact Dialogue Button */}
+        {/* Pet Wrapper with Dialogue Button & Reopen Last Remark Button */}
         <div
           className="relative group pointer-events-auto flex items-center gap-2"
           onMouseLeave={() => setControlsVisibleByTap(false)}
         >
-          {/* Single Compact Dialogue Button (Matches soft pink-to-sky pearlescent aesthetic) */}
+          {/* Action buttons beside Pixel */}
           <div className="relative z-20 flex items-center gap-1.5">
             <button
               type="button"
@@ -4029,6 +4098,19 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 </span>
               )}
             </button>
+
+            {/* Reopen Last Bubble Button when bubble was dismissed and dialog is closed */}
+            {!dialogOpen && isCurrentBubbleDismissed && (lastSavedBubble || companionMessages.length > 0) && (
+              <button
+                type="button"
+                onClick={handleReopenLastBubble}
+                title="Показать последнее сообщение Пикселя"
+                aria-label="Показать последнее сообщение"
+                className="w-7 h-7 rounded-full bg-white/95 hover:bg-white border border-slate-200/90 shadow-2xs hover:shadow text-slate-500 hover:text-sky-600 flex items-center justify-center transition-all cursor-pointer hover:scale-105 active:scale-95"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
           {/* Floating Hearts on Petting */}

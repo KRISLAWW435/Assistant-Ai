@@ -235,7 +235,7 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
       const rec = new SpeechClass();
       this.recognition = rec;
 
-      rec.lang = options?.lang || 'ru-RU';
+      rec.lang = 'ru-RU';
       rec.continuous = options?.continuous !== false;
       rec.interimResults = true;
       rec.maxAlternatives = 1;
