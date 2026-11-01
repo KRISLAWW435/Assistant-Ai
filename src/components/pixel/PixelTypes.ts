@@ -5,18 +5,36 @@
 
 export type PixelEmotion =
   | 'idle'        // Calm breathing, natural blinking, tracking cursor
-  | 'happy'       // Joyful bounce, smiling crescent eyes, sparkles/hearts
-  | 'curious'     // Widened pupils, slight head tilt toward mouse/object
-  | 'surprised'   // Wide open eyes, pupils dilated, slight hop
-  | 'thinking'    // Pupils glance up/aside, contemplative squint, twilight pulse
-  | 'empathetic'  // Soft caring eyelids, slow rhythmic breathing
-  | 'bashful'     // Cheeks rosy flush, eyes avert momentarily
-  | 'sleepy'      // Drooping heavy eyelids, yawns, dimming glow
-  | 'sleeping'    // Closed eyes, slow peaceful breathing, floating 'z' particles
-  | 'waking'      // Eyes flutter open, stretch/squash bounce, bright wake flash
-  | 'listening'   // Attentive posture, focused eyes, emerald/cyan live pulse
-  | 'speaking'    // Voice undulating pulse, animated expression in rhythm
-  | 'interacting';// Elastic squash-and-stretch on click, pet response
+  | 'calm'        // Спокойное ожидание (нейтральное доброжелательное выражение)
+  | 'happy'       // Радость (старое имя)
+  | 'joy'         // Радость — мягкая улыбка, живые глаза, лёгкий румянец
+  | 'curious'     // Любопытство (старое имя)
+  | 'curiosity'   // Любопытство — внимательный взгляд, приподнятые брови, лёгкий наклон сферы
+  | 'surprised'   // Удивление (старое имя)
+  | 'surprise'    // Удивление — немного расширенные глаза, приподнятые брови, округлый рот
+  | 'thinking'    // Задумчивость (старое имя)
+  | 'thoughtful'  // Задумчивость — взгляд в сторону или вверх, приподнятая бровь, движение глаз
+  | 'empathetic'  // Сочувствие (старое имя)
+  | 'empathy'     // Сочувствие — спокойный взгляд, мягкие опущенные веки, заботливое выражение
+  | 'sadness'     // Грусть — печальные глаза, мягко сведённые брови, опущенные уголки рта
+  | 'bashful'     // Смущение (старое имя)
+  | 'shy'         // Смущение — немного отведённый взгляд, деликатный румянец
+  | 'sleepy'      // Сонливость — медленное моргание, закрывающиеся веки
+  | 'sleeping'    // Сон — закрытые глаза, спокойное дыхание, частицы 'z'
+  | 'waking'      // Пробуждение — потягивание сферы, открытие глаз
+  | 'listening'   // Слушает Анну — сосредоточенный взгляд, рот спокойно закрыт
+  | 'speaking'    // Говорит — синхронизация рта со звуком речи
+  | 'interacting';// Реакция на поглаживание / клик
+
+export type IdleMicroBehavior =
+  | 'none'           // Обычное дыхание
+  | 'look_around'    // Плавный осмотр по сторонам
+  | 'look_up'        // Задумчивый взгляд вверх
+  | 'slow_blink'     // Медленное ленивое моргание
+  | 'chew'           // Притворяется, что жуёт что-то крошечное (микро-движение рта и щёк)
+  | 'music_sway'     // Плавное покачивание, словно слушает тихую музыку
+  | 'stretch_bounce' // Мягкое потягивание / пружинистое микро-движение
+  | 'doze';          // Короткая лёгкая дрёма с опущенными веками
 
 export type PixelSize = 48 | 72 | 120 | number;
 

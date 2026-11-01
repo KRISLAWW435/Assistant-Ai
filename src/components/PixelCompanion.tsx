@@ -80,6 +80,7 @@ import {
   SPECIALIST_NAMES_INSTRUMENTAL_RU,
   pixelAgentCoordinator,
 } from '../providers/PixelAgentCoordinator';
+import { annaMemoryManager } from '../providers/annaMemoryManager';
 
 interface PixelCompanionProps {
   activeSchool: SchoolId;
@@ -1473,6 +1474,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       updatePreferences({
         mood: proposedTask || proposedMemory ? 'thinking' : 'happy',
       });
+      // Semantic emotion reaction based on conversation context
+      pixelEmotionManager.analyzeDialogueContext(text, finalText);
+      // Continuous long-term memory extraction for Anna in PixelData/Anna/
+      void annaMemoryManager.extractMemoriesFromConversation(text, finalText);
     } catch (err) {
       const errMessage =
         err instanceof Error
@@ -1776,40 +1781,38 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
           onClick={(e) => e.stopPropagation()}
         >
           {/* Window Header */}
-          <div className="px-4 py-3 bg-gradient-to-r from-amber-50/90 via-white to-lime-50/70 border-b border-slate-200/80 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <PixelCharacter
-                size={34}
-                showAura={false}
-                interactive={false}
-                isSpeaking={isSpeakingActive}
-                isListening={
-                  speechInputStatus === 'listening' ||
-                  speechInputStatus === 'recognizing'
-                }
-                isThinking={isPixelGenerating}
-              />
-              <span
-                className={`px-2 py-0.5 rounded-md font-display font-extrabold text-[10px] tracking-wide shrink-0 ${
-                  activeSchool === 'kiberone'
-                    ? 'bg-[#FFD700] text-slate-950'
-                    : 'bg-[#84CC16] text-slate-950'
-                }`}
-              >
-                {school.name}
-              </span>
+          <div className="px-4 py-3 bg-gradient-to-r from-pink-50/90 via-white to-sky-50/80 border-b border-slate-200/80 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="shrink-0">
+                <PixelCharacter
+                  size={32}
+                  showAura={false}
+                  interactive={false}
+                  isSpeaking={isSpeakingActive}
+                  isListening={
+                    speechInputStatus === 'listening' ||
+                    speechInputStatus === 'recognizing'
+                  }
+                  isThinking={isPixelGenerating}
+                />
+              </div>
               <div className="min-w-0">
-                <div className="font-display font-extrabold text-sm text-slate-900 truncate">
-                  Пиксель · Помощник Анны
+                <div className="flex items-center gap-1.5">
+                  <span className="font-display font-bold text-sm text-slate-900 truncate">
+                    Пиксель
+                  </span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-md font-display font-bold text-[9px] tracking-wide shrink-0 ${
+                      activeSchool === 'kiberone'
+                        ? 'bg-amber-100 text-amber-900 border border-amber-200'
+                        : 'bg-lime-100 text-lime-900 border border-lime-200'
+                    }`}
+                  >
+                    {school.name}
+                  </span>
                 </div>
-                <div className="text-[11px] text-slate-500 flex items-center gap-1.5 truncate">
-                  <span>
-                    {isAutoSleeping ? 'Дремлет' : 'На связи'}
-                  </span>
-                  <span>·</span>
-                  <span title="Активное время работы в приложении (без учёта пауз и скрытых вкладок)">
-                    Активно: {activeMinutesCount} мин.
-                  </span>
+                <div className="text-[10px] text-slate-500 truncate">
+                  Помощник управляющей Анны
                 </div>
               </div>
             </div>
@@ -1820,7 +1823,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   type="button"
                   onClick={() => voiceManager.stopSpeaking()}
                   title="Остановить текущее озвучивание"
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-xl bg-amber-500 text-white text-[10px] font-bold hover:bg-amber-600 animate-pulse transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-xl bg-pink-500 text-white text-[10px] font-bold hover:bg-pink-600 animate-pulse transition-colors cursor-pointer"
                 >
                   <Square className="w-2.5 h-2.5 fill-current" />
                   <span>Молчать</span>
@@ -1831,65 +1834,20 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   type="button"
                   onClick={handleResetToCorner}
                   title="Вернуть Пикселя в правый нижний угол"
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-xl border border-slate-200 bg-white text-[10px] font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-xl border border-slate-200 bg-white text-[10px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer"
                 >
-                  <RotateCcw className="w-3 h-3" />
+                  <RotateCcw className="w-3 h-3 text-slate-400" />
                   <span>В угол</span>
                 </button>
               )}
-              {onOpenLiveVoice && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    voiceManager.stopSpeaking();
-                    onOpenLiveVoice();
-                  }}
-                  title="Открыть живой голосовой диалог с Пикселем (Gemini Live API)"
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-gradient-to-r from-[#00A8B5] to-[#165B73] hover:from-[#00929d] hover:to-[#124d62] text-white text-[10px] font-extrabold shadow-2xs transition-all"
-                >
-                  <Mic className="w-3 h-3 text-[#FFD700] animate-pulse" />
-                  <span>Поговорить</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setIsVoiceSettingsOpen(true)}
-                title="Настройки голоса и озвучивания (скорость, высота, авточтение)"
-                aria-label="Настройки голоса"
-                className="p-1.5 rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-colors"
-              >
-                <Sliders className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => updatePreferences({ quietMode: !quietMode })}
-                title={
-                  quietMode
-                    ? 'Тихий режим включён (самостоятельные реплики скрыты). Нажмите, чтобы выключить'
-                    : 'Включить тихий режим (без самостоятельных всплывающих реплик)'
-                }
-                className={`p-1.5 rounded-xl border text-xs transition-colors ${
-                  quietMode
-                    ? 'bg-slate-900 text-[#FFD700] border-slate-900'
-                    : 'bg-white text-slate-500 border-slate-200 hover:text-slate-900'
-                }`}
-              >
-                {quietMode ? (
-                  <VolumeX className="w-3.5 h-3.5" />
-                ) : (
-                  <Volume2 className="w-3.5 h-3.5" />
-                )}
-              </button>
               <button
                 type="button"
                 onClick={() => {
-                  voiceManager.stopSpeaking();
-                  browserSpeechInput.cancel();
                   setDialogOpen(false);
                 }}
-                title="Закрыть окно Пикселя"
-                aria-label="Закрыть окно Пикселя"
-                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+                title="Свернуть окно Пикселя (разговор не прерывается)"
+                aria-label="Свернуть окно Пикселя"
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -3983,20 +3941,13 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
           </div>
         )}
 
-        {/* Pet Wrapper with Unobtrusive Hover Chat Icon & Optional Reset-to-Corner */}
+        {/* Pet Wrapper with Single Compact Dialogue Button */}
         <div
-          className="relative group pointer-events-auto flex items-center"
+          className="relative group pointer-events-auto flex items-center gap-2"
           onMouseLeave={() => setControlsVisibleByTap(false)}
         >
-          {/* Unobtrusive Action Buttons (Appear on Hover / Focus / Selection) */}
-          <div
-            className={`absolute -top-2 -left-2 z-20 flex items-center gap-1 transition-opacity duration-150 ${
-              dialogOpen || controlsVisibleByTap || dueOrOverdueTasks.length > 0
-                ? 'opacity-100'
-                : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
-            }`}
-          >
-            {/* Open Personal Assistant Dialog Button */}
+          {/* Single Compact Dialogue Button (Matches soft pink-to-sky pearlescent aesthetic) */}
+          <div className="relative z-20 flex items-center gap-1.5">
             <button
               type="button"
               onClick={(e) => {
@@ -4004,38 +3955,37 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 setSpeechBubble(null);
                 setDialogOpen((v) => !v);
               }}
-              title="Открыть личный диалог с Пикселем (Задачи и Память)"
-              aria-label="Открыть личный диалог с Пикселем"
-              className="relative w-7 h-7 rounded-full bg-slate-900 text-white shadow-md hover:bg-slate-800 flex items-center justify-center transition-transform hover:scale-105"
+              title="Поговорить с Пикселем"
+              aria-label="Поговорить с Пикселем"
+              className={`relative w-8 h-8 rounded-full bg-white/95 hover:bg-white border shadow-sm hover:shadow-md flex items-center justify-center transition-all duration-200 cursor-pointer hover:scale-105 active:scale-95 group/btn ${
+                dialogOpen
+                  ? 'border-sky-300 ring-2 ring-sky-100 text-sky-600'
+                  : 'border-pink-200/90 hover:border-sky-300 text-pink-500 hover:text-sky-500'
+              }`}
             >
-              <MessageCircleHeart
-                className={`w-3.5 h-3.5 ${
-                  activeSchool === 'renderia'
-                    ? 'text-[#84CC16]'
-                    : 'text-[#FFD700]'
-                }`}
-              />
+              <MessageCircleHeart className="w-4 h-4 transition-colors" />
               {dueOrOverdueTasks.length > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-amber-400 text-slate-950 font-mono-tabular font-extrabold text-[9px] flex items-center justify-center border border-white">
+                <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-pink-400 text-white font-mono-tabular font-extrabold text-[9px] flex items-center justify-center border border-white">
                   {dueOrOverdueTasks.length}
                 </span>
               )}
             </button>
 
-            {/* Return to Corner Button (Only shown when Pixel was dragged from default corner) */}
+            {/* Return to Corner Button (Only shown on hover when Pixel was dragged from default corner) */}
             {customPos && (
               <button
                 type="button"
                 onClick={handleResetToCorner}
                 title="Вернуть в угол"
                 aria-label="Вернуть в угол"
-                className="h-6 px-2 rounded-full bg-white/95 border border-slate-200/90 text-slate-700 hover:text-slate-950 hover:bg-white shadow-sm text-[10px] font-semibold inline-flex items-center gap-1 transition-transform hover:scale-105 whitespace-nowrap"
+                className="opacity-0 group-hover:opacity-100 h-6 px-2 rounded-full bg-white/95 border border-slate-200 text-slate-600 hover:text-slate-900 shadow-sm text-[10px] font-medium inline-flex items-center gap-1 transition-all hover:scale-105 whitespace-nowrap cursor-pointer"
               >
-                <RotateCcw className="w-2.5 h-2.5 text-slate-500" />
+                <RotateCcw className="w-2.5 h-2.5 text-slate-400" />
                 <span>В угол</span>
               </button>
             )}
           </div>
+
 
           {/* Floating Hearts on Petting (2-4 hearts that rise & fade out) */}
           {floatingHearts.length > 0 && (

@@ -26,6 +26,18 @@ import type {
   ConnectionTestResult,
   SaveProfileInput,
 } from '../src/types/electronBridge';
+import {
+  AnnaInterest,
+  AnnaMemoryBundle,
+  AnnaMemoryItem,
+  AnnaPreference,
+  AnnaProfile,
+  AnnaProjectContext,
+  INITIAL_ANNA_INTERESTS,
+  INITIAL_ANNA_MEMORIES,
+  INITIAL_ANNA_PREFERENCES,
+  INITIAL_ANNA_PROFILE,
+} from '../src/types/annaMemory';
 
 const _mainDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 
@@ -45,6 +57,106 @@ if (!fs.existsSync(userDataDir)) {
   fs.mkdirSync(userDataDir, { recursive: true });
 }
 app.setPath('userData', userDataDir);
+
+// Dedicated Long-Term Storage Directory for Anna: %APPDATA%/kiberone-renderia-assistant/PixelData/Anna/
+const pixelAnnaDir = path.join(userDataDir, 'PixelData', 'Anna');
+const pixelConversationsDir = path.join(pixelAnnaDir, 'conversations');
+if (!fs.existsSync(pixelConversationsDir)) {
+  fs.mkdirSync(pixelConversationsDir, { recursive: true });
+}
+
+function safeWriteJson(filePath: string, data: unknown): void {
+  const tmpPath = `${filePath}.tmp`;
+  const bakPath = `${filePath}.bak`;
+  try {
+    const serialized = JSON.stringify(data, null, 2);
+    fs.writeFileSync(tmpPath, serialized, 'utf-8');
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.copyFileSync(filePath, bakPath);
+      } catch {
+        // ignore backup copy failure
+      }
+    }
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    console.error(`[AnnaMemory] Safe write failed for ${filePath}:`, err);
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function readJsonOrDefault<T>(filePath: string, defaultVal: T): T {
+  try {
+    if (!fs.existsSync(filePath)) {
+      safeWriteJson(filePath, defaultVal);
+      return defaultVal;
+    }
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    console.warn(`[AnnaMemory] Read error for ${filePath}, attempting .bak:`, err);
+    const bakPath = `${filePath}.bak`;
+    if (fs.existsSync(bakPath)) {
+      try {
+        const bakRaw = fs.readFileSync(bakPath, 'utf-8');
+        return JSON.parse(bakRaw) as T;
+      } catch {
+        // ignore
+      }
+    }
+    return defaultVal;
+  }
+}
+
+function initAnnaMemoryStorage(): AnnaMemoryBundle {
+  const profilePath = path.join(pixelAnnaDir, 'profile.json');
+  const interestsPath = path.join(pixelAnnaDir, 'interests.json');
+  const preferencesPath = path.join(pixelAnnaDir, 'preferences.json');
+  const projectsPath = path.join(pixelAnnaDir, 'projects.json');
+  const memoriesPath = path.join(pixelAnnaDir, 'memories.json');
+
+  const profile = readJsonOrDefault<AnnaProfile>(profilePath, INITIAL_ANNA_PROFILE);
+  const interests = readJsonOrDefault<AnnaInterest[]>(interestsPath, INITIAL_ANNA_INTERESTS);
+  const preferences = readJsonOrDefault<AnnaPreference[]>(preferencesPath, INITIAL_ANNA_PREFERENCES);
+  const projects = readJsonOrDefault<AnnaProjectContext[]>(projectsPath, [
+    {
+      id: 'proj-kiberone-start',
+      schoolId: 'kiberone',
+      name: 'Учебный год KIBERone',
+      description: 'Сопровождение групп, открытые уроки, контроль посещаемости и работы с родителями',
+      status: 'active',
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      id: 'proj-renderia-start',
+      schoolId: 'renderia',
+      name: 'Развитие направлений Renderia',
+      description: 'Курсы 3D-графики, анимации и цифрового творчества, мастер-классы',
+      status: 'active',
+      updatedAt: new Date().toISOString(),
+    },
+  ]);
+  const memories = readJsonOrDefault<AnnaMemoryItem[]>(memoriesPath, INITIAL_ANNA_MEMORIES);
+
+  return {
+    profile,
+    interests,
+    preferences,
+    projects,
+    memories,
+    storageInfo: {
+      isElectron: true,
+      storagePath: pixelAnnaDir,
+      autoSaveEnabled: true,
+      lastSavedAt: new Date().toISOString(),
+      version: '1.0.0',
+    },
+  };
+}
 
 interface StoredVaultItem {
   id: string;
@@ -438,6 +550,110 @@ function registerIpcHandlers(): void {
       model: string;
       message?: { content?: string };
     };
+  });
+
+  // --- Anna Personal Long-Term Memory IPC Handlers ---
+  ipcMain.handle('annaMemory:loadAll', async () => {
+    return initAnnaMemoryStorage();
+  });
+
+  ipcMain.handle(
+    'annaMemory:saveSection',
+    async (_event, section: string, data: unknown) => {
+      const allowed = ['profile', 'interests', 'preferences', 'projects', 'memories'];
+      if (!allowed.includes(section)) {
+        throw new Error(`Unauthorized section: ${section}`);
+      }
+      const filePath = path.join(pixelAnnaDir, `${section}.json`);
+      safeWriteJson(filePath, data);
+      return true;
+    }
+  );
+
+  ipcMain.handle(
+    'annaMemory:addMemory',
+    async (_event, item: AnnaMemoryItem) => {
+      const filePath = path.join(pixelAnnaDir, 'memories.json');
+      const current = readJsonOrDefault<AnnaMemoryItem[]>(filePath, INITIAL_ANNA_MEMORIES);
+      const existingIdx = current.findIndex((m) => m.id === item.id);
+      let updated: AnnaMemoryItem[];
+      if (existingIdx >= 0) {
+        updated = [...current];
+        updated[existingIdx] = { ...item, updatedAt: new Date().toISOString() };
+      } else {
+        updated = [item, ...current];
+      }
+      safeWriteJson(filePath, updated);
+      return true;
+    }
+  );
+
+  ipcMain.handle(
+    'annaMemory:updateMemory',
+    async (_event, item: AnnaMemoryItem) => {
+      const filePath = path.join(pixelAnnaDir, 'memories.json');
+      const current = readJsonOrDefault<AnnaMemoryItem[]>(filePath, INITIAL_ANNA_MEMORIES);
+      const updated = current.map((m) => (m.id === item.id ? { ...item, updatedAt: new Date().toISOString() } : m));
+      safeWriteJson(filePath, updated);
+      return true;
+    }
+  );
+
+  ipcMain.handle('annaMemory:deleteMemory', async (_event, id: string) => {
+    const filePath = path.join(pixelAnnaDir, 'memories.json');
+    const current = readJsonOrDefault<AnnaMemoryItem[]>(filePath, INITIAL_ANNA_MEMORIES);
+    const updated = current.filter((m) => m.id !== id);
+    safeWriteJson(filePath, updated);
+    return true;
+  });
+
+  ipcMain.handle('annaMemory:clearAll', async () => {
+    const timestamp = Date.now();
+    const backupDir = path.join(pixelAnnaDir, `backup_${timestamp}`);
+    try {
+      fs.mkdirSync(backupDir, { recursive: true });
+      for (const file of ['profile.json', 'interests.json', 'preferences.json', 'projects.json', 'memories.json']) {
+        const src = path.join(pixelAnnaDir, file);
+        if (fs.existsSync(src)) {
+          fs.copyFileSync(src, path.join(backupDir, file));
+        }
+      }
+    } catch {
+      // ignore
+    }
+    safeWriteJson(path.join(pixelAnnaDir, 'profile.json'), INITIAL_ANNA_PROFILE);
+    safeWriteJson(path.join(pixelAnnaDir, 'interests.json'), INITIAL_ANNA_INTERESTS);
+    safeWriteJson(path.join(pixelAnnaDir, 'preferences.json'), INITIAL_ANNA_PREFERENCES);
+    safeWriteJson(path.join(pixelAnnaDir, 'projects.json'), []);
+    safeWriteJson(path.join(pixelAnnaDir, 'memories.json'), []);
+    return true;
+  });
+
+  ipcMain.handle('annaMemory:getStorageInfo', async () => {
+    const memoriesPath = path.join(pixelAnnaDir, 'memories.json');
+    const current = readJsonOrDefault<AnnaMemoryItem[]>(memoriesPath, []);
+    return {
+      isElectron: true,
+      storagePath: pixelAnnaDir,
+      autoSaveEnabled: true,
+      itemCount: current.length,
+      lastSavedAt: new Date().toISOString(),
+    };
+  });
+
+  ipcMain.handle('annaMemory:exportBackup', async () => {
+    const bundle = initAnnaMemoryStorage();
+    return JSON.stringify(bundle, null, 2);
+  });
+
+  ipcMain.handle('annaMemory:importBackup', async (_event, jsonString: string) => {
+    const parsed = JSON.parse(jsonString) as Partial<AnnaMemoryBundle>;
+    if (parsed.profile) safeWriteJson(path.join(pixelAnnaDir, 'profile.json'), parsed.profile);
+    if (parsed.interests) safeWriteJson(path.join(pixelAnnaDir, 'interests.json'), parsed.interests);
+    if (parsed.preferences) safeWriteJson(path.join(pixelAnnaDir, 'preferences.json'), parsed.preferences);
+    if (parsed.projects) safeWriteJson(path.join(pixelAnnaDir, 'projects.json'), parsed.projects);
+    if (parsed.memories) safeWriteJson(path.join(pixelAnnaDir, 'memories.json'), parsed.memories);
+    return true;
   });
 }
 

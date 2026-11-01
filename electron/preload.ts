@@ -40,6 +40,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openExternalUrl: (url: string): Promise<void> =>
       ipcRenderer.invoke('shell:openExternal', url),
   },
+  annaMemory: {
+    loadAll: () => ipcRenderer.invoke('annaMemory:loadAll'),
+    saveSection: (section: string, data: any) =>
+      ipcRenderer.invoke('annaMemory:saveSection', section, data),
+    addMemory: (item: any) => ipcRenderer.invoke('annaMemory:addMemory', item),
+    updateMemory: (item: any) => ipcRenderer.invoke('annaMemory:updateMemory', item),
+    deleteMemory: (id: string) => ipcRenderer.invoke('annaMemory:deleteMemory', id),
+    clearAll: () => ipcRenderer.invoke('annaMemory:clearAll'),
+    getStorageInfo: () => ipcRenderer.invoke('annaMemory:getStorageInfo'),
+    exportBackup: () => ipcRenderer.invoke('annaMemory:exportBackup'),
+    importBackup: (jsonString: string) =>
+      ipcRenderer.invoke('annaMemory:importBackup', jsonString),
+  },
   safeStorage: {
     isAvailable: (): boolean => true,
   },

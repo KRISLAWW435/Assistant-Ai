@@ -56,12 +56,45 @@
   }
 }
 
-@keyframes pixelSleepBreathe {
+/* ============================================================================
+   SOFT PEARLESCENT PIXEL COMPANION ANIMATIONS (Pastel Pink to Sky Blue)
+   ============================================================================ */
+
+@keyframes pixelSoftBreath {
   0%, 100% {
-    transform: translateY(2.5px) rotate(2deg) scale(1, 0.98);
+    transform: translateY(0px) scale(1);
   }
   50% {
-    transform: translateY(3.5px) rotate(3deg) scale(1.02, 0.96);
+    transform: translateY(-2px) scale(1.025, 1.018);
+  }
+}
+
+@keyframes pixelListeningPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04, 1.035);
+  }
+}
+
+@keyframes pixelThinkingGradient {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pixelSleepQuiet {
+  0%, 100% {
+    transform: translateY(1.5px) scale(0.985);
+    opacity: 0.92;
+  }
+  50% {
+    transform: translateY(2.2px) scale(0.995, 0.98);
+    opacity: 0.96;
   }
 }
 
@@ -70,64 +103,31 @@
     transform: translateY(0px) rotate(0deg) scale(1);
   }
   28% {
-    transform: translateY(-5px) rotate(-4deg) scale(1.05, 0.96);
+    transform: translateY(-4px) rotate(-2deg) scale(1.04, 0.97);
   }
   58% {
-    transform: translateY(0px) rotate(3deg) scale(0.98, 1.03);
+    transform: translateY(0px) rotate(1.5deg) scale(0.99, 1.02);
   }
   82% {
-    transform: translateY(-2.5px) rotate(-1.5deg) scale(1.02, 0.99);
+    transform: translateY(-1.5px) rotate(-1deg) scale(1.01, 0.995);
   }
   100% {
     transform: translateY(0px) rotate(0deg) scale(1);
   }
 }
 
-@keyframes pixelEarTwitchLeft {
-  0%, 88%, 100% {
-    transform: rotate(0deg);
-  }
-  92% {
-    transform: rotate(-5deg);
-  }
-  96% {
-    transform: rotate(2deg);
-  }
-}
-
-@keyframes pixelEarTwitchRight {
-  0%, 86%, 100% {
-    transform: rotate(0deg);
-  }
-  91% {
-    transform: rotate(5deg);
-  }
-  95% {
-    transform: rotate(-2deg);
-  }
-}
-
-@keyframes pixelBlink {
-  0%, 93%, 100% {
-    transform: scaleY(1);
-  }
-  96% {
-    transform: scaleY(0.08);
-  }
-}
-
 @keyframes pixelHeartFloat {
   0% {
     opacity: 0;
-    transform: translateY(4px) scale(0.65);
+    transform: translateY(4px) scale(0.7);
   }
   20% {
-    opacity: 1;
-    transform: translateY(-4px) scale(1);
+    opacity: 0.85;
+    transform: translateY(-3px) scale(0.95);
   }
   100% {
     opacity: 0;
-    transform: translateY(-28px) scale(0.85);
+    transform: translateY(-24px) scale(0.8);
   }
 }
 
@@ -137,71 +137,66 @@
     transform: translate(0px, 3px) scale(0.8);
   }
   45% {
-    opacity: 0.75;
+    opacity: 0.65;
   }
   100% {
     opacity: 0;
-    transform: translate(6px, -11px) scale(1.08);
+    transform: translate(5px, -10px) scale(1.05);
   }
 }
 
 .pixel-idle-body {
-  animation: pixelBreathe 4.2s ease-in-out infinite;
-  transform-origin: 50px 76px;
+  animation: pixelSoftBreath 5.4s ease-in-out infinite;
+  transform-origin: 50px 50px;
+}
+
+.pixel-listening-body {
+  animation: pixelListeningPulse 2.3s ease-in-out infinite;
+  transform-origin: 50px 50px;
+}
+
+.pixel-thinking-core {
+  animation: pixelThinkingGradient 9s linear infinite;
+  transform-origin: 50px 50px;
 }
 
 .pixel-sleep-body {
-  animation: pixelSleepBreathe 4.8s ease-in-out infinite;
-  transform-origin: 50px 76px;
+  animation: pixelSleepQuiet 5.8s ease-in-out infinite;
+  transform-origin: 50px 50px;
 }
 
 .pixel-pet-bounce {
   animation: pixelPetBounce 0.75s ease-out forwards;
-  transform-origin: 50px 76px;
-}
-
-.pixel-ear-left {
-  animation: pixelEarTwitchLeft 7.2s ease-in-out infinite;
-  transform-origin: 31px 32px;
-}
-
-.pixel-ear-right {
-  animation: pixelEarTwitchRight 7.8s ease-in-out infinite;
-  transform-origin: 69px 32px;
-}
-
-.pixel-blink-eyelids {
-  animation: pixelBlink 5.4s ease-in-out infinite;
-  transform-origin: 50px 49px;
+  transform-origin: 50px 50px;
 }
 
 .pixel-heart-float {
-  animation: pixelHeartFloat 1.15s ease-out forwards;
+  animation: pixelHeartFloat 1.2s ease-out forwards;
 }
 
 .pixel-sleep-z1 {
-  animation: pixelSleepBubble 2.9s ease-out infinite;
+  animation: pixelSleepBubble 3.2s ease-out infinite;
 }
 
 .pixel-sleep-z2 {
-  animation: pixelSleepBubble 2.9s ease-out 1.4s infinite;
+  animation: pixelSleepBubble 3.2s ease-out 1.6s infinite;
 }
 
 @keyframes pixelHeartBurst {
   0% {
     opacity: 0;
-    transform: scale(0.35);
+    transform: scale(0.5);
   }
-  15% {
-    opacity: 1;
-    transform: scale(1.15);
+  20% {
+    opacity: 0.9;
+    transform: scale(1.05);
   }
-  75% {
-    opacity: 0.95;
+  80% {
+    opacity: 0.8;
   }
   100% {
     opacity: 0;
-    transform: scale(0.75);
+    transform: scale(0.85);
   }
 }
 
@@ -211,11 +206,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   .pixel-idle-body,
+  .pixel-listening-body,
+  .pixel-thinking-core,
   .pixel-sleep-body,
   .pixel-pet-bounce,
-  .pixel-ear-left,
-  .pixel-ear-right,
-  .pixel-blink-eyelids,
   .pixel-heart-float,
   .pixel-heart-burst,
   .pixel-sleep-z1,
@@ -224,3 +218,4 @@
     transition: none !important;
   }
 }
+

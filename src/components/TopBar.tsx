@@ -41,7 +41,7 @@ const SECTION_TITLES: Record<NavSection, string> = {
   analyst: 'Бизнес-аналитик',
   knowledge: 'База знаний двух школ',
   backups: 'Резервные копии',
-  connections: 'Подключения ИИ и модели',
+  connections: 'Настройки и ИИ',
 };
 
 export const TopBar: React.FC<TopBarProps> = ({

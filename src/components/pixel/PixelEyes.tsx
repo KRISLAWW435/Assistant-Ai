@@ -4,18 +4,20 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { NormalizedGaze, PixelEmotion } from './PixelTypes';
+import { IdleMicroBehavior, NormalizedGaze, PixelEmotion } from './PixelTypes';
 
 interface PixelEyesProps {
   emotion: PixelEmotion;
   gaze: NormalizedGaze;
   size: number;
+  microBehavior?: IdleMicroBehavior;
 }
 
 export const PixelEyes: React.FC<PixelEyesProps> = ({
   emotion,
   gaze,
   size,
+  microBehavior = 'none',
 }) => {
   // Natural randomized blink state
   const [isBlinking, setIsBlinking] = useState(false);
@@ -77,15 +79,27 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
     };
   }, [emotion]);
 
-  // Micro-saccades: subtle natural eye twitches when in idle or thinking
+  // Micro-saccades & Micro-Behaviors: subtle natural eye twitches
   useEffect(() => {
     if (emotion === 'sleeping' || emotion === 'sleepy') {
-      setMicroSaccade({ x: 0, y: 0 });
+      setMicroSaccade({ x: 0, y: 0.15 });
       return;
     }
 
+    if (microBehavior === 'look_up') {
+      setMicroSaccade({ x: 0.05, y: -0.65 });
+      return;
+    }
+
+    if (microBehavior === 'look_around') {
+      setMicroSaccade({ x: 0.55, y: 0.1 });
+      const t = window.setTimeout(() => {
+        setMicroSaccade({ x: -0.55, y: -0.15 });
+      }, 1500);
+      return () => window.clearTimeout(t);
+    }
+
     const saccadeInterval = window.setInterval(() => {
-      // 35% chance to glance slightly aside or center
       if (Math.random() < 0.35) {
         setMicroSaccade({
           x: (Math.random() - 0.5) * 0.18,
@@ -97,7 +111,7 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
     }, 2800);
 
     return () => window.clearInterval(saccadeInterval);
-  }, [emotion]);
+  }, [emotion, microBehavior]);
 
   // Eye scaling & pupil travel calculations based on size
   const eyeRadiusX = size * 0.135;
@@ -111,26 +125,29 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
   const effectiveGazeX = Math.max(-1, Math.min(1, gaze.x + microSaccade.x));
   const effectiveGazeY = Math.max(-1, Math.min(1, gaze.y + microSaccade.y));
 
-  // Modify gaze slightly per emotion
+  // Modify gaze & pupil scale slightly per emotion
   let emotionGazeModX = 0;
   let emotionGazeModY = 0;
   let pupilScale = 1.0;
 
-  if (emotion === 'thinking') {
+  if (emotion === 'thoughtful' || emotion === 'thinking') {
     emotionGazeModX = 0.45;
     emotionGazeModY = -0.55;
     pupilScale = 0.92;
-  } else if (emotion === 'bashful') {
-    emotionGazeModX = -0.35;
-    emotionGazeModY = 0.45;
+  } else if (emotion === 'shy' || emotion === 'bashful') {
+    emotionGazeModX = -0.3;
+    emotionGazeModY = 0.42;
     pupilScale = 0.95;
-  } else if (emotion === 'surprised') {
+  } else if (emotion === 'surprise' || emotion === 'surprised') {
     pupilScale = 1.25;
-  } else if (emotion === 'curious') {
+  } else if (emotion === 'curiosity' || emotion === 'curious') {
     pupilScale = 1.12;
   } else if (emotion === 'sleepy') {
     emotionGazeModY = 0.35;
     pupilScale = 0.88;
+  } else if (emotion === 'sadness') {
+    emotionGazeModY = 0.25;
+    pupilScale = 0.95;
   }
 
   const finalPupilOffsetX =
@@ -150,22 +167,150 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
   const pupilOffsetXPct = (finalPupilOffsetX / size) * 100;
   const pupilOffsetYPct = (finalPupilOffsetY / size) * 100;
 
-  // Render eyelids & eye shapes based on emotion
+  // Render eyelids & eye shapes based on emotion and micro-behaviors
   const isFullyClosed =
     emotion === 'sleeping' ||
-    (isBlinking && emotion !== 'happy' && emotion !== 'interacting');
+    microBehavior === 'doze' ||
+    (isBlinking && emotion !== 'happy' && emotion !== 'joy' && emotion !== 'interacting');
 
   const isHappyCrescents =
-    emotion === 'happy' || emotion === 'interacting';
+    emotion === 'happy' || emotion === 'joy' || emotion === 'interacting';
+
+  // Eyebrow paths calculation
+  const eyebrowStroke = '#475569';
+  const eyebrowWidth = 1.8;
+
+  // Dynamic eyebrow geometry based on active emotion
+  const getEyebrows = () => {
+    const browBaseY = eyeCy - ryPct * 1.28;
+
+    if (emotion === 'joy' || emotion === 'happy' || emotion === 'interacting') {
+      // Cheerful arched eyebrows
+      return {
+        left: `M ${leftEyeCx - rxPct * 0.8} ${browBaseY + 1} Q ${leftEyeCx} ${browBaseY - 3.2} ${leftEyeCx + rxPct * 0.8} ${browBaseY + 0.8}`,
+        right: `M ${rightEyeCx - rxPct * 0.8} ${browBaseY + 0.8} Q ${rightEyeCx} ${browBaseY - 3.2} ${rightEyeCx + rxPct * 0.8} ${browBaseY + 1}`,
+      };
+    }
+
+    if (emotion === 'surprise' || emotion === 'surprised') {
+      // High raised surprised arches
+      return {
+        left: `M ${leftEyeCx - rxPct * 0.85} ${browBaseY - 2.5} Q ${leftEyeCx} ${browBaseY - 5.5} ${leftEyeCx + rxPct * 0.85} ${browBaseY - 2.5}`,
+        right: `M ${rightEyeCx - rxPct * 0.85} ${browBaseY - 2.5} Q ${rightEyeCx} ${browBaseY - 5.5} ${rightEyeCx + rxPct * 0.85} ${browBaseY - 2.5}`,
+      };
+    }
+
+    if (emotion === 'thoughtful' || emotion === 'thinking') {
+      // Asymmetric contemplative eyebrows: right raised quizzically, left flat
+      return {
+        left: `M ${leftEyeCx - rxPct * 0.75} ${browBaseY} Q ${leftEyeCx} ${browBaseY - 0.5} ${leftEyeCx + rxPct * 0.75} ${browBaseY + 0.5}`,
+        right: `M ${rightEyeCx - rxPct * 0.75} ${browBaseY - 2} Q ${rightEyeCx} ${browBaseY - 4.2} ${rightEyeCx + rxPct * 0.75} ${browBaseY - 1.5}`,
+      };
+    }
+
+    if (emotion === 'sadness') {
+      // Empathetic/concerned brows: inner tips raised, outer tips dipping
+      return {
+        left: `M ${leftEyeCx - rxPct * 0.8} ${browBaseY + 1.2} Q ${leftEyeCx} ${browBaseY - 1.8} ${leftEyeCx + rxPct * 0.8} ${browBaseY - 3.2}`,
+        right: `M ${rightEyeCx - rxPct * 0.8} ${browBaseY - 3.2} Q ${rightEyeCx} ${browBaseY - 1.8} ${rightEyeCx + rxPct * 0.8} ${browBaseY + 1.2}`,
+      };
+    }
+
+    if (emotion === 'empathy' || emotion === 'empathetic') {
+      // Gentle caring slight inner tilt
+      return {
+        left: `M ${leftEyeCx - rxPct * 0.75} ${browBaseY + 0.5} Q ${leftEyeCx} ${browBaseY - 1.8} ${leftEyeCx + rxPct * 0.75} ${browBaseY - 2.2}`,
+        right: `M ${rightEyeCx - rxPct * 0.75} ${browBaseY - 2.2} Q ${rightEyeCx} ${browBaseY - 1.8} ${rightEyeCx + rxPct * 0.75} ${browBaseY + 0.5}`,
+      };
+    }
+
+    if (emotion === 'curiosity' || emotion === 'curious') {
+      // Inquisitive tilt
+      return {
+        left: `M ${leftEyeCx - rxPct * 0.8} ${browBaseY - 1} Q ${leftEyeCx} ${browBaseY - 3.5} ${leftEyeCx + rxPct * 0.8} ${browBaseY - 1.5}`,
+        right: `M ${rightEyeCx - rxPct * 0.8} ${browBaseY - 2} Q ${rightEyeCx} ${browBaseY - 4.2} ${rightEyeCx + rxPct * 0.8} ${browBaseY - 2}`,
+      };
+    }
+
+    if (emotion === 'shy' || emotion === 'bashful') {
+      // Shy soft gentle lowered brows
+      return {
+        left: `M ${leftEyeCx - rxPct * 0.7} ${browBaseY + 0.8} Q ${leftEyeCx} ${browBaseY - 0.8} ${leftEyeCx + rxPct * 0.7} ${browBaseY + 0.5}`,
+        right: `M ${rightEyeCx - rxPct * 0.7} ${browBaseY + 0.5} Q ${rightEyeCx} ${browBaseY - 0.8} ${rightEyeCx + rxPct * 0.7} ${browBaseY + 0.8}`,
+      };
+    }
+
+    if (emotion === 'sleepy' || emotion === 'sleeping' || microBehavior === 'doze') {
+      // Relaxed sleeping brows
+      return {
+        left: `M ${leftEyeCx - rxPct * 0.75} ${browBaseY + 1} Q ${leftEyeCx} ${browBaseY} ${leftEyeCx + rxPct * 0.75} ${browBaseY + 1.2}`,
+        right: `M ${rightEyeCx - rxPct * 0.75} ${browBaseY + 1.2} Q ${rightEyeCx} ${browBaseY} ${rightEyeCx + rxPct * 0.75} ${browBaseY + 1}`,
+      };
+    }
+
+    // Default / Calm / Idle: natural gentle arc
+    return {
+      left: `M ${leftEyeCx - rxPct * 0.75} ${browBaseY} Q ${leftEyeCx} ${browBaseY - 2} ${leftEyeCx + rxPct * 0.75} ${browBaseY}`,
+      right: `M ${rightEyeCx - rxPct * 0.75} ${browBaseY} Q ${rightEyeCx} ${browBaseY - 2} ${rightEyeCx + rxPct * 0.75} ${browBaseY}`,
+    };
+  };
+
+  const eyebrows = getEyebrows();
 
   return (
     <g className="pixel-eyes-group">
+      <defs>
+        {/* Soft pastel eyelid gradient: delicate rosy-pearl with light blue undertone, NO dark indigo */}
+        <linearGradient id="pixelEyelidGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#FDF2F8" />
+          <stop offset="70%" stopColor="#FBCFE8" />
+          <stop offset="100%" stopColor="#F472B6" />
+        </linearGradient>
+
+        {/* Left eye clip path for pupil boundary containment */}
+        <clipPath id="leftEyeClip">
+          <ellipse cx={leftEyeCx} cy={eyeCy} rx={rxPct} ry={ryPct} />
+        </clipPath>
+        {/* Right eye clip path for pupil boundary containment */}
+        <clipPath id="rightEyeClip">
+          <ellipse cx={rightEyeCx} cy={eyeCy} rx={rxPct} ry={ryPct} />
+        </clipPath>
+
+        {/* Iris radial gradient: gentle sky cyan into soft lavender-indigo */}
+        <radialGradient id="irisGrad" cx="35%" cy="35%" r="65%">
+          <stop offset="0%" stopColor="#7DD3FC" />
+          <stop offset="45%" stopColor="#38BDF8" />
+          <stop offset="85%" stopColor="#818CF8" />
+          <stop offset="100%" stopColor="#1E293B" />
+        </radialGradient>
+
+        {/* Sclera 3D sphere gradient */}
+        <radialGradient id="scleraGrad" cx="40%" cy="35%" r="65%">
+          <stop offset="0%" stopColor="#FFFFFF" />
+          <stop offset="75%" stopColor="#F8FAFC" />
+          <stop offset="100%" stopColor="#CBD5E1" />
+        </radialGradient>
+      </defs>
+
+      {/* EXPRESSIVE EYEBROWS */}
+      <g
+        fill="none"
+        stroke={eyebrowStroke}
+        strokeWidth={eyebrowWidth}
+        strokeLinecap="round"
+        opacity="0.85"
+        className="transition-all duration-300 ease-out"
+      >
+        <path d={eyebrows.left} />
+        <path d={eyebrows.right} />
+      </g>
+
       {/* 1. HAPPY CRESCENTS MODE: Joyful upward curved smiling eyes (^ ^) */}
       {isHappyCrescents ? (
         <g
           fill="none"
-          stroke="#0F172A"
-          strokeWidth="3.2"
+          stroke="#1E293B"
+          strokeWidth="3"
           strokeLinecap="round"
           className="transition-all duration-200"
         >
@@ -186,8 +331,8 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
         /* 2. SLEEPING / BLINKING CLOSED LIDS: Gentle curved downward sleeping arcs */
         <g
           fill="none"
-          stroke="#0F172A"
-          strokeWidth="2.8"
+          stroke="#1E293B"
+          strokeWidth="2.6"
           strokeLinecap="round"
           className="transition-all duration-200"
         >
@@ -207,43 +352,6 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
       ) : (
         /* 3. OPEN 3D LIVING EYES WITH IRIS, PUPILS & SPECULAR HIGHLIGHTS */
         <g className="pixel-open-eyes">
-          {/* SCLERA (White eyeball with ambient soft blue tint & depth) */}
-          <defs>
-            {/* Left eye clip path for pupil boundary containment */}
-            <clipPath id="leftEyeClip">
-              <ellipse
-                cx={leftEyeCx}
-                cy={eyeCy}
-                rx={rxPct}
-                ry={ryPct}
-              />
-            </clipPath>
-            {/* Right eye clip path for pupil boundary containment */}
-            <clipPath id="rightEyeClip">
-              <ellipse
-                cx={rightEyeCx}
-                cy={eyeCy}
-                rx={rxPct}
-                ry={ryPct}
-              />
-            </clipPath>
-
-            {/* Iris radial gradient: vibrant cyan-electric blue into rich violet */}
-            <radialGradient id="irisGrad" cx="35%" cy="35%" r="65%">
-              <stop offset="0%" stopColor="#38BDF8" />     {/* Electric cyan core */}
-              <stop offset="45%" stopColor="#0284C7" />    {/* Deep sky azure */}
-              <stop offset="85%" stopColor="#4338CA" />    {/* Rich indigo ring */}
-              <stop offset="100%" stopColor="#1E1B4B" />   {/* Deep outer rim */}
-            </radialGradient>
-
-            {/* Sclera 3D sphere gradient */}
-            <radialGradient id="scleraGrad" cx="40%" cy="35%" r="65%">
-              <stop offset="0%" stopColor="#FFFFFF" />
-              <stop offset="75%" stopColor="#F0F4FF" />
-              <stop offset="100%" stopColor="#CBD5E1" />
-            </radialGradient>
-          </defs>
-
           {/* Left Eye Sclera */}
           <ellipse
             cx={leftEyeCx}
@@ -251,9 +359,9 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
             rx={rxPct}
             ry={ryPct}
             fill="url(#scleraGrad)"
-            stroke="#1E1B4B"
-            strokeWidth="1.2"
-            strokeOpacity="0.4"
+            stroke="#CBD5E1"
+            strokeWidth="1"
+            strokeOpacity="0.6"
           />
 
           {/* Right Eye Sclera */}
@@ -263,9 +371,9 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
             rx={rxPct}
             ry={ryPct}
             fill="url(#scleraGrad)"
-            stroke="#1E1B4B"
-            strokeWidth="1.2"
-            strokeOpacity="0.4"
+            stroke="#CBD5E1"
+            strokeWidth="1"
+            strokeOpacity="0.6"
           />
 
           {/* LEFT PUPIL & IRIS (Strictly clipped inside eye boundary) */}
@@ -366,42 +474,42 @@ export const PixelEyes: React.FC<PixelEyesProps> = ({
             </g>
           </g>
 
-          {/* EMOTION-SPECIFIC EYELID OVERLAYS (Sleepy, Thinking, Empathetic, Bashful) */}
-          {emotion === 'sleepy' && (
-            /* Drooping heavy upper eyelids covering top 55% */
-            <g fill="#312E81" opacity="0.95">
+          {/* EMOTION-SPECIFIC EYELID OVERLAYS: Rendered in soft pastel pearl/rose, NOT dark indigo */}
+          {(emotion === 'sleepy' || microBehavior === 'slow_blink') && (
+            /* Drooping gentle pastel eyelids covering upper 50% */
+            <g fill="url(#pixelEyelidGrad)" stroke="#F472B6" strokeWidth="0.8" opacity="0.92">
               <path
                 d={`M ${leftEyeCx - rxPct} ${eyeCy - ryPct} Q ${leftEyeCx} ${
-                  eyeCy + ryPct * 0.25
+                  eyeCy + ryPct * 0.2
                 } ${leftEyeCx + rxPct} ${eyeCy - ryPct} Z`}
               />
               <path
                 d={`M ${rightEyeCx - rxPct} ${eyeCy - ryPct} Q ${rightEyeCx} ${
-                  eyeCy + ryPct * 0.25
+                  eyeCy + ryPct * 0.2
                 } ${rightEyeCx + rxPct} ${eyeCy - ryPct} Z`}
               />
             </g>
           )}
 
-          {emotion === 'thinking' && (
-            /* Contemplative squint: slightly lowered upper eyelids */
-            <g fill="#312E81" opacity="0.9">
+          {(emotion === 'thoughtful' || emotion === 'thinking') && (
+            /* Contemplative soft squint */
+            <g fill="url(#pixelEyelidGrad)" stroke="#F472B6" strokeWidth="0.6" opacity="0.85">
               <path
                 d={`M ${leftEyeCx - rxPct} ${eyeCy - ryPct} Q ${leftEyeCx} ${
-                  eyeCy - ryPct * 0.1
+                  eyeCy - ryPct * 0.15
                 } ${leftEyeCx + rxPct} ${eyeCy - ryPct} Z`}
               />
               <path
                 d={`M ${rightEyeCx - rxPct} ${eyeCy - ryPct} Q ${rightEyeCx} ${
-                  eyeCy - ryPct * 0.1
+                  eyeCy - ryPct * 0.15
                 } ${rightEyeCx + rxPct} ${eyeCy - ryPct} Z`}
               />
             </g>
           )}
 
-          {emotion === 'empathetic' && (
-            /* Caring slant eyelids */
-            <g fill="#312E81" opacity="0.85">
+          {(emotion === 'empathy' || emotion === 'empathetic') && (
+            /* Caring gentle slant */
+            <g fill="url(#pixelEyelidGrad)" stroke="#F472B6" strokeWidth="0.6" opacity="0.82">
               <path
                 d={`M ${leftEyeCx - rxPct} ${eyeCy - ryPct * 0.5} Q ${leftEyeCx} ${
                   eyeCy - ryPct * 0.2

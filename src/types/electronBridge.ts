@@ -42,8 +42,30 @@ export interface ElectronAIConnectionsBridge {
   openExternalUrl(url: string): Promise<void>;
 }
 
+export interface ElectronAnnaMemoryBridge {
+  loadAll(): Promise<import('./annaMemory').AnnaMemoryBundle>;
+  saveSection<K extends 'profile' | 'interests' | 'preferences' | 'projects' | 'memories'>(
+    section: K,
+    data: import('./annaMemory').AnnaMemoryBundle[K]
+  ): Promise<boolean>;
+  addMemory(item: import('./annaMemory').AnnaMemoryItem): Promise<boolean>;
+  updateMemory(item: import('./annaMemory').AnnaMemoryItem): Promise<boolean>;
+  deleteMemory(id: string): Promise<boolean>;
+  clearAll(): Promise<boolean>;
+  getStorageInfo(): Promise<{
+    isElectron: boolean;
+    storagePath: string;
+    autoSaveEnabled: boolean;
+    itemCount: number;
+    lastSavedAt: string;
+  }>;
+  exportBackup(): Promise<string>;
+  importBackup(jsonString: string): Promise<boolean>;
+}
+
 export interface ElectronAppApi {
   aiConnections?: ElectronAIConnectionsBridge;
+  annaMemory?: ElectronAnnaMemoryBridge;
   safeStorage?: {
     isAvailable(): boolean;
   };

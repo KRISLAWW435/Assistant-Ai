@@ -122,8 +122,8 @@ const APP_SECTION_ITEMS: AppSectionItem[] = [
   },
   {
     id: 'connections',
-    label: 'Подключения ИИ',
-    sublabel: 'Ключи, модели, Ollama',
+    label: 'Настройки и ИИ',
+    sublabel: 'Ключи, голос Пикселя, тесты',
     icon: Cpu,
   },
 ];

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { FloatingParticle, PixelEmotion } from './PixelTypes';
 
 interface PixelEffectsProps {
@@ -34,53 +34,74 @@ export const PixelEffects: React.FC<PixelEffectsProps> = ({
     };
   }, [particles, onRemoveParticle]);
 
-  // Compute emotion aura glow styles
-  let auraGlowColor = 'rgba(99, 102, 241, 0.45)'; // default electric indigo
-  let auraBlur = size * 0.35;
-  let auraSpread = size * 0.12;
+  // Glow intensities tuned per emotion: gentle, translucent, never harsh
+  const isSleeping = emotion === 'sleeping';
+  const isListening = emotion === 'listening';
+  const isJoy = emotion === 'joy' || emotion === 'happy' || emotion === 'interacting';
+  const isThoughtful = emotion === 'thoughtful' || emotion === 'thinking';
 
-  if (emotion === 'happy' || emotion === 'interacting') {
-    auraGlowColor = 'rgba(236, 72, 153, 0.6)'; // bright magenta/pink
-    auraBlur = size * 0.55;
-    auraSpread = size * 0.22;
-  } else if (emotion === 'listening') {
-    auraGlowColor = 'rgba(16, 185, 129, 0.65)'; // emerald wake/listening pulse
-    auraBlur = size * 0.5;
-    auraSpread = size * 0.2;
-  } else if (emotion === 'speaking') {
-    auraGlowColor = 'rgba(56, 189, 248, 0.7)'; // bright cyan vocal pulse
-    auraBlur = size * 0.55;
-    auraSpread = size * 0.22;
-  } else if (emotion === 'thinking') {
-    auraGlowColor = 'rgba(139, 92, 246, 0.55)'; // twilight violet pulse
-    auraBlur = size * 0.45;
-  } else if (emotion === 'sleeping') {
-    auraGlowColor = 'rgba(99, 102, 241, 0.2)'; // very soft dim lavender
-    auraBlur = size * 0.25;
-    auraSpread = size * 0.05;
-  }
+  const glowOpacity = isSleeping ? 0.35 : isListening ? 0.85 : isJoy ? 0.8 : 0.65;
 
   return (
     <div
-      className="absolute inset-0 pointer-events-none overflow-visible"
+      className="absolute inset-0 pointer-events-none overflow-visible select-none bg-transparent"
       style={{ width: size, height: size }}
       aria-hidden="true"
     >
-      {/* 1. AMBIENT BACKLIGHT AURA (Diffused soft sphere bloom) */}
-      <div
-        className="absolute inset-0 rounded-full transition-all duration-500 ease-out"
-        style={{
-          boxShadow: `0 0 ${auraBlur}px ${auraSpread}px ${auraGlowColor}`,
-          opacity: emotion === 'sleeping' ? 0.35 : 0.85,
-        }}
-      />
+      {/* 1. DELICATE LUMINOUS PASTEL AURA (Pure SVG radial glow without dark box-shadows or white backing) */}
+      <svg
+        viewBox="0 0 160 160"
+        className="absolute -inset-[30%] w-[160%] h-[160%] overflow-visible pointer-events-none transition-opacity duration-700 ease-out"
+        style={{ opacity: glowOpacity }}
+      >
+        <defs>
+          <radialGradient id="pixelAmbientGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.45" />
+            <stop offset="28%" stopColor="#FDF2F8" stopOpacity="0.35" />
+            <stop offset="55%" stopColor="#BAE6FD" stopOpacity="0.28" />
+            <stop offset="78%" stopColor="#DDD6FE" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#DDD6FE" stopOpacity="0" />
+          </radialGradient>
+
+          {isListening && (
+            <radialGradient id="pixelListeningGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.6" />
+              <stop offset="35%" stopColor="#7DD3FC" stopOpacity="0.4" />
+              <stop offset="70%" stopColor="#BAE6FD" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="#7DD3FC" stopOpacity="0" />
+            </radialGradient>
+          )}
+
+          {isThoughtful && (
+            <radialGradient id="pixelThoughtfulGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.55" />
+              <stop offset="35%" stopColor="#DDD6FE" stopOpacity="0.38" />
+              <stop offset="70%" stopColor="#BAE6FD" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="#DDD6FE" stopOpacity="0" />
+            </radialGradient>
+          )}
+        </defs>
+
+        <circle
+          cx="80"
+          cy="80"
+          r="76"
+          fill={
+            isListening
+              ? 'url(#pixelListeningGlow)'
+              : isThoughtful
+                ? 'url(#pixelThoughtfulGlow)'
+                : 'url(#pixelAmbientGlow)'
+          }
+        />
+      </svg>
 
       {/* 2. SLEEP "z Z z" FLOATING BUBBLE PARTICLES */}
-      {emotion === 'sleeping' && (
-        <div className="absolute -top-4 -right-3 text-indigo-400 font-display font-extrabold select-none">
-          <span className="pixel-sleep-z1 inline-block text-xs opacity-80">z</span>
-          <span className="pixel-sleep-z2 inline-block text-[10px] ml-1 opacity-60">z</span>
-          <span className="pixel-sleep-z1 inline-block text-[8px] ml-1 opacity-40">z</span>
+      {isSleeping && (
+        <div className="absolute -top-3 -right-2 text-sky-400 font-display font-medium select-none">
+          <span className="pixel-sleep-z1 inline-block text-xs opacity-70">z</span>
+          <span className="pixel-sleep-z2 inline-block text-[10px] ml-0.5 opacity-50">z</span>
+          <span className="pixel-sleep-z1 inline-block text-[8px] ml-0.5 opacity-30">z</span>
         </div>
       )}
 
@@ -115,18 +136,17 @@ export const PixelEffects: React.FC<PixelEffectsProps> = ({
               >
                 <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
               </svg>
-            ) : (
-              /* Sparkle 4-point star */
+            ) : p.type === 'sparkle' ? (
               <svg
-                width={size * 0.22}
-                height={size * 0.22}
+                width={size * 0.24}
+                height={size * 0.24}
                 viewBox="0 0 24 24"
                 fill="currentColor"
                 className="drop-shadow-xs"
               >
-                <path d="M12 0L14.5 9.5L24 12L14.5 14.5L12 24L9.5 14.5L0 12L9.5 9.5L12 0Z" />
+                <path d="M12 0L14.59 9.41L24 12L14.59 14.59L12 24L9.41 14.59L0 12L9.41 9.41L12 0Z" />
               </svg>
-            )}
+            ) : null}
           </div>
         );
       })}
