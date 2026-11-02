@@ -63,9 +63,21 @@ export interface ElectronAnnaMemoryBridge {
   importBackup(jsonString: string): Promise<boolean>;
 }
 
+export interface ElectronNotificationsBridge {
+  show(payload: { title: string; body: string; silent?: boolean }): Promise<boolean>;
+}
+
+export interface ElectronCompanionTasksBridge {
+  loadAll(): Promise<import('./assistant').CompanionTaskRecord[]>;
+  save(task: import('./assistant').CompanionTaskRecord): Promise<boolean>;
+  delete(id: string): Promise<boolean>;
+}
+
 export interface ElectronAppApi {
   aiConnections?: ElectronAIConnectionsBridge;
   annaMemory?: ElectronAnnaMemoryBridge;
+  notifications?: ElectronNotificationsBridge;
+  companionTasks?: ElectronCompanionTasksBridge;
   safeStorage?: {
     isAvailable(): boolean;
   };
@@ -86,3 +98,4 @@ declare global {
     electronAPI?: ElectronAppApi;
   }
 }
+

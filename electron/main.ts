@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  Notification,
   safeStorage,
   session,
   shell,
@@ -646,7 +647,7 @@ function registerIpcHandlers(): void {
     return JSON.stringify(bundle, null, 2);
   });
 
-  ipcMain.handle('annaMemory:importBackup', async (_event, jsonString: string) => {
+    ipcMain.handle('annaMemory:importBackup', async (_event, jsonString: string) => {
     const parsed = JSON.parse(jsonString) as Partial<AnnaMemoryBundle>;
     if (parsed.profile) safeWriteJson(path.join(pixelAnnaDir, 'profile.json'), parsed.profile);
     if (parsed.interests) safeWriteJson(path.join(pixelAnnaDir, 'interests.json'), parsed.interests);
@@ -655,6 +656,65 @@ function registerIpcHandlers(): void {
     if (parsed.memories) safeWriteJson(path.join(pixelAnnaDir, 'memories.json'), parsed.memories);
     return true;
   });
+
+  // Companion Tasks disk mirror (ensures tasks & reminders survive port changes & restarts)
+  const companionTasksPath = path.join(pixelAnnaDir, 'tasks.json');
+
+  ipcMain.handle('companionTasks:loadAll', async () => {
+    return readJsonOrDefault<any[]>(companionTasksPath, []);
+  });
+
+  ipcMain.handle('companionTasks:save', async (_event, task: any) => {
+    if (!task || typeof task.id !== 'string') return false;
+    const current = readJsonOrDefault<any[]>(companionTasksPath, []);
+    const idx = current.findIndex((t) => t && t.id === task.id);
+    if (idx >= 0) {
+      current[idx] = task;
+    } else {
+      current.unshift(task);
+    }
+    safeWriteJson(companionTasksPath, current);
+    return true;
+  });
+
+  ipcMain.handle('companionTasks:delete', async (_event, taskId: string) => {
+    if (!taskId) return false;
+    const current = readJsonOrDefault<any[]>(companionTasksPath, []);
+    const next = current.filter((t) => t && t.id !== taskId);
+    safeWriteJson(companionTasksPath, next);
+    return true;
+  });
+
+  // Native OS notifications (works even when window is minimized)
+  ipcMain.handle(
+    'notifications:show',
+    async (_event, payload: { title: string; body: string; silent?: boolean }) => {
+      try {
+        if (!Notification.isSupported()) {
+          return false;
+        }
+        const iconPath = getAppIconPath();
+        const notification = new Notification({
+          title: payload?.title || 'Пиксель — напоминание',
+          body: payload?.body || '',
+          icon: iconPath || undefined,
+          silent: Boolean(payload?.silent),
+        });
+        notification.on('click', () => {
+          if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        });
+        notification.show();
+        return true;
+      } catch (err) {
+        console.warn('[Electron Notification] Failed to show notification:', err);
+        return false;
+      }
+    }
+  );
 }
 
 async function createMainWindow(port: number): Promise<void> {
@@ -675,6 +735,7 @@ async function createMainWindow(port: number): Promise<void> {
       nodeIntegration: false,
       sandbox: false,
       webSecurity: true,
+      backgroundThrottling: false,
     },
   });
 
@@ -686,12 +747,13 @@ async function createMainWindow(port: number): Promise<void> {
     return { action: 'deny' };
   });
 
-  // Grant microphone & speech recognition permissions for Pixel Voice & Live API
+  // Grant microphone, speech recognition & notifications permissions for Pixel Voice, Live API & Reminders
   const allowedVoicePermissions = new Set([
     'media',
     'microphone',
     'audio-capture',
     'speech-recognition',
+    'notifications',
   ]);
 
   session.defaultSession.setPermissionRequestHandler(

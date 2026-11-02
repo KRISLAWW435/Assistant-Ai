@@ -93,6 +93,11 @@ import { wakeWordManager } from './providers/voice/wakeWordManager';
 import { voiceManager } from './providers/voice/voiceManager';
 import { WakeWordState } from './types/voice';
 import { pixelAgentCoordinator } from './providers/PixelAgentCoordinator';
+import {
+  buildFallbackTaskFromUserRequest,
+  extractAutoTaskFromConversation,
+  parseAndExecuteTaskCommand,
+} from './utils/pixelTaskManagerEngine';
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'kiber_renderia_sidebar_collapsed';
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'kiber_renderia_right_panel_collapsed';
@@ -615,6 +620,123 @@ export default function App() {
             ...companionMessagesRef.current,
             ...filtered,
           ]);
+        }
+        for (const msg of newMessages) {
+          if (msg.role === 'user' && msg.content?.trim()) {
+            const cmd = parseAndExecuteTaskCommand(
+              msg.content,
+              activeSchoolRef.current,
+              companionTasksRef.current
+            );
+            if (cmd?.handled) {
+              if (cmd.createdTask) {
+                try {
+                  await handleSaveCompanionTask(cmd.createdTask);
+                } catch (err) {
+                  const errText =
+                    err instanceof Error
+                      ? err.message
+                      : 'Ошибка записи задачи в хранилище IndexedDB.';
+                  const errMsg: CompanionMessage = {
+                    id: `comp-voice-taskerr-${Date.now()}`,
+                    role: 'pixel',
+                    content: `❌ **Не удалось сохранить задачу в хранилище:** ${errText}`,
+                    createdAt: formatTimeOnly(new Date()),
+                    createdAtMs: Date.now(),
+                    schoolId: activeSchoolRef.current,
+                    isError: true,
+                  };
+                  await handleSaveCompanionMessages([
+                    ...companionMessagesRef.current,
+                    errMsg,
+                  ]);
+                }
+              }
+              if (cmd.updatedTasks) {
+                for (const ut of cmd.updatedTasks) {
+                  try {
+                    await handleSaveCompanionTask(ut);
+                  } catch {
+                    // error handled in handleSaveCompanionTask
+                  }
+                }
+              }
+            } else {
+              const autoTask = extractAutoTaskFromConversation(
+                msg.content,
+                activeSchoolRef.current,
+                companionTasksRef.current,
+                msg.id
+              );
+              if (autoTask) {
+                try {
+                  await handleSaveCompanionTask(autoTask.taskRecord);
+                } catch (err) {
+                  const errText =
+                    err instanceof Error
+                      ? err.message
+                      : 'Ошибка записи задачи в хранилище IndexedDB.';
+                  const errMsg: CompanionMessage = {
+                    id: `comp-voice-taskerr-${Date.now()}`,
+                    role: 'pixel',
+                    content: `❌ **Не удалось сохранить задачу в хранилище:** ${errText}`,
+                    createdAt: formatTimeOnly(new Date()),
+                    createdAtMs: Date.now(),
+                    schoolId: activeSchoolRef.current,
+                    isError: true,
+                  };
+                  await handleSaveCompanionMessages([
+                    ...companionMessagesRef.current,
+                    errMsg,
+                  ]);
+                }
+              }
+            }
+          } else if (
+            msg.role === 'pixel' &&
+            msg.content &&
+            /(?:записал[аи]?|поставил[аи]?|создал[аи]?|добавил[аи]?|внесл[аи]?|зафиксировал[аи]?)\s+(?:[^.!?]{0,45})?(?:задач[уи]|в\s+список\s+дел|в\s+задачи|напоминание)/i.test(
+              msg.content
+            )
+          ) {
+            const recentTaskSaved = companionTasksRef.current.some(
+              (t) => Date.now() - t.createdAtMs < 15000
+            );
+            if (!recentTaskSaved) {
+              const lastUserMsg = [...companionMessagesRef.current]
+                .reverse()
+                .find((m) => m.role === 'user' && m.content?.trim());
+              const fallbackTask = lastUserMsg
+                ? buildFallbackTaskFromUserRequest(
+                    lastUserMsg.content,
+                    activeSchoolRef.current
+                  )
+                : null;
+              if (fallbackTask) {
+                try {
+                  await handleSaveCompanionTask(fallbackTask);
+                } catch (err) {
+                  const errText =
+                    err instanceof Error
+                      ? err.message
+                      : 'Не удалось сохранить задачу в хранилище.';
+                  const warnMsg: CompanionMessage = {
+                    id: `comp-voice-falseconfirm-${Date.now()}`,
+                    role: 'pixel',
+                    content: `❌ **Внимание: задача НЕ была сохранена в списке дел.** Причина: ${errText}`,
+                    createdAt: formatTimeOnly(new Date()),
+                    createdAtMs: Date.now(),
+                    schoolId: activeSchoolRef.current,
+                    isError: true,
+                  };
+                  await handleSaveCompanionMessages([
+                    ...companionMessagesRef.current,
+                    warnMsg,
+                  ]);
+                }
+              }
+            }
+          }
         }
         pixelAgentCoordinator.handleSpokenUserMessagesIfAny(newMessages);
       },
@@ -2131,7 +2253,6 @@ export default function App() {
     const ordered = [...messages].sort((a, b) => a.createdAtMs - b.createdAtMs);
     companionMessagesRef.current = ordered;
     setCompanionMessages(ordered);
-    if (isStorageLoading) return;
     try {
       await storageProvider.saveCompanionMessages(ordered);
       setStorageError(null);
@@ -2145,10 +2266,10 @@ export default function App() {
   };
 
   const handleClearCompanionMessages = async () => {
-    if (isStorageLoading) return;
     try {
       const greeting = createInitialCompanionGreetingMessage();
       await storageProvider.clearCompanionMessages(greeting);
+      companionMessagesRef.current = [greeting];
       setCompanionMessages([greeting]);
       setStorageError(null);
     } catch (err) {
@@ -2161,12 +2282,13 @@ export default function App() {
   };
 
   const handleSaveCompanionMemory = async (record: CompanionMemoryRecord) => {
-    setCompanionMemory((prev) =>
-      [record, ...prev.filter((m) => m.id !== record.id)].sort(
+    setCompanionMemory((prev) => {
+      const next = [record, ...prev.filter((m) => m.id !== record.id)].sort(
         (a, b) => b.updatedAtMs - a.updatedAtMs
-      )
-    );
-    if (isStorageLoading) return;
+      );
+      companionMemoryRef.current = next;
+      return next;
+    });
     try {
       await storageProvider.saveCompanionMemory(record);
       setStorageError(null);
@@ -2180,8 +2302,11 @@ export default function App() {
   };
 
   const handleDeleteCompanionMemory = async (id: string) => {
-    setCompanionMemory((prev) => prev.filter((m) => m.id !== id));
-    if (isStorageLoading) return;
+    setCompanionMemory((prev) => {
+      const next = prev.filter((m) => m.id !== id);
+      companionMemoryRef.current = next;
+      return next;
+    });
     try {
       await storageProvider.deleteCompanionMemory(id);
       setStorageError(null);
@@ -2195,8 +2320,8 @@ export default function App() {
   };
 
   const handleClearAllCompanionMemory = async () => {
+    companionMemoryRef.current = [];
     setCompanionMemory([]);
-    if (isStorageLoading) return;
     try {
       await storageProvider.clearAllCompanionMemory();
       setStorageError(null);
@@ -2210,31 +2335,39 @@ export default function App() {
   };
 
   const handleSaveCompanionTask = async (task: CompanionTaskRecord) => {
-    setCompanionTasks((prev) =>
-      [task, ...prev.filter((t) => t.id !== task.id)].sort((a, b) => {
-        if (a.status === 'done' && b.status !== 'done') return 1;
-        if (a.status !== 'done' && b.status === 'done') return -1;
-        return b.createdAtMs - a.createdAtMs;
-      })
-    );
-    if (isStorageLoading) return;
     try {
+      // 1. Write to primary storage (IndexedDB + Electron mirror) and verify before updating UI state
       await storageProvider.saveCompanionTask(task);
+      setCompanionTasks((prev) => {
+        const next = [task, ...prev.filter((t) => t.id !== task.id)].sort(
+          (a, b) => {
+            if (a.status === 'done' && b.status !== 'done') return 1;
+            if (a.status !== 'done' && b.status === 'done') return -1;
+            return b.createdAtMs - a.createdAtMs;
+          }
+        );
+        companionTasksRef.current = next;
+        return next;
+      });
       setStorageError(null);
     } catch (err) {
-      setStorageError(
+      const message =
         err instanceof Error
           ? err.message
-          : 'Не удалось сохранить задачу Анны в IndexedDB.'
-      );
+          : 'Не удалось сохранить задачу Анны в IndexedDB.';
+      setStorageError(message);
+      throw err instanceof Error ? err : new Error(message);
     }
   };
 
   const handleDeleteCompanionTask = async (taskId: string) => {
-    setCompanionTasks((prev) => prev.filter((t) => t.id !== taskId));
-    if (isStorageLoading) return;
     try {
       await storageProvider.deleteCompanionTask(taskId);
+      setCompanionTasks((prev) => {
+        const next = prev.filter((t) => t.id !== taskId);
+        companionTasksRef.current = next;
+        return next;
+      });
       setStorageError(null);
     } catch (err) {
       setStorageError(
@@ -2249,7 +2382,6 @@ export default function App() {
     prefs: CompanionPreferencesRecord
   ) => {
     setCompanionPreferences(prefs);
-    if (isStorageLoading) return;
     try {
       await storageProvider.saveCompanionPreferences(prefs);
       setStorageError(null);

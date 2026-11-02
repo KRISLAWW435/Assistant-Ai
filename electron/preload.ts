@@ -53,6 +53,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     importBackup: (jsonString: string) =>
       ipcRenderer.invoke('annaMemory:importBackup', jsonString),
   },
+  notifications: {
+    show: (payload: { title: string; body: string; silent?: boolean }): Promise<boolean> =>
+      ipcRenderer.invoke('notifications:show', payload),
+  },
+  companionTasks: {
+    loadAll: () => ipcRenderer.invoke('companionTasks:loadAll'),
+    save: (task: any) => ipcRenderer.invoke('companionTasks:save', task),
+    delete: (id: string) => ipcRenderer.invoke('companionTasks:delete', id),
+  },
   safeStorage: {
     isAvailable: (): boolean => true,
   },
@@ -69,3 +78,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('ollama:chat', payload),
   },
 });
+

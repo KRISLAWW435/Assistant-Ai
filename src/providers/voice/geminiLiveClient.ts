@@ -425,6 +425,10 @@ export class GeminiLiveClient {
         break;
 
       case 'model_transcript':
+        if (this.currentPartialUserText) {
+          this.updateUserTranscript(this.currentPartialUserText, true);
+          this.currentPartialUserText = '';
+        }
         if (msg.text) {
           if (!this.currentPartialModelText) {
             this.currentPartialModelText = msg.text;
@@ -436,6 +440,10 @@ export class GeminiLiveClient {
         break;
 
       case 'audio':
+        if (this.currentPartialUserText) {
+          this.updateUserTranscript(this.currentPartialUserText, true);
+          this.currentPartialUserText = '';
+        }
         if (msg.data && !this.isPaused) {
           this.modelIsSpeaking = true;
           this.updateState('speaking');
@@ -465,8 +473,8 @@ export class GeminiLiveClient {
     this.updateState('interrupted');
     this.callbacks?.onInterrupted?.();
 
-    // Mark current model transcript as interrupted
-    if (this.currentPartialModelText) {
+    // Mark current user/model transcript as finalized on interruption
+    if (this.currentPartialUserText || this.currentPartialModelText) {
       this.commitCurrentTurn();
     }
 

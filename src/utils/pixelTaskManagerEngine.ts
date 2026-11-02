@@ -64,7 +64,13 @@ const SPECIALIST_DELEGATION_PATTERN =
   /(?:поручи|передай|делегируй|отправь|попроси|скажи|напиши|дай\s+задани[ея]|поставь\s+задачу|пусть|спроси\s+у)\s+.*?(?:маркетолог|менеджер|методист|аналитик)/i;
 
 const HYPOTHETICAL_OR_QUOTE_PATTERN =
-  /(?:например|допустим|предположим|представь|если\s+бы|в\s+качестве\s+примера|как\s+вариант|цитирую|он\s+сказал|она\s+сказала|клиент\s+написал|родитель\s+спросил|«.+»|".+")/i;
+  /(?:допустим|предположим|представь\s+себе|если\s+бы|в\s+качестве\s+примера|цитирую|он\s+сказал|она\s+сказала|клиент\s+написал|родитель\s+спросил)/i;
+
+export function hasExplicitReminderRequest(text: string): boolean {
+  return /(?:напомн[иить]|предупред[иить]|с\s+напоминанием|поставить\s+напоминание|включи\s+напоминание)/i.test(
+    text
+  );
+}
 
 /**
  * Multi-criteria priority evaluation:
@@ -126,11 +132,11 @@ export function evaluateTaskPriorityMultiCriteria(
     consequencesIfDelayed =
       'Риск потери лояльности родителей/учеников или срыва расписания занятий';
     reasons.push('влияет на родителей, расписание или выручку школы');
-  } else if (/(отчет|отчёт|аналитик|статистик|бюджет|контент-план|реклам|кампани|методич|программ)/i.test(combined)) {
+  } else if (/(отчет|отчёт|аналитик|статистик|бюджет|контент-план|реклам|кампани|методич|программ|мероприят|мастер-класс)/i.test(combined)) {
     importanceScore = Math.max(importanceScore, 7);
     consequencesIfDelayed =
-      'Задержка управленческого контроля или маркетингового запуска';
-    reasons.push('важно для управления и развития филиала');
+      'Задержка управленческого контроля или подготовки мероприятия филиала';
+    reasons.push('важно для управления и мероприятий филиала');
   } else if (/(обновить презентацию|разобрать архив|почистить|шаблон|идеи|оформлени)/i.test(combined)) {
     importanceScore = Math.min(importanceScore, 5);
     consequencesIfDelayed = 'Внутренняя задача улучшения без немедленного риска';
@@ -146,7 +152,7 @@ export function evaluateTaskPriorityMultiCriteria(
   // 5. Effort estimation in minutes
   if (/(позвонить|написать|ответить|напомнить|отправить\s+сообщение|проверить|уточнить)/i.test(combined)) {
     estimatedMinutes = 15;
-  } else if (/(составить|подготовить|разработать|проанализировать|провести\s+встречу|отчёт|отчет|презентац|план)/i.test(combined)) {
+  } else if (/(составить|подготовить|подготовиться|разработать|проанализировать|провести|мероприят|отчёт|отчет|презентац|план)/i.test(combined)) {
     estimatedMinutes = 60;
   } else if (/(аудит|стратеги|большой|полный\s+разбор|обучение)/i.test(combined)) {
     estimatedMinutes = 90;
@@ -252,21 +258,77 @@ export function detectSchoolFromTaskText(
   return fallbackSchool;
 }
 
+export function buildSyzranReminderIso(
+  dueDate: string,
+  dueTime?: string
+): string | undefined {
+  if (!dueDate || !dueTime) return undefined;
+  const dateParts = dueDate.split('-').map(Number);
+  const timeParts = dueTime.split(':').map(Number);
+  if (
+    dateParts.length !== 3 ||
+    timeParts.length < 2 ||
+    dateParts.some((n) => Number.isNaN(n)) ||
+    timeParts.some((n) => Number.isNaN(n))
+  ) {
+    return undefined;
+  }
+  const [y, m, d] = dateParts;
+  const [hh, mm] = timeParts;
+  // Europe/Samara is UTC+4
+  const utcMs = Date.UTC(y, m - 1, d, hh - 4, mm, 0);
+  if (Number.isNaN(utcMs)) return undefined;
+  return new Date(utcMs).toISOString();
+}
+
 export function parseRelativeDateAndTimeFromRuText(
   text: string,
   todayIso: string = toSyzranIsoDate()
-): { dueDate: string; dueTime?: string; dateLabelRu: string } {
+): {
+  dueDate: string;
+  dueTime?: string;
+  dateLabelRu: string;
+  isDateAmbiguous?: boolean;
+  ambiguityPromptRu?: string;
+} {
   const lower = text.toLowerCase();
 
   let dueTime: string | undefined;
-  const timeMatch = lower.match(/(?:в|к)\s*(\d{1,2})(?::(\d{2}))?\s*(?:час(?:а|ов)?|ч\b|утра|дня|вечера)?/i);
+  let isTimeAmbiguous = false;
+  const timeMatch = lower.match(
+    /(?:^|\s|[.,!?;:])(?:в|к)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(час(?:а|ов)?|ч(?=\s|$|[.,!?;:])|утра|дня|вечера|ночи)?(?=\s|$|[.,!?;:])/i
+  );
   if (timeMatch) {
     let hour = parseInt(timeMatch[1], 10);
     const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+    const period = (timeMatch[3] || '').toLowerCase();
+    const hasExplicitMinutes = Boolean(timeMatch[2]);
     if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
-      if (lower.includes('вечера') && hour < 12) hour += 12;
+      if ((period === 'дня' || period === 'вечера') && hour < 12) {
+        hour += 12;
+      } else if (!period && !hasExplicitMinutes && hour >= 1 && hour <= 6) {
+        // e.g. "в 3 часа" in a business context usually means 15:00, but flag as worth confirming
+        hour += 12;
+        isTimeAmbiguous = true;
+      }
       dueTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
     }
+  }
+
+  // Detect ambiguous date combinations like "в среду или четверг", "завтра или послезавтра", "на днях", "через пару дней"
+  if (
+    /(?:на\s+днях|через\s+пару\s+дней|через\s+несколько\s+дней|в\s+ближайшее\s+время|скоро|в\s+первой\s+половине\s+недели|в\s+конце\s+недели|(?:завтра|сегодня|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+или\s+(?:завтра|послезавтра|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье))/i.test(
+      lower
+    )
+  ) {
+    return {
+      dueDate: '',
+      dueTime,
+      dateLabelRu: 'дата требует уточнения',
+      isDateAmbiguous: true,
+      ambiguityPromptRu:
+        'Дата указана неоднозначно. Уточните, пожалуйста, точный день и время (например: «Перенеси задачу на среду в 15:00» или «на завтра в 12:00»).',
+    };
   }
 
   // Dateless markers («когда-нибудь», «без срока», «при случае»)
@@ -276,15 +338,33 @@ export function parseRelativeDateAndTimeFromRuText(
 
   if (lower.includes('послезавтра')) {
     const dueDate = addDaysToIsoDate(todayIso, 2);
-    return { dueDate, dueTime, dateLabelRu: 'на послезавтра' };
+    return {
+      dueDate,
+      dueTime,
+      dateLabelRu: 'на послезавтра',
+      isDateAmbiguous: isTimeAmbiguous,
+      ambiguityPromptRu: isTimeAmbiguous
+        ? `Я поставила время ${dueTime} (день). Если имелось в виду утро, уточните, пожалуйста.`
+        : undefined,
+    };
   }
 
   if (lower.includes('завтра')) {
     const dueDate = addDaysToIsoDate(todayIso, 1);
-    return { dueDate, dueTime, dateLabelRu: 'на завтра' };
+    return {
+      dueDate,
+      dueTime,
+      dateLabelRu: 'на завтра',
+      isDateAmbiguous: isTimeAmbiguous,
+      ambiguityPromptRu: isTimeAmbiguous
+        ? `Я поставила время ${dueTime} (день). Если имелось в виду утро, уточните, пожалуйста.`
+        : undefined,
+    };
   }
 
   if (lower.includes('сегодня') || lower.includes('до вечера') || lower.includes('до обеда')) {
+    if (!dueTime && lower.includes('до обеда')) dueTime = '13:00';
+    if (!dueTime && lower.includes('до вечера')) dueTime = '18:00';
     return { dueDate: todayIso, dueTime, dateLabelRu: 'на сегодня' };
   }
 
@@ -295,20 +375,43 @@ export function parseRelativeDateAndTimeFromRuText(
     return { dueDate, dueTime, dateLabelRu: `на ${formatSyzranIsoDateRu(dueDate)}` };
   }
 
-  if (lower.includes('на следующей неделе') || lower.includes('через неделю')) {
-    const dueDate = addDaysToIsoDate(todayIso, 7);
-    return { dueDate, dueTime, dateLabelRu: `на ${formatSyzranIsoDateRu(dueDate)}` };
-  }
-
-  // Day of week detection
+  // Day of week detection (supports "в среду", "на среду", "к среде", "до среды", etc.)
   const weekdays: Array<{ pattern: RegExp; targetDow: number; label: string }> = [
-    { pattern: /в\s+понедельник/, targetDow: 1, label: 'в понедельник' },
-    { pattern: /во?\s+вторник/, targetDow: 2, label: 'во вторник' },
-    { pattern: /в\s+среду/, targetDow: 3, label: 'в среду' },
-    { pattern: /в\s+четверг/, targetDow: 4, label: 'в четверг' },
-    { pattern: /в\s+пятницу/, targetDow: 5, label: 'в пятницу' },
-    { pattern: /в\s+субботу/, targetDow: 6, label: 'в субботу' },
-    { pattern: /в\s+воскресенье/, targetDow: 0, label: 'в воскресенье' },
+    {
+      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:понедельник|понедельника|понедельнику)(?=\s|$|[.,!?;:])/i,
+      targetDow: 1,
+      label: 'на понедельник',
+    },
+    {
+      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:вторник|вторника|вторнику)(?=\s|$|[.,!?;:])/i,
+      targetDow: 2,
+      label: 'на вторник',
+    },
+    {
+      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:среду|среды|среде|среда)(?=\s|$|[.,!?;:])/i,
+      targetDow: 3,
+      label: 'на среду',
+    },
+    {
+      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:четверг|четверга|четвергу)(?=\s|$|[.,!?;:])/i,
+      targetDow: 4,
+      label: 'на четверг',
+    },
+    {
+      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:пятницу|пятницы|пятнице|пятница)(?=\s|$|[.,!?;:])/i,
+      targetDow: 5,
+      label: 'на пятницу',
+    },
+    {
+      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:субботу|субботы|субботе|суббота)(?=\s|$|[.,!?;:])/i,
+      targetDow: 6,
+      label: 'на субботу',
+    },
+    {
+      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:воскресенье|воскресенья|воскресенью)(?=\s|$|[.,!?;:])/i,
+      targetDow: 0,
+      label: 'на воскресенье',
+    },
   ];
 
   const [y, m, d] = todayIso.split('-').map(Number);
@@ -319,7 +422,39 @@ export function parseRelativeDateAndTimeFromRuText(
       let delta = (wd.targetDow - currentDow + 7) % 7;
       if (delta === 0) delta = 7;
       const dueDate = addDaysToIsoDate(todayIso, delta);
-      return { dueDate, dueTime, dateLabelRu: `${wd.label} (${formatSyzranIsoDateRu(dueDate)})` };
+      return {
+        dueDate,
+        dueTime,
+        dateLabelRu: `${wd.label} (${formatSyzranIsoDateRu(dueDate)})`,
+        isDateAmbiguous: isTimeAmbiguous,
+        ambiguityPromptRu: isTimeAmbiguous
+          ? `Я поставила время ${dueTime}. Если вы имели в виду другое время, уточните его.`
+          : undefined,
+      };
+    }
+  }
+
+  if (lower.includes('на следующей неделе') || lower.includes('через неделю')) {
+    const dueDate = addDaysToIsoDate(todayIso, 7);
+    return {
+      dueDate,
+      dueTime,
+      dateLabelRu: `на ${formatSyzranIsoDateRu(dueDate)}`,
+      isDateAmbiguous: true,
+      ambiguityPromptRu:
+        'Вы указали «на следующей неделе» без конкретного дня недели — я предварительно поставила дату через 7 дней. Уточните, пожалуйста, на какой именно день недели назначить задачу.',
+    };
+  }
+
+  // Explicit DD.MM.YYYY or DD.MM
+  const ruDateMatch = lower.match(/\b(\d{1,2})\.(\d{1,2})(?:\.(20\d{2}))?\b/);
+  if (ruDateMatch) {
+    const dayNum = parseInt(ruDateMatch[1], 10);
+    const monthNum = parseInt(ruDateMatch[2], 10);
+    const yearNum = ruDateMatch[3] ? parseInt(ruDateMatch[3], 10) : y;
+    if (monthNum >= 1 && monthNum <= 12 && dayNum >= 1 && dayNum <= 31) {
+      const dueDate = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+      return { dueDate, dueTime, dateLabelRu: `на ${formatSyzranIsoDateRu(dueDate)}` };
     }
   }
 
@@ -329,15 +464,83 @@ export function parseRelativeDateAndTimeFromRuText(
     return { dueDate, dueTime, dateLabelRu: `на ${formatSyzranIsoDateRu(dueDate)}` };
   }
 
+  if (dueTime) {
+    // Time specified without date -> default to today (or tomorrow if time already passed in Syzran)
+    const syzranNow = getSyzranNow();
+    const [hh, mm] = dueTime.split(':').map(Number);
+    const isPastToday =
+      hh * 60 + mm <= syzranNow.hour * 60 + syzranNow.minute && syzranNow.isoDate === todayIso;
+    const dueDate = isPastToday ? addDaysToIsoDate(todayIso, 1) : todayIso;
+    return {
+      dueDate,
+      dueTime,
+      dateLabelRu: isPastToday ? `на завтра (${formatSyzranIsoDateRu(dueDate)})` : `на сегодня (${formatSyzranIsoDateRu(dueDate)})`,
+    };
+  }
+
   return { dueDate: '', dueTime, dateLabelRu: 'без даты' };
 }
 
-function cleanExtractedTaskTitle(raw: string): string {
+export function cleanExtractedTaskTitle(raw: string): string {
   let cleaned = raw
-    .replace(/^(?:мне\s+)?(?:сегодня|завтра|послезавтра|на\s+следующей\s+неделе|в\s+понедельник|во?\s+вторник|в\s+среду|в\s+четверг|в\s+пятницу|в\s+субботу|в\s+воскресенье)?\s*(?:мне\s+)?(?:нужно|надо|необходимо|предстоит|не\s+забыть(?:\s+бы)?|стоит|планирую|хочу\s+не\s+забыть|важно)\s*(?:будет\s+)?(?:когда-нибудь\s+|сегодня\s+|завтра\s+|послезавтра\s+)?/i, '')
-    .replace(/^(?:добавь|создай|запиши|поставь)\s+(?:мне\s+)?задач[уи]\s*[:—-]?\s*/i, '')
-    .replace(/\s+(?:сегодня|завтра|послезавтра|когда-нибудь|до\s+вечера|до\s+обеда)\s*$/i, '')
-    .replace(/[.!?;]+$/g, '')
+    .trim()
+    .replace(/^[«"„“]+|[»"”“.!?;]+$/g, '')
+    .replace(/^(?:пиксель\s*,?\s*)?/i, '')
+    .replace(
+      /^(?:пожалуйста\s*,?\s*)?(?:добавь|создай|запиши|поставь|зафиксируй|внеси|запланируй)\s*(?:,\s*пожалуйста\s*,?|\s+пожалуйста\s*,?)?\s*(?:мне\s+)?(?:в\s+список\s+дел\s+|в\s+задачи\s+|задач[уи]\s+|дело\s*)?[:—-]?\s*/i,
+      ''
+    )
+    // Remove weekday/relative date tokens anywhere in the text
+    .replace(
+      /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:понедельник|понедельника|понедельнику|вторник|вторника|вторнику|среду|среды|среде|среда|четверг|четверга|четвергу|пятницу|пятницы|пятнице|пятница|субботу|субботы|субботе|суббота|воскресенье|воскресенья|воскресенью|сегодня|завтра|послезавтра|когда-нибудь|на\s+следующей\s+неделе|через\s+\d{1,2}\s+дн[а-яё]*|на\s+днях|через\s+пару\s+дней|через\s+несколько\s+дней|до\s+вечера|до\s+обеда)(?=\s|$|[.,!?;:])/gi,
+      ' '
+    )
+    // Remove time tokens like "в 15:00", "к 15:00", "в 15 часов"
+    .replace(
+      /(?:^|\s|[.,!?;:])(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?\s*(?:час(?:а|ов)?|ч(?=\s|$|[.,!?;:])|утра|дня|вечера|ночи)?(?=\s|$|[.,!?;:])/gi,
+      ' '
+    )
+    // Remove leftover leading "задачу / дело" if date stood before it
+    .replace(/^[\s.,!?;:—–\-]*(?:в\s+список\s+дел|в\s+задачи|задач[уи]|дело)(?=\s|$|[.,!?;:])/i, '')
+    // Strip leading punctuation and conversational obligation/filler prefixes («Чтобы мне, например, ...», «Мне нужно ...»)
+    .replace(/^[\s.,!?;:—–\-]+/, '')
+    .replace(
+      /^(?:чтобы\s+)?(?:мне\s*,?\s*)?(?:например\s*,?\s*)?(?:мне\s*,?\s*)?(?:нужно\s+не\s+забыть|надо\s+не\s+забыть|не\s+забыть(?:\s+бы)?|нужно|надо|необходимо|предстоит|стоит|планирую|хочу\s+не\s+забыть|важно)?\s*(?:будет\s+)?(?:,\s*например\s*,?|\s+например\s*,?)?\s*[:—-]?\s*/i,
+      ''
+    )
+    // Also strip inline filler ", например," or "например,"
+    .replace(/(?:^|\s),?\s*например\s*,?(?=\s|$)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[,:;—–\-.!?\s]+|[,:;—–\-.!?\s]+$/g, '')
+    .trim();
+
+  // Merge follow-up sentence «... к мероприятию. Это будет мафия в школе» -> «... к мероприятию „Мафия“ в школе»
+  const eventFollowUpMatch = cleaned.match(
+    /^(.+?\bмероприяти[юяе])\s*[.!;—–-]+\s*это\s+(?:будет\s+|у\s+нас\s+)?([а-яёa-z0-9«»"„“\-]+)(?:\s+(.+))?$/i
+  );
+  if (eventFollowUpMatch) {
+    const basePart = eventFollowUpMatch[1].trim();
+    const rawEventName = eventFollowUpMatch[2]
+      .replace(/^[«"„“]+|[»"”"]+$/g, '')
+      .trim();
+    const formattedEventName = rawEventName
+      ? `„${rawEventName.charAt(0).toUpperCase()}${rawEventName.slice(1)}“`
+      : '';
+    const tailPart = (eventFollowUpMatch[3] || '').trim();
+    cleaned = [basePart, formattedEventName, tailPart].filter(Boolean).join(' ');
+  } else {
+    // General follow-up «<action>. Это будет <detail>» -> «<action> (<detail>)»
+    const genericFollowUpMatch = cleaned.match(
+      /^(.+?)\s*[.!;]+\s*это\s+(?:будет\s+|у\s+нас\s+)?(.+)$/i
+    );
+    if (genericFollowUpMatch) {
+      cleaned = `${genericFollowUpMatch[1].trim()} (${genericFollowUpMatch[2].trim()})`;
+    }
+  }
+
+  cleaned = cleaned
+    .replace(/\s+/g, ' ')
+    .replace(/^[,:;—–\-.!?\s]+|[,:;—–\-.!?\s]+$/g, '')
     .trim();
 
   if (!cleaned) return '';
@@ -348,12 +551,8 @@ function cleanExtractedTaskTitle(raw: string): string {
  * Automatically extracts a personal task for Anna from normal conversational statements:
  * e.g. «Завтра нужно написать родителям о переносе занятия»
  * or «Мне нужно когда-нибудь обновить презентацию»
- *
- * Strictly ignores:
- * - Questions («Нужно ли мне...?»)
- * - Hypotheticals, examples, quotes («Например, завтра нужно...»)
- * - Specialist delegations («Попроси Маркетолога...»)
- * - Direct task manager commands (handled by parseAndExecuteTaskCommand)
+ * or «В среду провести мероприятие по Мафии в 15:00»
+ * or «Мне нужно в среду подготовиться к мероприятию Мафия»
  */
 export function extractAutoTaskFromConversation(
   userText: string,
@@ -362,15 +561,16 @@ export function extractAutoTaskFromConversation(
   sourceMessageId?: string
 ): AutoExtractedTaskResult | null {
   const trimmed = userText.trim();
-  if (trimmed.length < 10 || trimmed.length > 260) return null;
+  if (trimmed.length < 8 || trimmed.length > 360) return null;
   if (trimmed.includes('?')) return null;
   if (SPECIALIST_DELEGATION_PATTERN.test(trimmed)) return null;
   if (HYPOTHETICAL_OR_QUOTE_PATTERN.test(trimmed)) return null;
 
-  // Match personal obligation statements by Anna
+  // Match personal obligation statements or weekday+time+infinitive statements by Anna
   const obligationPatterns = [
-    /^(?:мне\s+)?(?:сегодня|завтра|послезавтра|в\s+[а-яё]+|на\s+следующей\s+неделе)\s+(?:мне\s+)?(?:нужно|надо|необходимо|предстоит|важно)\s+(?:будет\s+)?(.{5,180})$/i,
-    /^(?:мне\s+)?(?:нужно|надо|необходимо|не\s+забыть(?:\s+бы)?)\s+(?:будет\s+)?(?:сегодня|завтра|послезавтра|когда-нибудь|до\s+вечера|до\s+обеда)?\s*(.{5,180})$/i,
+    /^(?:мне\s+)?(?:сегодня|завтра|послезавтра|(?:в|во|на)\s+[а-яё]+|на\s+следующей\s+неделе)\s+(?:мне\s+)?(?:нужно\s+не\s+забыть|надо\s+не\s+забыть|не\s+забыть|нужно|надо|необходимо|предстоит|важно)\s+(?:будет\s+)?([\s\S]{4,240})$/i,
+    /^(?:мне\s+)?(?:нужно\s+не\s+забыть|надо\s+не\s+забыть|не\s+забыть(?:\s+бы)?|нужно|надо|необходимо|предстоит|важно|хочу\s+не\s+забыть)\s+(?:будет\s+)?(?:(?:сегодня|завтра|послезавтра|когда-нибудь|до\s+вечера|до\s+обеда|(?:в|во|на)\s+[а-яё]+)\s+)?([\s\S]{4,240})$/i,
+    /^(?:(?:в|во|на)\s+(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|сегодня|завтра|послезавтра)\s+(?:(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?\s*)?((?:провести|сделать|написать|позвонить|подготовить|подготовиться|отправить|проверить|собрать|обновить|согласовать|встретиться|запустить|оплатить|выгрузить|составить|организовать|напомнить|заказать|купить|передать|разработать)(?=\s|$|[.,!?;:])[\s\S]{3,240})$/i,
   ];
 
   let matchedRawAction: string | null = null;
@@ -389,7 +589,7 @@ export function extractAutoTaskFromConversation(
     return null;
   }
 
-  const title = cleanExtractedTaskTitle(matchedRawAction);
+  const title = cleanExtractedTaskTitle(matchedRawAction) || cleanExtractedTaskTitle(trimmed);
   if (!title || title.length < 4) return null;
 
   // Deduplicate against active tasks
@@ -404,10 +604,8 @@ export function extractAutoTaskFromConversation(
   if (alreadyExists) return null;
 
   const syzranNow = getSyzranNow();
-  const { dueDate, dueTime, dateLabelRu } = parseRelativeDateAndTimeFromRuText(
-    trimmed,
-    syzranNow.isoDate
-  );
+  const { dueDate, dueTime, dateLabelRu, isDateAmbiguous, ambiguityPromptRu } =
+    parseRelativeDateAndTimeFromRuText(trimmed, syzranNow.isoDate);
 
   const evaluation = evaluateTaskPriorityMultiCriteria(
     title,
@@ -418,6 +616,14 @@ export function extractAutoTaskFromConversation(
 
   const schoolId = detectSchoolFromTaskText(trimmed, activeSchool);
   const nowMs = Date.now();
+  const explicitReminder = hasExplicitReminderRequest(trimmed);
+  const autoReminderIso = explicitReminder
+    ? buildSyzranReminderIso(dueDate, dueTime)
+    : undefined;
+  const validReminderIso =
+    autoReminderIso && new Date(autoReminderIso).getTime() > nowMs
+      ? autoReminderIso
+      : undefined;
 
   const taskRecord: CompanionTaskRecord = {
     id: `ctask_auto_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
@@ -425,6 +631,8 @@ export function extractAutoTaskFromConversation(
     description: `Создано автоматически из сообщения Анны: «${trimmed}»`,
     dueDate,
     dueTime,
+    reminderAt: validReminderIso,
+    reminderRepeat: validReminderIso ? 'none' : undefined,
     priority: evaluation.priority,
     priorityReason: evaluation.priorityReason,
     urgencyScore: evaluation.urgencyScore,
@@ -441,10 +649,12 @@ export function extractAutoTaskFromConversation(
     createdAtMs: nowMs,
   };
 
-  const shortConfirmationText =
-    dueDate
-      ? `Добавила задачу ${dateLabelRu}: «${title}» (${evaluation.priorityReason})`
-      : `Добавила задачу без жёсткой даты: «${title}» (${evaluation.priorityReason})`;
+  const timePartRu = dueTime ? ` в ${dueTime}` : '';
+  const ambiguitySuffix =
+    isDateAmbiguous && ambiguityPromptRu ? ` ⚠️ ${ambiguityPromptRu}` : '';
+  const shortConfirmationText = dueDate
+    ? `Добавила задачу ${dateLabelRu}${timePartRu}: «${title}» (${evaluation.priorityReason}).${ambiguitySuffix}`
+    : `Добавила задачу без жёсткой даты: «${title}» (${evaluation.priorityReason}).${ambiguitySuffix}`;
 
   return {
     taskRecord,
@@ -651,6 +861,64 @@ export function buildWorkdayPlanReport(
   };
 }
 
+export function buildFallbackTaskFromUserRequest(
+  userText: string,
+  activeSchool: SchoolId,
+  todayIso: string = toSyzranIsoDate()
+): CompanionTaskRecord | null {
+  const trimmed = userText.trim();
+  if (!trimmed || trimmed.length < 4) return null;
+  const syzranNow = getSyzranNow();
+  const { dueDate, dueTime, dateLabelRu } = parseRelativeDateAndTimeFromRuText(
+    trimmed,
+    todayIso
+  );
+  const fallbackDateTitle = dueDate
+    ? `Задача ${dateLabelRu.replace(/\s*\([^)]*\)/, '')}${dueTime ? ` в ${dueTime}` : ''}`
+    : 'Новая задача';
+  const title =
+    cleanExtractedTaskTitle(trimmed) || fallbackDateTitle;
+  const evaluation = evaluateTaskPriorityMultiCriteria(
+    title,
+    trimmed,
+    dueDate,
+    todayIso
+  );
+  const schoolId = detectSchoolFromTaskText(trimmed, activeSchool);
+  const nowMs = Date.now();
+  const explicitReminder = hasExplicitReminderRequest(trimmed);
+  const autoReminderIso = explicitReminder
+    ? buildSyzranReminderIso(dueDate, dueTime)
+    : undefined;
+  const validReminderIso =
+    autoReminderIso && new Date(autoReminderIso).getTime() > nowMs
+      ? autoReminderIso
+      : undefined;
+
+  return {
+    id: `ctask_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
+    title,
+    description: `Поставлено командой Анны: «${trimmed}»`,
+    dueDate,
+    dueTime,
+    reminderAt: validReminderIso,
+    reminderRepeat: validReminderIso ? 'none' : undefined,
+    priority: evaluation.priority,
+    priorityReason: evaluation.priorityReason,
+    urgencyScore: evaluation.urgencyScore,
+    importanceScore: evaluation.importanceScore,
+    estimatedMinutes: evaluation.estimatedMinutes,
+    consequencesIfDelayed: evaluation.consequencesIfDelayed,
+    dependencyNote: evaluation.dependencyNote,
+    status: 'new',
+    schoolId,
+    sourceType: 'voice_command',
+    sourceExcerpt: trimmed,
+    createdAt: syzranNow.time24,
+    createdAtMs: nowMs,
+  };
+}
+
 /**
  * Parses and executes voice & text task management commands directly against Anna's task list.
  */
@@ -669,25 +937,54 @@ export function parseAndExecuteTaskCommand(
     return null;
   }
 
-  // 1. Explicit «Добавь задачу...» / «Создай задачу...» / «Запиши задачу...»
-  const addMatch = trimmed.match(
-    /^(?:пиксель\s*,?\s*)?(?:добавь|создай|запиши|поставь)\s+(?:мне\s+)?задач[уи]\s*[:—-]?\s*(.+)$/i
-  );
-  if (addMatch && addMatch[1]) {
-    const rawBody = addMatch[1].trim();
-    const { dueDate, dueTime, dateLabelRu } = parseRelativeDateAndTimeFromRuText(
-      rawBody,
-      todayIso
+  const isTimerCommand =
+    /^(?:пиксель\s*,?\s*)?(?:пожалуйста\s*,?\s*)?(?:поставь\s+таймер|включи\s+таймер|запусти\s+таймер|засеки(?:\s+время)?|таймер\b)/i.test(
+      trimmed
     );
-    const title = cleanExtractedTaskTitle(rawBody) || rawBody;
+
+  // 1. Explicit «Добавь задачу...» / «Создай задачу...» / «Запиши задачу...» / «Поставь, пожалуйста, задачу на среду...» / «Мне нужно...» / «В среду провести...»
+  const explicitAddMatch = !isTimerCommand
+    ? trimmed.match(
+        /^(?:[«"„“]+)?(?:пиксель\s*,?\s*)?(?:пожалуйста\s*,?\s*)?(?:добавь|создай|запиши|поставь|зафиксируй|внеси|запланируй)(?:\s*,?\s*пожалуйста\s*,?)?(?:\s+мне)?(?:\s+(?:в\s+список\s+дел|в\s+задачи|задач[уи]|дело))?[\s:—,-]*([\s\S]+)$/i
+      ) ||
+      trimmed.match(
+        /^(?:[«"„“]+)?(?:пиксель\s*,?\s*)?(?:мне\s+)?(?:нужно\s+не\s+забыть|надо\s+не\s+забыть|не\s+забыть(?:\s+бы)?|хочу\s+не\s+забыть)\s*[:—-]?\s*([\s\S]+)$/i
+      ) ||
+      trimmed.match(
+        /^(?:[«"„“]+)?(?:пиксель\s*,?\s*)?(?:мне\s+)?(?:(?:сегодня|завтра|послезавтра|(?:в|во|на)\s+(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье))\s+)?(?:мне\s+)?(?:нужно|надо|необходимо|предстоит)\s+(?:будет\s+)?(?:(?:сегодня|завтра|послезавтра|(?:в|во|на)\s+(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье))\s+)?(?:(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?\s*)?((?:провести|сделать|написать|позвонить|подготовить|подготовиться|отправить|проверить|собрать|обновить|согласовать|встретиться|запустить|оплатить|выгрузить|составить|организовать|заказать|купить|передать|разработать)(?=\s|$|[.,!?;:])[\s\S]+)$/i
+      ) ||
+      trimmed.match(
+        /^(?:[«"„“]+)?(?:пиксель\s*,?\s*)?((?:(?:в|во|на)\s+(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|сегодня|завтра|послезавтра)\s+(?:(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?\s*)?(?:провести|сделать|написать|позвонить|подготовить|подготовиться|отправить|проверить|собрать|обновить|согласовать|встретиться|запустить|оплатить|выгрузить|составить|организовать|заказать|купить|передать|разработать)(?=\s|$|[.,!?;:])[\s\S]+)$/i
+      )
+    : null;
+
+  if (explicitAddMatch && explicitAddMatch[1] && !trimmed.includes('?')) {
+    const rawBody = explicitAddMatch[1].trim();
+    const { dueDate, dueTime, dateLabelRu, isDateAmbiguous, ambiguityPromptRu } =
+      parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
+    const fallbackDateTitle = dueDate
+      ? `Задача ${dateLabelRu.replace(/\s*\([^)]*\)/, '')}${dueTime ? ` в ${dueTime}` : ''}`
+      : 'Новая задача';
+    const title =
+      cleanExtractedTaskTitle(rawBody) ||
+      cleanExtractedTaskTitle(trimmed) ||
+      fallbackDateTitle;
     const evaluation = evaluateTaskPriorityMultiCriteria(
       title,
       rawBody,
       dueDate,
       todayIso
     );
-    const schoolId = detectSchoolFromTaskText(rawBody, activeSchool);
+    const schoolId = detectSchoolFromTaskText(trimmed, activeSchool);
     const nowMs = Date.now();
+    const explicitReminder = hasExplicitReminderRequest(trimmed);
+    const autoReminderIso = explicitReminder
+      ? buildSyzranReminderIso(dueDate, dueTime)
+      : undefined;
+    const validReminderIso =
+      autoReminderIso && new Date(autoReminderIso).getTime() > nowMs
+        ? autoReminderIso
+        : undefined;
 
     const newTask: CompanionTaskRecord = {
       id: `ctask_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
@@ -695,6 +992,8 @@ export function parseAndExecuteTaskCommand(
       description: `Поставлено командой Анны: «${trimmed}»`,
       dueDate,
       dueTime,
+      reminderAt: validReminderIso,
+      reminderRepeat: validReminderIso ? 'none' : undefined,
       priority: evaluation.priority,
       priorityReason: evaluation.priorityReason,
       urgencyScore: evaluation.urgencyScore,
@@ -710,13 +1009,36 @@ export function parseAndExecuteTaskCommand(
       createdAtMs: nowMs,
     };
 
-    const dueInfo = dueDate ? ` (${dateLabelRu}, ${formatSyzranIsoDateRu(dueDate)})` : ' (без жёсткого срока)';
+    const weekEndIso = addDaysToIsoDate(todayIso, 7);
+    const targetFilter: TaskCommandExecutionResult['openTasksTabWithFilter'] =
+      dueDate === todayIso
+        ? 'today'
+        : dueDate === tomorrowIso
+        ? 'tomorrow'
+        : dueDate && dueDate > tomorrowIso && dueDate <= weekEndIso
+        ? 'week'
+        : 'all';
+
+    const dateLine = dueDate
+      ? `**${formatSyzranIsoDateRu(dueDate)}** (${dateLabelRu})`
+      : isDateAmbiguous
+      ? 'Не указана точно *(требует уточнения)*'
+      : 'Без жёсткого срока';
+    const timeLine = dueTime ? `**${dueTime}** (по Сызрани, Europe/Samara)` : 'Не указано';
+    const reminderLine = validReminderIso
+      ? `\n- **Напоминание:** включено на ${formatSyzranIsoDateRu(dueDate)} в ${dueTime}`
+      : '';
+    const ambiguityBlock =
+      isDateAmbiguous && ambiguityPromptRu
+        ? `\n\n⚠️ **Уточните дату/время:** ${ambiguityPromptRu}`
+        : '';
+
     return {
       handled: true,
       createdTask: newTask,
-      openTasksTabWithFilter: 'all',
-      responseText: `Записала задачу **«${newTask.title}»**${dueInfo}.\n\n- **Приоритет:** ${evaluation.priorityReason}\n- **Последствия при откладывании:** ${evaluation.consequencesIfDelayed}`,
-      spokenSummary: `Добавила задачу: ${newTask.title}${dueDate ? ` ${dateLabelRu}` : ''}.`,
+      openTasksTabWithFilter: targetFilter,
+      responseText: `Записала задачу **«${newTask.title}»** в список дел:\n\n- **Название:** ${newTask.title}\n- **Дата:** ${dateLine}\n- **Время:** ${timeLine}${reminderLine}\n- **Приоритет:** ${evaluation.priorityReason}${ambiguityBlock}`,
+      spokenSummary: `Записала задачу: ${newTask.title}${dueDate ? `, ${dateLabelRu}` : ''}${dueTime ? ` в ${dueTime}` : ''}.${isDateAmbiguous ? ' Пожалуйста, уточните точную дату.' : ''}`,
     };
   }
 
@@ -873,13 +1195,132 @@ export function parseAndExecuteTaskCommand(
     };
   }
 
-  // 8. «Перенеси это на завтра» / «Перенеси задачу ... на завтра / послезавтра»
+  // 8. Cancel reminder / timer: «Отмени напоминание...» / «Удали напоминание...» / «Отмени таймер...» / «Не напоминай...»
+  const cancelReminderMatch = trimmed.match(
+    /^(?:пиксель\s*,?\s*)?(?:отмени|удали|сними|выключи|останови)\s+(?:напоминани[ея]|таймер)\s*(.*)$/i
+  ) || trimmed.match(/^(?:пиксель\s*,?\s*)?не\s+напоминай\s*(.*)$/i);
+  if (cancelReminderMatch) {
+    const query = (cancelReminderMatch[1] || '').trim();
+    const tasksWithReminders = existingTasks.filter(
+      (t) => t.status !== 'done' && Boolean(t.reminderAt)
+    );
+    const targetTask =
+      tasksWithReminders.length > 0
+        ? findMatchingTask(tasksWithReminders, query)
+        : findMatchingTask(existingTasks, query);
+
+    if (!targetTask || !targetTask.reminderAt) {
+      return {
+        handled: true,
+        responseText:
+          'Сейчас нет активного запланированного напоминания или таймера, который можно отменить.',
+        spokenSummary: 'Активных напоминаний для отмены не найдено.',
+      };
+    }
+
+    const isPureReminderOrTimer =
+      targetTask.id.startsWith('ctask_rem_') ||
+      targetTask.id.startsWith('ctask_timer_') ||
+      targetTask.sourceType === 'reminder' ||
+      /^(?:таймер|напоминание)/i.test(targetTask.title);
+
+    const updated: CompanionTaskRecord = {
+      ...targetTask,
+      reminderAt: undefined,
+      reminderRepeat: 'none',
+      status: isPureReminderOrTimer ? 'done' : targetTask.status,
+      completedAt: isPureReminderOrTimer ? syzranNow.time24 : targetTask.completedAt,
+      completedAtMs: isPureReminderOrTimer ? Date.now() : targetTask.completedAtMs,
+    };
+
+    return {
+      handled: true,
+      updatedTasks: [updated],
+      openTasksTabWithFilter: 'all',
+      responseText: `Отменила напоминание по задаче **«${updated.title}»**. Уведомление больше не сработает.`,
+      spokenSummary: `Отменила напоминание: ${updated.title}.`,
+    };
+  }
+
+  // 9. Reschedule reminder / timer: «Перенеси напоминание ... на ... / через ...»
+  const rescheduleReminderMatch = trimmed.match(
+    /^(?:пиксель\s*,?\s*)?(?:перенеси|отложи|сдвинь)\s+(?:напоминани[ея]|таймер)\s*(.*?)\s+(?:на\s+|через\s+)(.+)$/i
+  );
+  if (rescheduleReminderMatch) {
+    const rawQuery = (rescheduleReminderMatch[1] || '').trim();
+    const rawWhen = trimmed.slice(trimmed.toLowerCase().lastIndexOf(rescheduleReminderMatch[2].toLowerCase()) - 6).trim();
+    const tasksWithReminders = existingTasks.filter(
+      (t) => t.status !== 'done' && Boolean(t.reminderAt)
+    );
+    const targetTask =
+      tasksWithReminders.length > 0
+        ? findMatchingTask(tasksWithReminders, rawQuery)
+        : findMatchingTask(existingTasks, rawQuery);
+
+    if (!targetTask) {
+      return {
+        handled: true,
+        responseText: 'Не нашла активное напоминание или задачу для переноса.',
+        spokenSummary: 'Не нашла напоминание для переноса.',
+      };
+    }
+
+    const inSecondsMatch = rawWhen.match(/через\s+(\d{1,3})\s*(?:секунд[уы]?|сек(?=\s|$|[.,!?;:]))/i);
+    const inMinutesMatch = rawWhen.match(/(?:через|на)\s+(\d{1,3})\s*(?:минут[уы]?|мин(?=\s|$|[.,!?;:]))/i);
+    const inHoursMatch = rawWhen.match(/(?:через|на)\s+(\d{1,2})\s*(?:час(?:а|ов)?|ч(?=\s|$|[.,!?;:]))/i);
+
+    let newReminderMs = Date.now() + 15 * 60 * 1000;
+    let newLabelRu = '';
+
+    if (inSecondsMatch) {
+      const secs = Math.max(5, parseInt(inSecondsMatch[1], 10));
+      newReminderMs = Date.now() + secs * 1000;
+      const fireSnap = getSyzranNow(new Date(newReminderMs));
+      newLabelRu = `через ${secs} сек. (в ${fireSnap.timeHHMMSS} по Сызрани)`;
+    } else if (inMinutesMatch) {
+      const mins = Math.max(1, parseInt(inMinutesMatch[1], 10));
+      newReminderMs = Date.now() + mins * 60 * 1000;
+      const fireSnap = getSyzranNow(new Date(newReminderMs));
+      newLabelRu = `через ${mins} мин. (в ${fireSnap.timeHHMM}:${String(fireSnap.second).padStart(2, '0')} по Сызрани)`;
+    } else if (inHoursMatch) {
+      const hrs = Math.max(1, parseInt(inHoursMatch[1], 10));
+      newReminderMs = Date.now() + hrs * 60 * 60 * 1000;
+      const fireSnap = getSyzranNow(new Date(newReminderMs));
+      newLabelRu = `через ${hrs} ч. (в ${fireSnap.timeHHMM} по Сызрани)`;
+    } else {
+      const parsed = parseRelativeDateAndTimeFromRuText(rawWhen, todayIso);
+      const datePart = parsed.dueDate || targetTask.dueDate || todayIso;
+      const timePart = parsed.dueTime || targetTask.dueTime || '10:00';
+      const iso = buildSyzranReminderIso(datePart, timePart);
+      newReminderMs = iso ? new Date(iso).getTime() : Date.now() + 30 * 60 * 1000;
+      newLabelRu = `на ${formatSyzranIsoDateRu(datePart)} в ${timePart} (по Сызрани)`;
+    }
+
+    const fireSnap = getSyzranNow(new Date(newReminderMs));
+    const updated: CompanionTaskRecord = {
+      ...targetTask,
+      dueDate: fireSnap.isoDate,
+      dueTime: fireSnap.timeHHMM,
+      reminderAt: new Date(newReminderMs).toISOString(),
+      lastReminderFiredAtMs: undefined,
+    };
+
+    return {
+      handled: true,
+      updatedTasks: [updated],
+      openTasksTabWithFilter: 'all',
+      responseText: `Перенесла напоминание по задаче **«${updated.title}»** — новое время срабатывания: **${newLabelRu}**.`,
+      spokenSummary: `Перенесла напоминание ${updated.title} ${newLabelRu}.`,
+    };
+  }
+
+  // 10. «Перенеси это на завтра» / «Перенеси задачу ... на завтра / на среду в 16:00»
   const rescheduleMatch = trimmed.match(
-    /^(?:пиксель\s*,?\s*)?перенеси\s+(?:задач[уи]\s+|дело\s+)?(.+?)\s+на\s+(сегодня|завтра|послезавтра|следующую\s+неделю|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)$/i
+    /^(?:пиксель\s*,?\s*)?перенеси\s+(?:задач[уи]\s+|дело\s+)?(.+?)\s+на\s+((?:сегодня|завтра|послезавтра|следующую\s+неделю|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|\d{1,2}\.\d{1,2}(?:\.\d{4})?)(?:\s+(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?)?)$/i
   );
   if (rescheduleMatch) {
     const taskQuery = rescheduleMatch[1].trim();
-    const targetWhenText = `на ${rescheduleMatch[2].trim()}`;
+    const targetWhenText = `в ${rescheduleMatch[2].trim()}`;
     const targetTask = findMatchingTask(existingTasks, taskQuery);
     if (!targetTask) {
       return {
@@ -889,26 +1330,33 @@ export function parseAndExecuteTaskCommand(
       };
     }
 
-    const { dueDate, dateLabelRu } = parseRelativeDateAndTimeFromRuText(
+    const { dueDate, dueTime, dateLabelRu } = parseRelativeDateAndTimeFromRuText(
       targetWhenText,
       todayIso
     );
     const finalDate = dueDate || tomorrowIso;
+    const finalTime = dueTime || targetTask.dueTime;
+    const nextReminderIso = buildSyzranReminderIso(finalDate, finalTime);
+
     const updated: CompanionTaskRecord = {
       ...targetTask,
       dueDate: finalDate,
+      dueTime: finalTime,
+      reminderAt: nextReminderIso || targetTask.reminderAt,
+      lastReminderFiredAtMs: nextReminderIso ? undefined : targetTask.lastReminderFiredAtMs,
       pendingScheduleProposal: undefined,
     };
 
+    const timeInfo = finalTime ? ` в **${finalTime}**` : '';
     return {
       handled: true,
       updatedTasks: [updated],
-      responseText: `Перенесла задачу **«${updated.title}»** ${dateLabelRu} (**${formatSyzranIsoDateRu(finalDate)}**).`,
-      spokenSummary: `Перенесла задачу ${updated.title} на ${formatSyzranIsoDateRu(finalDate)}.`,
+      responseText: `Перенесла задачу **«${updated.title}»** ${dateLabelRu} (**${formatSyzranIsoDateRu(finalDate)}**${timeInfo}).`,
+      spokenSummary: `Перенесла задачу ${updated.title} на ${formatSyzranIsoDateRu(finalDate)}${finalTime ? ` в ${finalTime}` : ''}.`,
     };
   }
 
-  // 9. «Отложи задачу...»
+  // 11. «Отложи задачу...»
   const postponeMatch = trimmed.match(
     /^(?:пиксель\s*,?\s*)?отложи\s+(?:пока\s+)?(?:задач[уи]\s+)?(.+)$/i
   );
@@ -936,7 +1384,7 @@ export function parseAndExecuteTaskCommand(
     };
   }
 
-  // 10. «Отметь выполненной...» / «Закрой задачу...»
+  // 12. «Отметь выполненной...» / «Закрой задачу...»
   const completeMatch = trimmed.match(
     /^(?:пиксель\s*,?\s*)?(?:отметь\s+выполненн(?:ой|ым)|заверши\s+задачу|закрой\s+задачу|я\s+сделала|выполнено)\s*(.*)$/i
   );
@@ -968,7 +1416,7 @@ export function parseAndExecuteTaskCommand(
     };
   }
 
-  // 11. «Разбей эту задачу на шаги» / «Разбей задачу ... на шаги»
+  // 13. «Разбей эту задачу на шаги» / «Разбей задачу ... на шаги»
   const breakdownMatch = trimmed.match(
     /^(?:пиксель\s*,?\s*)?разбей\s+(?:эту\s+)?(?:задач[уи]\s*)?(.*?)\s*на\s+(?:шаги|этапы|подзадачи)$/i
   );
@@ -1007,26 +1455,90 @@ export function parseAndExecuteTaskCommand(
     };
   }
 
-  // 12. «Напомни мне об этом...» / «Напомни мне через ...» / «Напомни завтра в 10:00 ...»
+  // 14. Explicit Timer command: «Поставь таймер на 5 минут...» / «Засеки 1 минуту...» / «Таймер на 2 минуты...»
+  const timerMatch = trimmed.match(
+    /^(?:пиксель\s*,?\s*)?(?:поставь\s+таймер|включи\s+таймер|запусти\s+таймер|засеки(?:\s+время)?|таймер)\s+(?:на\s+)?(\d{1,3})\s*(минут[уы]?|мин(?=\s|$|[.,!?;:])|секунд[уы]?|сек(?=\s|$|[.,!?;:])|час(?:а|ов)?|ч(?=\s|$|[.,!?;:]))\s*(.*)$/i
+  );
+  if (timerMatch) {
+    const amount = Math.max(1, parseInt(timerMatch[1], 10));
+    const unitRaw = timerMatch[2].toLowerCase();
+    const extraLabel = (timerMatch[3] || '').replace(/^[:—-]\s*/, '').trim();
+
+    let durationMs = amount * 60 * 1000;
+    let durationLabelRu = `${amount} мин.`;
+    if (unitRaw.startsWith('сек')) {
+      durationMs = amount * 1000;
+      durationLabelRu = `${amount} сек.`;
+    } else if (unitRaw.startsWith('ч')) {
+      durationMs = amount * 60 * 60 * 1000;
+      durationLabelRu = `${amount} ч.`;
+    }
+
+    const nowMs = Date.now();
+    const reminderAtMs = nowMs + durationMs;
+    const fireSnap = getSyzranNow(new Date(reminderAtMs));
+    const title = extraLabel
+      ? `Таймер (${durationLabelRu}): ${cleanExtractedTaskTitle(extraLabel) || extraLabel}`
+      : `Таймер на ${durationLabelRu}`;
+
+    const newTask: CompanionTaskRecord = {
+      id: `ctask_timer_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
+      title,
+      description: `Таймер запущен в ${syzranNow.timeHHMMSS} на ${durationLabelRu}. Сработает в ${fireSnap.timeHHMMSS} по Сызрани.`,
+      dueDate: fireSnap.isoDate,
+      dueTime: fireSnap.timeHHMM,
+      priority: 'high',
+      priorityReason: `Активный таймер на ${durationLabelRu} (до ${fireSnap.timeHHMMSS})`,
+      urgencyScore: 9,
+      importanceScore: 8,
+      estimatedMinutes: Math.max(1, Math.round(durationMs / 60000)),
+      status: 'in_progress',
+      schoolId: detectSchoolFromTaskText(trimmed, activeSchool),
+      sourceType: 'reminder',
+      sourceExcerpt: trimmed,
+      reminderAt: new Date(reminderAtMs).toISOString(),
+      reminderRepeat: 'none',
+      createdAt: syzranNow.time24,
+      createdAtMs: nowMs,
+    };
+
+    return {
+      handled: true,
+      createdTask: newTask,
+      openTasksTabWithFilter: 'today',
+      responseText: `Запустила таймер **«${newTask.title}»** на **${durationLabelRu}**.\n\n- **Время запуска:** ${syzranNow.timeHHMMSS} (Сызрань)\n- **Время срабатывания:** **${fireSnap.timeHHMMSS}** (${formatSyzranIsoDateRu(fireSnap.isoDate)})\n\nЯ пришлю уведомление в чат и системное оповещение ровно в момент завершения таймера.`,
+      spokenSummary: `Таймер на ${durationLabelRu} запущен. Я сообщу, когда время выйдет.`,
+    };
+  }
+
+  // 15. «Напомни мне об этом...» / «Напомни мне через ...» / «Напомни завтра в 10:00 ...»
   const remindMatch = trimmed.match(
     /^(?:пиксель\s*,?\s*)?напомни\s+(?:мне\s+)?(.+)$/i
   );
   if (remindMatch && remindMatch[1]) {
     const body = remindMatch[1].trim();
-    const inMinutesMatch = body.match(/через\s+(\d{1,3})\s*(?:минут[уы]?|мин\b)/i);
-    const inHoursMatch = body.match(/через\s+(\d{1,2})\s*(?:час(?:а|ов)?|ч\b)/i);
+    const inSecondsMatch = body.match(/через\s+(\d{1,3})\s*(?:секунд[уы]?|сек(?=\s|$|[.,!?;:]))/i);
+    const inMinutesMatch = body.match(/через\s+(?:(\d{1,3})\s*)?(?:минут[уы]?|мин(?=\s|$|[.,!?;:]))/i);
+    const inHoursMatch = body.match(/через\s+(?:(\d{1,2})\s*)?(?:час(?:а|ов)?|ч(?=\s|$|[.,!?;:]))/i);
 
     let reminderAtMs = Date.now() + 30 * 60 * 1000; // default +30 min
     let reminderLabelRu = 'через 30 минут';
 
-    if (inMinutesMatch) {
-      const mins = Math.max(1, parseInt(inMinutesMatch[1], 10));
+    if (inSecondsMatch) {
+      const secs = Math.max(5, parseInt(inSecondsMatch[1], 10));
+      reminderAtMs = Date.now() + secs * 1000;
+      const fireSnap = getSyzranNow(new Date(reminderAtMs));
+      reminderLabelRu = `через ${secs} сек. (в ${fireSnap.timeHHMMSS} по Сызрани)`;
+    } else if (inMinutesMatch) {
+      const mins = inMinutesMatch[1] ? Math.max(1, parseInt(inMinutesMatch[1], 10)) : 1;
       reminderAtMs = Date.now() + mins * 60 * 1000;
-      reminderLabelRu = `через ${mins} мин.`;
+      const fireSnap = getSyzranNow(new Date(reminderAtMs));
+      reminderLabelRu = `через ${mins} мин. (в ${fireSnap.timeHHMM}:${String(fireSnap.second).padStart(2, '0')} по Сызрани)`;
     } else if (inHoursMatch) {
-      const hrs = Math.max(1, parseInt(inHoursMatch[1], 10));
+      const hrs = inHoursMatch[1] ? Math.max(1, parseInt(inHoursMatch[1], 10)) : 1;
       reminderAtMs = Date.now() + hrs * 60 * 60 * 1000;
-      reminderLabelRu = `через ${hrs} ч.`;
+      const fireSnap = getSyzranNow(new Date(reminderAtMs));
+      reminderLabelRu = `через ${hrs} ч. (в ${fireSnap.timeHHMM} по Сызрани)`;
     } else {
       const parsed = parseRelativeDateAndTimeFromRuText(body, todayIso);
       const datePart = parsed.dueDate || todayIso;
@@ -1051,9 +1563,10 @@ export function parseAndExecuteTaskCommand(
         : 'none';
 
     const cleanedQuery = body
-      .replace(/через\s+\d+\s*(?:минут[уы]?|мин|час(?:а|ов)?|ч)\b/gi, '')
+      .replace(/через\s+(?:\d+\s*)?(?:секунд[уы]?|сек|минут[уы]?|мин|час(?:а|ов)?|ч)(?=\s|$|[.,!?;:])/gi, '')
+      .replace(/(?:каждый\s+день|ежедневно|по\s+будням|каждую\s+неделю|еженедельно)/gi, '')
       .replace(/(?:сегодня|завтра|послезавтра)?\s*(?:в|к)\s*\d{1,2}(?::\d{2})?\s*(?:утра|дня|вечера)?/gi, '')
-      .replace(/^(?:об\s+этом|о\s+том\s+чтобы|про\s+то\s+чтобы|что\s+нужно|про)\s*/i, '')
+      .replace(/^(?:об\s+этом|о\s+том\s+чтобы|о\s+том\s+что|про\s+то\s+чтобы|что\s+нужно|про|о)\s*/i, '')
       .trim();
 
     if (!cleanedQuery || /^об\s+этом$/i.test(body.trim())) {
@@ -1078,12 +1591,13 @@ export function parseAndExecuteTaskCommand(
     const title = cleanExtractedTaskTitle(cleanedQuery) || cleanedQuery || 'Напоминание Анне';
     const evaluation = evaluateTaskPriorityMultiCriteria(title, body, todayIso, todayIso);
     const nowMs = Date.now();
+    const fireSnap = getSyzranNow(new Date(reminderAtMs));
     const newTask: CompanionTaskRecord = {
       id: `ctask_rem_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
       title,
       description: `Напоминание (${reminderLabelRu}): «${trimmed}»`,
-      dueDate: toSyzranIsoDate(new Date(reminderAtMs)),
-      dueTime: getSyzranNow(new Date(reminderAtMs)).time24,
+      dueDate: fireSnap.isoDate,
+      dueTime: fireSnap.timeHHMM,
       priority: evaluation.priority,
       priorityReason: evaluation.priorityReason,
       urgencyScore: evaluation.urgencyScore,
@@ -1091,7 +1605,7 @@ export function parseAndExecuteTaskCommand(
       estimatedMinutes: 15,
       status: 'new',
       schoolId: detectSchoolFromTaskText(body, activeSchool),
-      sourceType: 'voice_command',
+      sourceType: 'reminder',
       sourceExcerpt: trimmed,
       reminderAt: new Date(reminderAtMs).toISOString(),
       reminderRepeat: repeat,
@@ -1103,7 +1617,7 @@ export function parseAndExecuteTaskCommand(
       handled: true,
       createdTask: newTask,
       openTasksTabWithFilter: 'today',
-      responseText: `Записала напоминание **«${newTask.title}»** на **${reminderLabelRu}**${repeat !== 'none' ? ' (повторяющееся)' : ''}.\n\n*Примечание:* напоминание сработает в активном или свёрнутом окне браузера/приложения, а если приложение будет полностью закрыто — я сразу покажу пропущенное напоминание при следующем запуске.`,
+      responseText: `Записала напоминание **«${newTask.title}»**:\n\n- **Задача:** ${newTask.title}\n- **Дата:** ${formatSyzranIsoDateRu(fireSnap.isoDate)}\n- **Время срабатывания:** **${reminderLabelRu}**${repeat !== 'none' ? ` (повтор: ${repeat === 'daily' ? 'каждый день' : repeat === 'weekdays' ? 'по будням' : 'каждую неделю'})` : ''}\n\n*Примечание:* напоминание сработает автоматически в назначенное время (включая свёрнутое окно приложения). Если приложение будет полностью закрыто — я сразу покажу пропущенное напоминание при следующем запуске.`,
       spokenSummary: `Записала напоминание: ${newTask.title}, ${reminderLabelRu}.`,
     };
   }
@@ -1127,54 +1641,86 @@ export function checkDueTaskAndDelegationReminders(
   for (const task of tasks) {
     if (task.status === 'done') continue;
 
-    // 1. Explicit reminderAt check
+    // 1. Explicit reminderAt check (one-shot reminders, recurring reminders, and timers)
     if (task.reminderAt) {
       const reminderMs = new Date(task.reminderAt).getTime();
-      if (
-        !Number.isNaN(reminderMs) &&
-        nowMs >= reminderMs &&
-        (!task.lastReminderFiredAtMs || task.lastReminderFiredAtMs < reminderMs)
-      ) {
-        let nextReminderIso: string | undefined = undefined;
-        if (task.reminderRepeat === 'daily') {
-          nextReminderIso = new Date(reminderMs + 24 * 60 * 60 * 1000).toISOString();
-        } else if (task.reminderRepeat === 'weekly') {
-          nextReminderIso = new Date(reminderMs + 7 * 24 * 60 * 60 * 1000).toISOString();
-        } else if (task.reminderRepeat === 'weekdays') {
-          let nextMs = reminderMs + 24 * 60 * 60 * 1000;
-          const dow = new Date(nextMs).getDay();
-          if (dow === 6) nextMs += 2 * 24 * 60 * 60 * 1000;
-          if (dow === 0) nextMs += 1 * 24 * 60 * 60 * 1000;
-          nextReminderIso = new Date(nextMs).toISOString();
-        }
+      if (!Number.isNaN(reminderMs)) {
+        if (
+          nowMs >= reminderMs &&
+          (!task.lastReminderFiredAtMs || task.lastReminderFiredAtMs < reminderMs)
+        ) {
+          let nextReminderIso: string | undefined = undefined;
+          if (task.reminderRepeat === 'daily') {
+            nextReminderIso = new Date(reminderMs + 24 * 60 * 60 * 1000).toISOString();
+          } else if (task.reminderRepeat === 'weekly') {
+            nextReminderIso = new Date(reminderMs + 7 * 24 * 60 * 60 * 1000).toISOString();
+          } else if (task.reminderRepeat === 'weekdays') {
+            let nextMs = reminderMs + 24 * 60 * 60 * 1000;
+            const dow = new Date(nextMs).getDay();
+            if (dow === 6) nextMs += 2 * 24 * 60 * 60 * 1000;
+            if (dow === 0) nextMs += 1 * 24 * 60 * 60 * 1000;
+            nextReminderIso = new Date(nextMs).toISOString();
+          }
 
-        alerts.push({
-          id: `rem_${task.id}_${nowMs}`,
-          type: 'task_reminder',
-          title: `Напоминание: ${task.title}`,
-          message: `Анна, напоминаю о задаче **«${task.title}»** (${syzranNow.time24} по Сызрани).`,
-          taskId: task.id,
-          updatedTaskPatch: {
-            lastReminderFiredAtMs: nowMs,
-            reminderAt: nextReminderIso,
-          },
-        });
+          const isTimer =
+            task.id.startsWith('ctask_timer_') || /^таймер(?=\s|$|[.,!?;:(\-])/i.test(task.title);
+          const isMissed = nowMs - reminderMs > 90 * 1000;
+          const scheduledSnap = getSyzranNow(new Date(reminderMs));
+
+          const alertTitle = isTimer
+            ? `Таймер завершён: ${task.title}`
+            : isMissed
+            ? `Пропущенное напоминание: ${task.title}`
+            : `Напоминание: ${task.title}`;
+
+          const alertMessage = isTimer
+            ? `⏱️ **Таймер завершён!** Время вышло по задаче **«${task.title}»** (${syzranNow.timeHHMMSS} по Сызрани).`
+            : isMissed
+            ? `🔔 **Пропущенное напоминание** (было назначено на ${scheduledSnap.dateFormattedRu} в ${scheduledSnap.timeHHMM}): **«${task.title}»**.`
+            : `🔔 **Напоминание (${syzranNow.timeHHMM} по Сызрани):** Анна, напоминаю о задаче **«${task.title}»**.`;
+
+          alerts.push({
+            id: `rem_${task.id}_${reminderMs}`,
+            type: 'task_reminder',
+            title: alertTitle,
+            message: alertMessage,
+            taskId: task.id,
+            updatedTaskPatch: {
+              lastReminderFiredAtMs: nowMs,
+              reminderAt: nextReminderIso,
+              ...(isTimer && !nextReminderIso
+                ? {
+                    status: 'done' as CompanionTaskStatus,
+                    completedAt: syzranNow.time24,
+                    completedAtMs: nowMs,
+                  }
+                : {}),
+            },
+          });
+        }
+        // Do not fall through to generic approaching_deadline when an explicit reminderAt is configured
         continue;
       }
     }
 
-    // 2. Approaching deadline today with dueTime within 45 minutes
-    if (task.dueDate === todayIso && task.dueTime && !task.deadlineWarningFired) {
+    // 2. Approaching deadline today with dueTime within 45 minutes (only if no explicit reminderAt and not just created)
+    if (
+      task.dueDate === todayIso &&
+      task.dueTime &&
+      !task.deadlineWarningFired &&
+      task.sourceType !== 'reminder' &&
+      nowMs - task.createdAtMs > 5 * 60 * 1000
+    ) {
       const [hh, mm] = task.dueTime.split(':').map(Number);
       const dueMinutesTotal = hh * 60 + mm;
       const nowMinutesTotal = syzranNow.hour * 60 + syzranNow.minute;
       const diff = dueMinutesTotal - nowMinutesTotal;
-      if (diff >= 0 && diff <= 45) {
+      if (diff > 0 && diff <= 45) {
         alerts.push({
-          id: `deadline_${task.id}_${nowMs}`,
+          id: `deadline_${task.id}_${todayIso}`,
           type: 'approaching_deadline',
           title: `Приближается дедлайн (${task.dueTime})`,
-          message: `Через ${diff} мин. (${task.dueTime}) срок задачи **«${task.title}»**.`,
+          message: `⏰ Через ${diff} мин. (${task.dueTime}) наступает срок задачи **«${task.title}»**.`,
           taskId: task.id,
           updatedTaskPatch: {
             deadlineWarningFired: true,

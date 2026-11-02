@@ -71,12 +71,15 @@ import {
 import {
   addDaysToIsoDate,
   buildSyzranTimeResponse,
+  formatSyzranDateTimeShort,
   formatSyzranIsoDateRu,
   getSyzranNow,
   isSyzranTimeQuestion,
   toSyzranIsoDate,
 } from '../utils/syzranTime';
 import {
+  buildFallbackTaskFromUserRequest,
+  buildSyzranReminderIso,
   checkDueTaskAndDelegationReminders,
   evaluateTaskPriorityMultiCriteria,
   extractAutoTaskFromConversation,
@@ -543,8 +546,12 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const [newTaskDueDate, setNewTaskDueDate] = useState(() =>
     toIsoDateString(new Date())
   );
+  const [newTaskDueTime, setNewTaskDueTime] = useState('');
   const [newTaskPriority, setNewTaskPriority] =
     useState<CompanionTaskPriority>('medium');
+  const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(
+    null
+  );
 
   // Stage 8: Coordinator tasks sub-tab state & reactive updates
   const [tasksSubTab, setTasksSubTab] = useState<'anna' | 'coordinator'>('anna');
@@ -1025,68 +1032,172 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     updatePreferences({ characterHidden: hide });
   };
 
-  // Stage 3.5: Reliable Reminder Scheduler (checks on startup for missed reminders and every 20s in active/minimized app)
+  // Stage 3.5: Reliable 1-Second Reminder & Timer Scheduler (checks on startup for missed reminders, every 1s in active/minimized app, and never fires twice)
   const firedReminderIdsRef = useRef<Set<string>>(new Set());
+  const isCheckingRemindersRef = useRef<boolean>(false);
+  const companionTasksLatestRef = useRef<CompanionTaskRecord[]>(companionTasks);
+  const coordinatorTasksLatestRef = useRef<PixelDelegatedTaskState[]>(coordinatorTasks);
+  const companionMessagesLatestRef = useRef<CompanionMessage[]>(companionMessages);
+  const onSaveCompanionTaskLatestRef = useRef(onSaveCompanionTask);
+  const onSaveCompanionMessagesLatestRef = useRef(onSaveCompanionMessages);
+  const activeSchoolLatestRef = useRef<SchoolId>(activeSchool);
+
+  useEffect(() => {
+    companionTasksLatestRef.current = companionTasks;
+  }, [companionTasks]);
+  useEffect(() => {
+    coordinatorTasksLatestRef.current = coordinatorTasks;
+  }, [coordinatorTasks]);
+  useEffect(() => {
+    companionMessagesLatestRef.current = companionMessages;
+  }, [companionMessages]);
+  useEffect(() => {
+    onSaveCompanionTaskLatestRef.current = onSaveCompanionTask;
+  }, [onSaveCompanionTask]);
+  useEffect(() => {
+    onSaveCompanionMessagesLatestRef.current = onSaveCompanionMessages;
+  }, [onSaveCompanionMessages]);
+  useEffect(() => {
+    activeSchoolLatestRef.current = activeSchool;
+  }, [activeSchool]);
+
   useEffect(() => {
     if (interactionPaused) return;
 
+    const triggerSystemNotification = async (title: string, body: string) => {
+      const cleanBody = body.replace(/\*\*/g, '');
+      // 1. Native Electron OS notification (works even when minimized to taskbar)
+      if (typeof window !== 'undefined' && window.electronAPI?.notifications?.show) {
+        try {
+          const shown = await window.electronAPI.notifications.show({
+            title,
+            body: cleanBody,
+          });
+          if (shown) return;
+        } catch {
+          // fallback to Web Notification API
+        }
+      }
+      // 2. Standard Web Notification API
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        try {
+          if (Notification.permission === 'granted') {
+            new Notification(title, { body: cleanBody });
+          }
+        } catch {
+          // ignore notification error in restricted iframe contexts
+        }
+      }
+    };
+
     const runReminderCheck = async () => {
-      const alerts = checkDueTaskAndDelegationReminders(
-        companionTasks,
-        coordinatorTasks,
-        Date.now()
-      );
-      for (const alert of alerts) {
-        const dedupeKey = alert.taskId
-          ? `${alert.type}_${alert.taskId}`
-          : `${alert.type}_${alert.delegationTaskId}`;
-        if (firedReminderIdsRef.current.has(dedupeKey)) continue;
-        firedReminderIdsRef.current.add(dedupeKey);
+      if (isCheckingRemindersRef.current) return;
+      isCheckingRemindersRef.current = true;
+      try {
+        const nowMs = Date.now();
+        const alerts = checkDueTaskAndDelegationReminders(
+          companionTasksLatestRef.current,
+          coordinatorTasksLatestRef.current,
+          nowMs
+        );
+        for (const alert of alerts) {
+          const dedupeKey = alert.id || (alert.taskId
+            ? `${alert.type}_${alert.taskId}`
+            : `${alert.type}_${alert.delegationTaskId}`);
+          if (firedReminderIdsRef.current.has(dedupeKey)) continue;
+          firedReminderIdsRef.current.add(dedupeKey);
 
-        if (alert.taskId && alert.updatedTaskPatch) {
-          const target = companionTasks.find((t) => t.id === alert.taskId);
-          if (target) {
-            await onSaveCompanionTask({
-              ...target,
-              ...alert.updatedTaskPatch,
-            });
+          let updatedTaskRecord: CompanionTaskRecord | undefined;
+          if (alert.taskId && alert.updatedTaskPatch) {
+            const target = companionTasksLatestRef.current.find(
+              (t) => t.id === alert.taskId
+            );
+            if (target) {
+              updatedTaskRecord = {
+                ...target,
+                ...alert.updatedTaskPatch,
+              };
+              // Mutate ref immediately before awaiting DB write so next 1s tick can never double-fire
+              companionTasksLatestRef.current =
+                companionTasksLatestRef.current.map((t) =>
+                  t.id === updatedTaskRecord!.id ? updatedTaskRecord! : t
+                );
+              try {
+                await onSaveCompanionTaskLatestRef.current(updatedTaskRecord);
+              } catch {
+                // ignore individual save error during background tick
+              }
+            }
           }
-        }
 
-        setSpeechBubble({
-          text: alert.message.replace(/\*\*/g, ''),
-        });
-
-        // Browser notification when window is minimized / backgrounded
-        if (
-          typeof window !== 'undefined' &&
-          'Notification' in window &&
-          Notification.permission === 'granted' &&
-          document.hidden
-        ) {
-          try {
-            new Notification(alert.title, {
-              body: alert.message.replace(/\*\*/g, ''),
-            });
-          } catch {
-            // ignore
+          // Append an autonomous message in Pixel's chat for task reminders, timers, and approaching deadlines
+          if (
+            alert.type === 'task_reminder' ||
+            alert.type === 'approaching_deadline'
+          ) {
+            const alertMsgId = `comp-pixel-alert-${dedupeKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+            const alreadyInChat = companionMessagesLatestRef.current.some(
+              (m) => m.id === alertMsgId
+            );
+            if (!alreadyInChat) {
+              const syzranSnap = getSyzranNow(new Date(nowMs));
+              const reminderChatMsg: CompanionMessage = {
+                id: alertMsgId,
+                role: 'pixel',
+                content: alert.message,
+                createdAt: syzranSnap.timeHHMM,
+                createdAtMs: nowMs,
+                schoolId: activeSchoolLatestRef.current,
+                autoCreatedTask: updatedTaskRecord,
+                usedContextLabels: [
+                  'Планировщик напоминаний Пикселя',
+                  `Сызрань: ${syzranSnap.timeHHMMSS}`,
+                ],
+              };
+              const nextMessages = [
+                ...companionMessagesLatestRef.current,
+                reminderChatMsg,
+              ];
+              companionMessagesLatestRef.current = nextMessages;
+              try {
+                await onSaveCompanionMessagesLatestRef.current(nextMessages);
+              } catch {
+                // ignore
+              }
+            }
           }
+
+          setSpeechBubble({
+            text: alert.message.replace(/\*\*/g, ''),
+          });
+
+          void triggerSystemNotification(alert.title, alert.message);
         }
+      } finally {
+        isCheckingRemindersRef.current = false;
       }
     };
 
     const initialTimer = window.setTimeout(() => {
       void runReminderCheck();
-    }, 2500);
+    }, 600);
     const intervalId = window.setInterval(() => {
       void runReminderCheck();
-    }, 20000);
+    }, 1000);
+
+    const handleVisibilityOrFocus = () => {
+      void runReminderCheck();
+    };
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
     return () => {
       window.clearTimeout(initialTimer);
       window.clearInterval(intervalId);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
-  }, [companionTasks, coordinatorTasks, interactionPaused, onSaveCompanionTask]);
+  }, [interactionPaused]);
 
   // Delicate cursor eye tracking (Part 8)
   useEffect(() => {
@@ -1821,22 +1932,54 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     }
 
     // 1.6 Stage 3: Voice & Text Task Management Commands («Добавь задачу...», «Что мне нужно сделать сегодня?», «Что самое срочное?», «Перенеси на завтра», «Разбей на шаги», «Составь план на завтра» и др.)
+    const currentTasksSnapshot = companionTasksLatestRef.current;
     const taskCmdResult = parseAndExecuteTaskCommand(
       text,
       activeSchool,
-      companionTasks
+      currentTasksSnapshot
     );
     if (taskCmdResult && taskCmdResult.handled) {
-      if (taskCmdResult.createdTask) {
-        await onSaveCompanionTask(taskCmdResult.createdTask);
-      }
-      if (taskCmdResult.updatedTasks && taskCmdResult.updatedTasks.length > 0) {
-        for (const ut of taskCmdResult.updatedTasks) {
-          await onSaveCompanionTask(ut);
+      try {
+        if (taskCmdResult.createdTask) {
+          await onSaveCompanionTask(taskCmdResult.createdTask);
+          if (
+            taskCmdResult.createdTask.reminderAt &&
+            typeof window !== 'undefined' &&
+            'Notification' in window &&
+            Notification.permission === 'default'
+          ) {
+            Notification.requestPermission().catch(() => {});
+          }
         }
+        if (taskCmdResult.updatedTasks && taskCmdResult.updatedTasks.length > 0) {
+          for (const ut of taskCmdResult.updatedTasks) {
+            await onSaveCompanionTask(ut);
+          }
+        }
+      } catch (saveErr) {
+        const errDetail =
+          saveErr instanceof Error
+            ? saveErr.message
+            : 'Не удалось записать задачу в IndexedDB.';
+        const failReplyMsg: CompanionMessage = {
+          id: `comp-pixel-taskerr-${nowMs + 1}`,
+          role: 'pixel',
+          content: `❌ **Не удалось сохранить задачу в хранилище:** ${errDetail}\n\nЗадача не была создана. Пожалуйста, проверьте доступность хранилища браузера и повторите попытку.`,
+          createdAt: formatTimeOnly(new Date(nowMs + 1)),
+          createdAtMs: nowMs + 1,
+          schoolId: activeSchool,
+          isError: true,
+        };
+        await onSaveCompanionMessages([...historyWithUser, failReplyMsg]);
+        updatePreferences({ mood: 'thinking' });
+        return;
       }
+
       if (taskCmdResult.openTasksTabWithFilter) {
         setTaskFilter(taskCmdResult.openTasksTabWithFilter);
+      }
+      if (taskCmdResult.createdTask) {
+        setHighlightedTaskId(taskCmdResult.createdTask.id);
       }
 
       const cmdReplyMsg: CompanionMessage = {
@@ -1860,21 +2003,45 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     }
 
     // 2. Stage 3.1: Automatic task extraction from normal conversation («Завтра нужно написать родителям о переносе занятия»)
-    const autoExtracted =
+    const rawAutoExtracted =
       !EffectiveImage && autoCaptureTasksEnabled
         ? extractAutoTaskFromConversation(
             text,
             activeSchool,
-            companionTasks,
+            companionTasksLatestRef.current,
             userMsg.id
           )
         : null;
 
-    if (autoExtracted) {
-      await onSaveCompanionTask(autoExtracted.taskRecord);
+    let autoExtracted = rawAutoExtracted;
+    let autoSaveErrorNote: string | null = null;
+    if (rawAutoExtracted) {
+      try {
+        await onSaveCompanionTask(rawAutoExtracted.taskRecord);
+        setHighlightedTaskId(rawAutoExtracted.taskRecord.id);
+        const nowIso = toSyzranIsoDate();
+        const tmrIso = addDaysToIsoDate(nowIso, 1);
+        const wkEndIso = addDaysToIsoDate(nowIso, 7);
+        const taskDue = rawAutoExtracted.taskRecord.dueDate;
+        if (taskDue === nowIso) {
+          setTaskFilter('today');
+        } else if (taskDue === tmrIso) {
+          setTaskFilter('tomorrow');
+        } else if (taskDue && taskDue > tmrIso && taskDue <= wkEndIso) {
+          setTaskFilter('week');
+        } else {
+          setTaskFilter('all');
+        }
+      } catch (err) {
+        autoExtracted = null;
+        autoSaveErrorNote =
+          err instanceof Error
+            ? err.message
+            : 'Не удалось сохранить задачу в хранилище IndexedDB.';
+      }
     }
 
-    const proposedTask = !autoExtracted
+    const proposedTask = !autoExtracted && !autoSaveErrorNote
       ? parseTaskProposalFromMessage(text, activeSchool) || undefined
       : undefined;
     const proposedMemory =
@@ -1887,7 +2054,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       text,
       activeSchool,
       companionMemory,
-      companionTasks,
+      companionTasksLatestRef.current,
       activeChatContext
     );
 
@@ -1966,8 +2133,41 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
           ? '[Генерация ответа Пикселя остановлена]'
           : 'Анна, я на связи!');
 
+      // Protection against false confirmations: if LLM claims it created/saved a task,
+      // ensure a task was actually saved in storage or block the false confirmation.
+      const llmClaimsTaskCreated =
+        /(?:записал[аи]?|поставил[аи]?|создал[аи]?|добавил[аи]?|внесл[аи]?|зафиксировал[аи]?)\s+(?:[^.!?]{0,45})?(?:задач[уи]|в\s+список\s+дел|в\s+задачи|напоминание)/i.test(
+          rawFinalText
+        );
+
+      let verifiedFallbackTask: CompanionTaskRecord | undefined;
+      if (!autoExtracted && !autoSaveErrorNote && llmClaimsTaskCreated) {
+        const fallbackCandidate = buildFallbackTaskFromUserRequest(
+          text,
+          activeSchool
+        );
+        if (fallbackCandidate) {
+          try {
+            await onSaveCompanionTask(fallbackCandidate);
+            verifiedFallbackTask = fallbackCandidate;
+            setHighlightedTaskId(fallbackCandidate.id);
+            setTaskFilter('all');
+          } catch (fallbackErr) {
+            autoSaveErrorNote =
+              fallbackErr instanceof Error
+                ? fallbackErr.message
+                : 'Не удалось сохранить задачу в хранилище IndexedDB.';
+          }
+        } else {
+          autoSaveErrorNote =
+            'Задача не была распознана и не записана в хранилище.';
+        }
+      }
+
       const finalText = autoExtracted
         ? `✅ **${autoExtracted.shortConfirmationText}**\n\n${rawFinalText}`
+        : autoSaveErrorNote
+        ? `❌ **Внимание: задача НЕ была сохранена в списке дел.** Причина: ${autoSaveErrorNote}`
         : rawFinalText;
 
       if (result.aborted) {
@@ -1987,8 +2187,13 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 result.aborted && result.text.trim()
                   ? `${result.text.trim()}\n\n[Остановлено]`
                   : finalText,
+              autoCreatedTask:
+                autoExtracted?.taskRecord || verifiedFallbackTask,
+              taskUndoAvailable: Boolean(
+                autoExtracted?.taskRecord || verifiedFallbackTask
+              ),
               isStreaming: false,
-              isError: false,
+              isError: Boolean(autoSaveErrorNote && llmClaimsTaskCreated),
               modelName: result.model,
               providerId: result.providerId,
               providerLabel: result.providerLabel,
@@ -2001,7 +2206,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       await onSaveCompanionMessages(finalList);
       updatePreferences({
         mood:
-          proposedTask || proposedMemory || autoExtracted
+          proposedTask || proposedMemory || autoExtracted || verifiedFallbackTask
             ? 'thinking'
             : 'happy',
       });
@@ -2145,11 +2350,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       newTaskDesc.trim(),
       newTaskDueDate
     );
+    const trimmedTime = newTaskDueTime.trim() || undefined;
+
     const task: CompanionTaskRecord = {
       id: `task-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
       title: trimmed,
       description: newTaskDesc.trim(),
       dueDate: newTaskDueDate,
+      dueTime: trimmedTime,
+      reminderAt: undefined,
+      reminderRepeat: undefined,
       priority: newTaskPriority || evalCriteria.priority,
       urgencyScore: evalCriteria.urgencyScore,
       importanceScore: evalCriteria.importanceScore,
@@ -2164,8 +2374,27 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     };
 
     await onSaveCompanionTask(task);
+    setHighlightedTaskId(task.id);
+    const nowIso = toSyzranIsoDate();
+    const tmrIso = addDaysToIsoDate(nowIso, 1);
+    const wkEndIso = addDaysToIsoDate(nowIso, 7);
+    if (newTaskDueDate === nowIso && taskFilter === 'today') {
+      // stay on today
+    } else if (newTaskDueDate === tmrIso && taskFilter === 'tomorrow') {
+      // stay on tomorrow
+    } else if (
+      newTaskDueDate &&
+      newTaskDueDate >= nowIso &&
+      newTaskDueDate <= wkEndIso &&
+      taskFilter === 'week'
+    ) {
+      // stay on week
+    } else if (taskFilter !== 'all') {
+      setTaskFilter('all');
+    }
     setNewTaskTitle('');
     setNewTaskDesc('');
+    setNewTaskDueTime('');
     setShowNewTaskForm(false);
     updatePreferences({ mood: 'happy' });
   };
@@ -2193,9 +2422,51 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     task: CompanionTaskRecord,
     nextDueDate: string
   ) => {
+    const nextReminderIso = buildSyzranReminderIso(nextDueDate, task.dueTime);
     await onSaveCompanionTask({
       ...task,
       dueDate: nextDueDate,
+      reminderAt: nextReminderIso || task.reminderAt,
+      lastReminderFiredAtMs: nextReminderIso ? undefined : task.lastReminderFiredAtMs,
+    });
+  };
+
+  const handleChangeTaskDueTime = async (
+    task: CompanionTaskRecord,
+    nextDueTime: string
+  ) => {
+    const cleanTime = nextDueTime.trim() || undefined;
+    const effectiveDate = task.dueDate || toIsoDateString(new Date());
+    const nextReminderIso = buildSyzranReminderIso(effectiveDate, cleanTime);
+    await onSaveCompanionTask({
+      ...task,
+      dueDate: effectiveDate,
+      dueTime: cleanTime,
+      reminderAt: nextReminderIso,
+      lastReminderFiredAtMs: undefined,
+    });
+  };
+
+  const handleCancelTaskReminder = async (task: CompanionTaskRecord) => {
+    await onSaveCompanionTask({
+      ...task,
+      reminderAt: undefined,
+      reminderRepeat: 'none',
+    });
+  };
+
+  const handleSnoozeTaskReminder = async (
+    task: CompanionTaskRecord,
+    minutesFromNow: number
+  ) => {
+    const targetMs = Date.now() + minutesFromNow * 60 * 1000;
+    const snap = getSyzranNow(new Date(targetMs));
+    await onSaveCompanionTask({
+      ...task,
+      dueDate: snap.isoDate,
+      dueTime: snap.timeHHMM,
+      reminderAt: new Date(targetMs).toISOString(),
+      lastReminderFiredAtMs: undefined,
     });
   };
 
@@ -2734,34 +3005,56 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                           </div>
                         )}
 
-                      {/* Auto-Captured Task Card with 1-Click Undo */}
+                      {/* Auto-Captured / Command-Created Task Card with Open & 1-Click Undo */}
                       {msg.autoCreatedTask && (
                         <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-2">
                           <div className="rounded-xl p-2.5 bg-emerald-50/70 border border-emerald-200/90 space-y-1">
                             <div className="text-[11px] font-bold text-slate-900 flex items-center gap-1.5">
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                               <span>
-                                Автоматически зафиксирована задача: «{msg.autoCreatedTask.title}»
+                                Зафиксирована задача: «{msg.autoCreatedTask.title}»
                               </span>
                             </div>
                             <div className="text-[10px] text-slate-600 flex flex-wrap items-center gap-2">
                               <span>
-                                Срок: {formatIsoDateRu(msg.autoCreatedTask.dueDate)}
+                                Дата: <strong>{formatIsoDateRu(msg.autoCreatedTask.dueDate)}</strong>
                               </span>
+                              {msg.autoCreatedTask.dueTime && (
+                                <>
+                                  <span>·</span>
+                                  <span>
+                                    Время: <strong>{msg.autoCreatedTask.dueTime}</strong>
+                                  </span>
+                                </>
+                              )}
                               <span>·</span>
                               <span>
                                 Приоритет: {TASK_PRIORITY_LABELS[msg.autoCreatedTask.priority]}
                               </span>
-                              {msg.autoCreatedTask.estimatedMinutes && (
+                              {msg.autoCreatedTask.reminderAt && (
                                 <>
                                   <span>·</span>
-                                  <span>~{msg.autoCreatedTask.estimatedMinutes} мин</span>
+                                  <span className="text-cyan-800 font-semibold">
+                                    🔔 Напоминание: {formatSyzranDateTimeShort(new Date(msg.autoCreatedTask.reminderAt))}
+                                  </span>
                                 </>
                               )}
                             </div>
                           </div>
                           {msg.taskUndoAvailable ? (
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                data-testid="open-created-task-btn"
+                                onClick={() => {
+                                  setTaskFilter('all');
+                                  setHighlightedTaskId(msg.autoCreatedTask!.id);
+                                  setActiveTab('tasks');
+                                }}
+                                className="px-2.5 py-1 rounded-xl bg-slate-900 text-white text-[11px] font-semibold hover:bg-slate-800 cursor-pointer"
+                              >
+                                Открыть задачу
+                              </button>
                               <button
                                 type="button"
                                 onClick={async () => {
@@ -2777,13 +3070,6 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                               >
                                 <RotateCcw className="w-3 h-3" />
                                 <span>Отменить создание задачи</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setActiveTab('tasks')}
-                                className="px-2.5 py-1 rounded-xl bg-white border border-slate-200 text-slate-700 text-[11px] font-medium hover:bg-slate-50 cursor-pointer"
-                              >
-                                Открыть в списке дел
                               </button>
                             </div>
                           ) : (
@@ -4410,15 +4696,26 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                     placeholder="Описание или детали (необязательно)"
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
                   />
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     <div>
                       <label className="block text-[10px] text-slate-500 mb-0.5">
-                        Срок выполнения
+                        Дата выполнения
                       </label>
                       <input
                         type="date"
                         value={newTaskDueDate}
                         onChange={(e) => setNewTaskDueDate(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-0.5">
+                        Время (Сызрань)
+                      </label>
+                      <input
+                        type="time"
+                        value={newTaskDueTime}
+                        onChange={(e) => setNewTaskDueTime(e.target.value)}
                         className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
                       />
                     </div>
@@ -4468,8 +4765,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   </div>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
                     Добавьте задачу кнопкой выше или скажите в диалоге:
-                    «Пиксель, добавь задачу проверить презентацию завтра» или
-                    «Что самое срочное?».
+                    «Запиши задачу: провести мероприятие по Мафии в среду в 15:00» или
+                    «Напомни через 1 минуту проверить отчёт».
                   </p>
                 </div>
               ) : (
@@ -4479,12 +4776,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                     const isOverdue =
                       !isDone && task.dueDate && task.dueDate < todayIso;
                     const isToday = !isDone && task.dueDate === todayIso;
+                    const isHighlighted = highlightedTaskId === task.id;
 
                     return (
                       <div
                         key={task.id}
+                        data-testid={`companion-task-card-${task.id}`}
                         className={`rounded-2xl p-3.5 bg-white border transition-all space-y-2.5 ${
-                          isDone
+                          isHighlighted
+                            ? 'border-[#00A8B5] ring-2 ring-[#00A8B5]/30 bg-cyan-50/20'
+                            : isDone
                             ? 'border-slate-200/60 opacity-70'
                             : isOverdue
                               ? 'border-amber-300 bg-amber-50/30'
@@ -4520,6 +4821,20 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                               >
                                 {task.title}
                               </div>
+                              {(task.dueDate || task.dueTime) && (
+                                <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-slate-700">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800">
+                                    <Calendar className="w-3 h-3 text-[#00A8B5]" />
+                                    <span>{formatIsoDateRu(task.dueDate)}</span>
+                                  </span>
+                                  {task.dueTime && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-cyan-50 text-cyan-900 border border-cyan-200/70 font-mono-tabular">
+                                      <Clock className="w-3 h-3 text-[#00A8B5]" />
+                                      <span>{task.dueTime}</span>
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                               {task.description && (
                                 <div className="text-[11px] text-slate-500 break-words">
                                   {task.description}
@@ -4529,6 +4844,35 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                 <div className="text-[11px] text-slate-600 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200/60">
                                   <strong className="text-slate-800">Оценка Пикселя:</strong>{' '}
                                   {task.priorityReason}
+                                </div>
+                              )}
+                              {task.reminderAt && !isDone && (
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] bg-amber-50/90 border border-amber-200/80 px-2.5 py-1.5 rounded-xl text-amber-950">
+                                  <span className="inline-flex items-center gap-1 font-semibold">
+                                    <Bell className="w-3 h-3 text-amber-600 shrink-0" />
+                                    <span>
+                                      Напоминание: {formatSyzranDateTimeShort(new Date(task.reminderAt))}
+                                      {task.reminderRepeat && task.reminderRepeat !== 'none'
+                                        ? ` (${task.reminderRepeat === 'daily' ? 'ежедневно' : task.reminderRepeat === 'weekdays' ? 'по будням' : 'еженедельно'})`
+                                        : ''}
+                                    </span>
+                                  </span>
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleSnoozeTaskReminder(task, 15)}
+                                      className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 text-[10px] font-semibold hover:bg-amber-100 cursor-pointer"
+                                    >
+                                      +15 мин
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleCancelTaskReminder(task)}
+                                      className="px-2 py-0.5 rounded bg-white border border-rose-200 text-rose-700 text-[10px] font-semibold hover:bg-rose-50 cursor-pointer"
+                                    >
+                                      Отменить
+                                    </button>
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -4639,6 +4983,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                               </button>
                             )}
 
+                            {!task.reminderAt && !isDone && (
+                              <button
+                                type="button"
+                                onClick={() => void handleSnoozeTaskReminder(task, 1)}
+                                className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 hover:bg-amber-100 font-semibold cursor-pointer"
+                              >
+                                🔔 Напомнить (1 мин)
+                              </button>
+                            )}
+
                             {(isToday || isOverdue) && (
                               <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-semibold">
                                 {isOverdue ? 'Срок прошёл' : 'Сегодня!'}
@@ -4646,17 +5000,30 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                             )}
                           </div>
 
-                          <label className="inline-flex items-center gap-1 text-slate-500 cursor-pointer">
-                            <Calendar className="w-3 h-3 text-slate-400" />
-                            <input
-                              type="date"
-                              value={task.dueDate || ''}
-                              onChange={(e) =>
-                                handleChangeTaskDueDate(task, e.target.value)
-                              }
-                              className="bg-transparent text-[10px] font-mono-tabular text-slate-700 focus:outline-none"
-                            />
-                          </label>
+                          <div className="inline-flex items-center gap-2">
+                            <label className="inline-flex items-center gap-1 text-slate-500 cursor-pointer">
+                              <Calendar className="w-3 h-3 text-slate-400" />
+                              <input
+                                type="date"
+                                value={task.dueDate || ''}
+                                onChange={(e) =>
+                                  handleChangeTaskDueDate(task, e.target.value)
+                                }
+                                className="bg-transparent text-[10px] font-mono-tabular text-slate-700 focus:outline-none"
+                              />
+                            </label>
+                            <label className="inline-flex items-center gap-1 text-slate-500 cursor-pointer">
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              <input
+                                type="time"
+                                value={task.dueTime || ''}
+                                onChange={(e) =>
+                                  handleChangeTaskDueTime(task, e.target.value)
+                                }
+                                className="bg-transparent text-[10px] font-mono-tabular text-slate-700 focus:outline-none"
+                              />
+                            </label>
+                          </div>
                         </div>
                       </div>
                     );

@@ -128,6 +128,8 @@ const VALID_TASK_STATUSES = new Set<CompanionTaskStatus>([
   'new',
   'in_progress',
   'done',
+  'postponed',
+  'waiting_response',
 ]);
 
 const VALID_TASK_PRIORITIES = new Set<CompanionTaskPriority>([
@@ -566,6 +568,18 @@ function assembleLoadedWorkspaceData(
  * and Pixel companion entities on application startup.
  */
 export async function initAndLoadWorkspaceData(): Promise<LoadedWorkspaceData> {
+  let electronMirroredTasks: CompanionTaskRecord[] = [];
+  if (typeof window !== 'undefined' && window.electronAPI?.companionTasks?.loadAll) {
+    try {
+      const loaded = await window.electronAPI.companionTasks.loadAll();
+      if (Array.isArray(loaded)) {
+        electronMirroredTasks = loaded;
+      }
+    } catch {
+      // ignore Electron disk mirror read failure
+    }
+  }
+
   const db = await openAssistantDatabase();
 
   return new Promise<LoadedWorkspaceData>((resolve, reject) => {
@@ -629,6 +643,22 @@ export async function initAndLoadWorkspaceData(): Promise<LoadedWorkspaceData> {
           rawCompMessages = compMsgList;
           rawCompMemory = compMemList;
           rawCompTasks = compTaskList;
+
+          if (electronMirroredTasks.length > 0) {
+            const byId = new Map<string, CompanionTaskRecord>();
+            for (const t of rawCompTasks) {
+              if (t && t.id) byId.set(t.id, t);
+            }
+            for (const diskTask of electronMirroredTasks) {
+              if (!diskTask || typeof diskTask.id !== 'string') continue;
+              const existing = byId.get(diskTask.id);
+              if (!existing) {
+                byId.set(diskTask.id, diskTask);
+                compTaskStore.put(diskTask);
+              }
+            }
+            rawCompTasks = Array.from(byId.values());
+          }
 
           // Ensure all 8 categories exist in IndexedDB for both schools
           const existingKeys = new Set(rawKnowledge.map((r) => r.id));
@@ -1161,22 +1191,54 @@ export async function clearAllCompanionMemoryInDb(): Promise<void> {
 export async function saveCompanionTaskInDb(
   task: CompanionTaskRecord
 ): Promise<void> {
+  if (!task || typeof task.id !== 'string' || !task.id.trim()) {
+    throw new Error('Некорректный идентификатор задачи при сохранении в хранилище.');
+  }
+  if (typeof task.title !== 'string' || !task.title.trim()) {
+    throw new Error('Не указано название задачи при сохранении в хранилище.');
+  }
+
   const db = await openAssistantDatabase();
-  return new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_COMPANION_TASKS, 'readwrite');
     const store = tx.objectStore(STORE_COMPANION_TASKS);
-    store.put(task);
-    tx.oncomplete = () => resolve();
+    let verifiedRecord: CompanionTaskRecord | undefined;
+
+    const putReq = store.put(task);
+    putReq.onsuccess = () => {
+      const getReq = store.get(task.id);
+      getReq.onsuccess = () => {
+        verifiedRecord = getReq.result as CompanionTaskRecord | undefined;
+      };
+    };
+
+    tx.oncomplete = () => {
+      if (!verifiedRecord || verifiedRecord.id !== task.id) {
+        reject(
+          new Error('Запись задачи в IndexedDB не подтверждена при контрольной проверке.')
+        );
+        return;
+      }
+      resolve();
+    };
     tx.onerror = () =>
       reject(
         tx.error || new Error('Не удалось сохранить задачу Анны в IndexedDB.')
       );
   });
+
+  if (typeof window !== 'undefined' && window.electronAPI?.companionTasks?.save) {
+    try {
+      await window.electronAPI.companionTasks.save(task);
+    } catch {
+      // IndexedDB is primary; ignore secondary Electron mirror error
+    }
+  }
 }
 
 export async function deleteCompanionTaskInDb(taskId: string): Promise<void> {
   const db = await openAssistantDatabase();
-  return new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_COMPANION_TASKS, 'readwrite');
     const store = tx.objectStore(STORE_COMPANION_TASKS);
     store.delete(taskId);
@@ -1186,6 +1248,14 @@ export async function deleteCompanionTaskInDb(taskId: string): Promise<void> {
         tx.error || new Error('Не удалось удалить задачу из IndexedDB.')
       );
   });
+
+  if (typeof window !== 'undefined' && window.electronAPI?.companionTasks?.delete) {
+    try {
+      await window.electronAPI.companionTasks.delete(taskId);
+    } catch {
+      // ignore secondary Electron mirror error
+    }
+  }
 }
 
 export async function saveCompanionPreferencesInDb(
@@ -1685,7 +1755,37 @@ export function validateBackupArchiveJson(
         title: t.title,
         description: typeof t.description === 'string' ? t.description : '',
         dueDate: typeof t.dueDate === 'string' ? t.dueDate : '',
+        dueTime: typeof t.dueTime === 'string' ? t.dueTime : undefined,
+        reminderAt: typeof t.reminderAt === 'string' ? t.reminderAt : undefined,
+        reminderRepeat:
+          t.reminderRepeat === 'none' ||
+          t.reminderRepeat === 'daily' ||
+          t.reminderRepeat === 'weekdays' ||
+          t.reminderRepeat === 'weekly'
+            ? t.reminderRepeat
+            : undefined,
+        lastReminderFiredAtMs:
+          typeof t.lastReminderFiredAtMs === 'number'
+            ? t.lastReminderFiredAtMs
+            : undefined,
         priority,
+        priorityReason:
+          typeof t.priorityReason === 'string' ? t.priorityReason : undefined,
+        estimatedMinutes:
+          typeof t.estimatedMinutes === 'number' ? t.estimatedMinutes : undefined,
+        steps: Array.isArray(t.steps) ? t.steps : undefined,
+        sourceType:
+          t.sourceType === 'manual' ||
+          t.sourceType === 'conversation_auto' ||
+          t.sourceType === 'voice_command' ||
+          t.sourceType === 'delegation' ||
+          t.sourceType === 'reminder'
+            ? t.sourceType
+            : undefined,
+        linkedDelegationTaskId:
+          typeof t.linkedDelegationTaskId === 'string'
+            ? t.linkedDelegationTaskId
+            : undefined,
         status,
         schoolId:
           t.schoolId === 'kiberone' ||

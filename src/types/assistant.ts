@@ -325,7 +325,7 @@ export interface CompanionTaskRecord {
   steps?: CompanionTaskStep[];
   status: CompanionTaskStatus;
   schoolId?: SchoolId | 'both';
-  sourceType?: 'manual' | 'conversation_auto' | 'voice_command' | 'delegation';
+  sourceType?: 'manual' | 'conversation_auto' | 'voice_command' | 'delegation' | 'reminder';
   sourceExcerpt?: string;
   sourceMessageId?: string;
   linkedDelegationTaskId?: string;
