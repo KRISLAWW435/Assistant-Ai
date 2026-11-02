@@ -5,6 +5,7 @@ import {
   ChatMessage,
   ChatSession,
   CompanionMessage,
+  CoordinatorTaskStatus,
   KnowledgeBaseBySchool,
   NavSection,
   PixelActiveChatContext,
@@ -14,7 +15,10 @@ import {
   PixelDelegationStatus,
   PixelPendingChatDeletion,
   PixelPendingDelegationDraft,
+  PixelPendingRevisionDraft,
   SchoolId,
+  SpecialistAnalysisResult,
+  SpecialistRevisionItem,
   UploadedDocumentRecord,
 } from '../types/assistant';
 import { AGENT_MODES, SCHOOLS } from '../config/schoolsAndModes';
@@ -34,14 +38,20 @@ import {
 import { voiceManager } from './voice/voiceManager';
 
 export const PIXEL_DELEGATION_STATUS_LABELS: Record<
-  PixelDelegationStatus,
+  CoordinatorTaskStatus,
   string
 > = {
+  draft: 'Черновик',
+  pending_confirmation: 'Ждёт подтверждения',
+  sent: 'Отправлено',
+  processing: 'Выполняется',
+  completed: 'Завершено',
+  needs_revision: 'Требует доработки',
+  failed: 'Ошибка',
+  cancelled: 'Отменено',
   created: 'Создано',
   in_progress: 'Выполняется',
   reviewing: 'Проверяется Пикселем',
-  needs_revision: 'Требует доработки',
-  completed: 'Завершено',
   error: 'Ошибка',
 };
 
@@ -67,6 +77,28 @@ export const SPECIALIST_NAMES_INSTRUMENTAL_RU: Record<AgentMode, string> = {
   methodist: 'Методистом',
   analyst: 'Аналитиком',
 };
+
+export interface ParsedInquireResultIntent {
+  isInquiry: boolean;
+  targetMode?: AgentMode;
+  targetSchool?: SchoolId;
+  hasExplicitSchool?: boolean;
+  originalText: string;
+}
+
+export interface ParsedRevisionIntent {
+  isRevision: boolean;
+  targetMode?: AgentMode;
+  targetSchool?: SchoolId;
+  hasExplicitSchool?: boolean;
+  revisionPrompt: string;
+  originalText: string;
+}
+
+export interface ParsedPendingRevisionAction {
+  action: 'confirm' | 'cancel' | 'none';
+  draft?: PixelPendingRevisionDraft;
+}
 
 export interface ParsedDelegationIntent {
   isDelegation: boolean;
@@ -471,10 +503,12 @@ export class PixelAgentCoordinator {
     createdAtMs: number;
   } | null = null;
   private pendingConfirmationDraft: PixelPendingDelegationDraft | null = null;
+  private pendingRevisionDraft: PixelPendingRevisionDraft | null = null;
   private pendingChatDeletion: PixelPendingChatDeletion | null = null;
 
   public init(deps: PixelAgentCoordinatorDeps): void {
     this.deps = deps;
+    this.loadTasksFromStorage();
   }
 
   public setBubbleHandler(handler: ((text: string) => void) | null): void {
@@ -510,6 +544,132 @@ export class PixelAgentCoordinator {
 
   public getTaskById(taskId: string): PixelDelegatedTaskState | undefined {
     return this.tasks.get(taskId);
+  }
+
+  public getPendingRevisionDraft(): PixelPendingRevisionDraft | null {
+    if (
+      !this.pendingRevisionDraft ||
+      this.pendingRevisionDraft.status !== 'awaiting_confirmation'
+    ) {
+      return null;
+    }
+    return { ...this.pendingRevisionDraft };
+  }
+
+  private loadTasksFromStorage(): void {
+    try {
+      const stored = window.localStorage.getItem(
+        'kiber_renderia_coordinator_tasks_v1'
+      );
+      if (stored) {
+        const parsed = JSON.parse(stored) as PixelDelegatedTaskState[];
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item && item.taskId) {
+              this.tasks.set(item.taskId, item);
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore storage error
+    }
+
+    this.syncTasksWithCompanionMessages();
+  }
+
+  public saveTasksToStorage(): void {
+    try {
+      const all = this.getTasks();
+      window.localStorage.setItem(
+        'kiber_renderia_coordinator_tasks_v1',
+        JSON.stringify(all)
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  public syncTasksWithCompanionMessages(): void {
+    if (!this.deps) return;
+    try {
+      const msgs = this.deps.getCompanionMessages();
+      for (const m of msgs) {
+        if (m.delegatedTask && m.delegatedTask.taskId) {
+          const existing = this.tasks.get(m.delegatedTask.taskId);
+          if (!existing || m.delegatedTask.updatedAtMs >= existing.updatedAtMs) {
+            this.tasks.set(m.delegatedTask.taskId, m.delegatedTask);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  public getLatestTaskForSpecialist(
+    mode: AgentMode,
+    schoolId?: SchoolId
+  ): PixelDelegatedTaskState | undefined {
+    this.syncTasksWithCompanionMessages();
+    const all = this.getTasks();
+    if (schoolId) {
+      const exact = all.find(
+        (t) => t.targetMode === mode && t.schoolId === schoolId
+      );
+      if (exact) return exact;
+    }
+    return all.find((t) => t.targetMode === mode);
+  }
+
+  public getLatestCompletedTask(
+    mode?: AgentMode,
+    schoolId?: SchoolId
+  ): PixelDelegatedTaskState | undefined {
+    this.syncTasksWithCompanionMessages();
+    const all = this.getTasks();
+    return all.find((t) => {
+      if (t.status !== 'completed' && !t.resultText) return false;
+      if (mode && t.targetMode !== mode) return false;
+      if (schoolId && t.schoolId !== schoolId) return false;
+      return true;
+    });
+  }
+
+  /**
+   * Reads the full specialist response for a task aloud using Pixel's unified voice.
+   * Completely independent of which chat is open on the screen.
+   */
+  public async readTaskResult(taskId: string): Promise<boolean> {
+    const task = this.getTaskById(taskId);
+    if (!task || !task.resultText) {
+      this.showBubble('У этого поручения пока нет текста ответа для озвучивания.');
+      return false;
+    }
+
+    const schoolCfg = SCHOOLS[task.schoolId];
+    const modeCfg = AGENT_MODES[task.targetMode];
+
+    this.showBubble(
+      `Читаю полный ответ специалиста «${modeCfg.shortTitle}» (${schoolCfg.name})…`
+    );
+
+    try {
+      await voiceManager.playVerbatimSpecialistMessage(
+        task.resultMessageId || `task-${task.taskId}`,
+        task.resultText,
+        {
+          specialistTitle: modeCfg.shortTitle,
+          schoolName: schoolCfg.name,
+          onFallbackUsed: (reason) => {
+            this.showBubble(reason);
+          },
+        }
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private notifyListeners(latestTask?: PixelDelegatedTaskState): void {
@@ -970,10 +1130,11 @@ export class PixelAgentCoordinator {
   }
 
   /**
-   * Stage 6.4 (1) & Stage 6.5 (1 & 4): Reads aloud the full last specialist response verbatim in sequential chunks
-   * using Pixel's single unified voice:
-   * - Automatically locates the right chat for the requested specialist/school and switches to it if needed.
-   * - Always reads the original specialist message from that chat (never paraphrases via AI).
+   * Stage 6.4 (1), Stage 6.5 (1 & 4) & Coordinator Stage 6: Reads aloud the full specialist response
+   * verbatim in sequential chunks using Pixel's single unified voice:
+   * - Decoupled from currently open screen or chat: queries completed delegation tasks or specialist sessions directly.
+   * - Never reports "no answer" if the specialist has already prepared an answer.
+   * - Does NOT force-navigate the UI away when Anna is listening in Pixel's dialog.
    * - Supports resuming from the stopped chunk if interrupted.
    */
   public async executeReadAloud(
@@ -1008,41 +1169,52 @@ export class PixelAgentCoordinator {
       }
     }
 
-    // Stage 6.5 (1): Find the exact right session to read from.
-    // If Anna said «Прочитай ответ Маркетолога» without naming a school, check activeSchool first;
-    // if activeSchool has no reply from Marketer, check the latest completed task or the other school's Marketer chat!
-    let ctx = this.getActiveChatContext(targetMode, resolvedSchool);
-    if (!ctx?.lastSpecialistMessage && !intent.targetSchool) {
-      const latestTaskForMode = this.getTasks().find(
-        (t) => t.targetMode === targetMode && t.status === 'completed'
+    // 1. Look up completed task directly in coordinator registry (independent of open UI chat!)
+    let textToRead = '';
+    let messageIdToUse = '';
+    let finalSchool = resolvedSchool;
+
+    const completedTask =
+      this.getLatestCompletedTask(targetMode, intent.targetSchool ? resolvedSchool : undefined) ||
+      (!intent.targetSchool ? this.getLatestCompletedTask(targetMode) : undefined);
+
+    if (completedTask && completedTask.resultText) {
+      textToRead = completedTask.resultText;
+      messageIdToUse = completedTask.resultMessageId || `task-${completedTask.taskId}`;
+      finalSchool = completedTask.schoolId;
+    } else {
+      // 2. Look up specialist messages in all sessions for targetMode
+      const sessions = this.deps?.getSessions() || [];
+      let candidate = sessions.find(
+        (s) => s.schoolId === resolvedSchool && s.mode === targetMode && s.messages.some((m) => m.role === 'assistant' && !m.isStreaming && m.content.trim())
       );
-      if (latestTaskForMode) {
-        const candidateCtx = this.getActiveChatContext(
-          targetMode,
-          latestTaskForMode.schoolId,
-          latestTaskForMode.sessionId
+
+      if (!candidate && !intent.targetSchool) {
+        const otherSchool: SchoolId = resolvedSchool === 'kiberone' ? 'renderia' : 'kiberone';
+        candidate = sessions.find(
+          (s) => s.schoolId === otherSchool && s.mode === targetMode && s.messages.some((m) => m.role === 'assistant' && !m.isStreaming && m.content.trim())
         );
-        if (candidateCtx?.lastSpecialistMessage) {
-          ctx = candidateCtx;
-          resolvedSchool = latestTaskForMode.schoolId;
+        if (candidate) {
+          finalSchool = otherSchool;
         }
       }
 
-      if (!ctx?.lastSpecialistMessage) {
-        const otherSchool: SchoolId =
-          resolvedSchool === 'kiberone' ? 'renderia' : 'kiberone';
-        const otherCtx = this.getActiveChatContext(targetMode, otherSchool);
-        if (otherCtx?.lastSpecialistMessage) {
-          ctx = otherCtx;
-          resolvedSchool = otherSchool;
+      if (candidate) {
+        const validAssistantMsgs = candidate.messages.filter(
+          (m) => !m.isStreaming && m.role === 'assistant' && m.content.trim().length > 0
+        );
+        if (validAssistantMsgs.length > 0) {
+          const lastMsg = validAssistantMsgs[validAssistantMsgs.length - 1];
+          textToRead = lastMsg.content;
+          messageIdToUse = lastMsg.id;
         }
       }
     }
 
-    const schoolCfg = SCHOOLS[resolvedSchool];
+    const schoolCfg = SCHOOLS[finalSchool];
 
-    if (!ctx || !ctx.lastSpecialistMessage) {
-      const noReplyMsg = `В рабочем чате специалиста «${modeCfg.shortTitle}» (${schoolCfg.name}) пока нет ответа для чтения.`;
+    if (!textToRead) {
+      const noReplyMsg = `В диалогах специалиста «${modeCfg.shortTitle}» (${schoolCfg.name}) пока нет ответа для озвучивания.`;
       this.showBubble(noReplyMsg);
       return {
         success: false,
@@ -1051,27 +1223,12 @@ export class PixelAgentCoordinator {
       };
     }
 
-    const lastMsg = ctx.lastSpecialistMessage;
-
-    // Stage 6.5 (1): If the chat being read is not currently open, switch to it automatically so Anna sees it!
-    const currentOpenSessionId = this.deps?.getActiveSessionId?.() || null;
-    if (ctx.sessionId && ctx.sessionId !== currentOpenSessionId) {
-      this.deps?.onOpenDelegatedChat?.(
-        resolvedSchool,
-        targetMode,
-        ctx.sessionId,
-        lastMsg.id
-      );
-    } else if (ctx.sessionId) {
-      this.deps?.onHighlightSpecialistMessage?.(ctx.sessionId, lastMsg.id);
-    }
-
     // Check if this exact specialist message was previously stopped mid-reading and Anna asks to continue
     const stoppedSession = voiceManager.getStoppedReadingSession();
     const startChunkIndex =
       intent.isResume &&
       stoppedSession &&
-      stoppedSession.originalMessageId === lastMsg.id
+      stoppedSession.originalMessageId === messageIdToUse
         ? stoppedSession.resumeChunkIndex
         : 0;
 
@@ -1083,8 +1240,8 @@ export class PixelAgentCoordinator {
 
     try {
       await voiceManager.playVerbatimSpecialistMessage(
-        lastMsg.id,
-        lastMsg.content,
+        messageIdToUse,
+        textToRead,
         {
           specialistTitle: modeCfg.shortTitle,
           schoolName: schoolCfg.name,
@@ -1102,8 +1259,647 @@ export class PixelAgentCoordinator {
     return {
       success: true,
       specialistTitleRu: modeCfg.shortTitle,
-      messageId: lastMsg.id,
+      messageId: messageIdToUse,
     };
+  }
+
+  /**
+   * Stage 3 & 4: Detects natural questions asking Pixel about specialist responses, results, or task status:
+   * - «Что ответил Маркетолог?»
+   * - «Какой ответ у Маркетолога?»
+   * - «Какой результат по задаче?»
+   * - «Что там с поручением Маркетологу?»
+   * - «Покажи ответ Маркетолога»
+   * - «Что подготовил Методист?»
+   */
+  public parseInquireResultIntent(
+    rawText: string,
+    activeSchool: SchoolId
+  ): ParsedInquireResultIntent | null {
+    const text = (rawText || '').trim();
+    if (text.length < 5) return null;
+
+    // Do not conflict with explicit read aloud ("зачитай", "озвучь", "прочитай")
+    if (this.parseReadAloudIntent(text, activeSchool)) return null;
+
+    // Do not conflict with chat deletion or draft confirmations
+    if (
+      this.parseChatDeletionIntent(text, activeSchool) ||
+      this.parsePendingDraftAction(text).action !== 'none' ||
+      this.parsePendingRevisionAction(text).action !== 'none'
+    ) {
+      return null;
+    }
+
+    // Do not conflict with delegation verbs ("попроси", "поручи", "отправь", "напиши")
+    if (
+      /(?:^|[^а-яёa-z0-9])(?:попроси(?:те|ть)?|поручи(?:те|ть)?|напиши(?:те)?|отправь(?:те)?|передай(?:те)?|делегируй(?:те)?|дай(?:те)?\s+задачу|поставь(?:те)?\s+задачу)(?=$|[^а-яёa-z0-9])/i.test(
+        text
+      )
+    ) {
+      return null;
+    }
+
+    const lower = text.toLowerCase();
+
+    // Check inquiry patterns
+    const hasInquiryPattern =
+      /(?:^|[^а-яёa-z0-9])(?:что\s+(?:ответил|сказал|написал|подготовил|предложил|сделал|выдал|там)|какой\s+(?:ответ|результат|вариант)|покажи(?:те)?\s+(?:ответ|результат|вариант)|есть\s+ли\s+ответ|готов\s+ли\s+ответ|ответил\s+ли|что\s+по\s+(?:задаче|поручению|запросу)|что\s+с\s+(?:задачей|поручением)|как\s+там\s+(?:задача|поручение)|результат\s+(?:поручения|задачи|работы)|итог\s+(?:поручения|задачи|работы))(?=$|[^а-яёa-z0-9])/i.test(
+        lower
+      ) ||
+      /(?:^|[^а-яёa-z0-9])(?:ответ|результат)\s+(?:маркетолога|менеджера|методиста|аналитика|специалиста)(?=$|[^а-яёa-z0-9])/i.test(
+        lower
+      );
+
+    if (!hasInquiryPattern) return null;
+
+    const specMatch = detectSpecialistFromText(lower);
+    const explicitSchool = hasExplicitSchoolMention(text);
+    const targetSchool = explicitSchool
+      ? detectTargetSchoolFromText(text, activeSchool)
+      : undefined;
+
+    return {
+      isInquiry: true,
+      targetMode: specMatch.matched ? specMatch.mode : undefined,
+      targetSchool,
+      hasExplicitSchool: explicitSchool,
+      originalText: text,
+    };
+  }
+
+  /**
+   * Stage 3 & 4: Executes coordinator result retrieval:
+   * - Locates latest completed or processing task for requested specialist & school regardless of open screen.
+   * - Generates structured response in Pixel's dialog with TL;DR, critique, and proposed next actions.
+   */
+  public async executeInquireResult(
+    intent: ParsedInquireResultIntent,
+    sourceMode: 'text' | 'voice' = 'text',
+    userCompanionMessage?: CompanionMessage
+  ): Promise<void> {
+    if (!this.deps) return;
+    const activeSchool = this.deps.getActiveSchool();
+    const targetMode = intent.targetMode || this.resolveActiveAgentMode();
+    const targetSchool =
+      intent.targetSchool || (intent.hasExplicitSchool ? intent.targetSchool : activeSchool);
+    const modeCfg = AGENT_MODES[targetMode];
+    const schoolCfg = SCHOOLS[targetSchool];
+    const genitiveName = SPECIALIST_NAMES_GENITIVE_RU[targetMode];
+
+    const task =
+      this.getLatestTaskForSpecialist(targetMode, intent.targetSchool ? targetSchool : undefined) ||
+      this.getLatestCompletedTask(targetMode);
+
+    const now = new Date();
+    const nowMs = now.getTime();
+
+    // 1. Task currently processing
+    if (
+      task &&
+      (task.status === 'in_progress' ||
+        task.status === 'processing' ||
+        task.status === 'reviewing' ||
+        task.status === 'created')
+    ) {
+      const inProgressReply: CompanionMessage = {
+        id: `comp-pixel-inq-${nowMs}`,
+        role: 'pixel',
+        content: `Анна, поручение для **${genitiveName}** (${schoolCfg.name}) по запросу «*${task.instruction}*» сейчас находится в процессе выполнения в чате «*${task.sessionTitle || schoolCfg.name}*».\n\nКак только специалист завершит ответ, я сразу проведу анализ качества и пришлю вам отчёт прямо сюда!`,
+        createdAt: formatTimeNow(now),
+        createdAtMs: nowMs,
+        schoolId: task.schoolId,
+        usedContextLabels: [
+          `Статус: ${task.statusLabelRu}`,
+          `Специалист: ${modeCfg.shortTitle}`,
+          `Школа: ${SCHOOLS[task.schoolId].name}`,
+        ],
+        delegatedTask: task,
+      };
+
+      const existing = this.deps.getCompanionMessages();
+      const nextMsgs = userCompanionMessage
+        ? [...existing, userCompanionMessage, inProgressReply]
+        : [...existing, inProgressReply];
+      await this.deps.onSaveCompanionMessages(nextMsgs);
+
+      this.showBubble(
+        `${modeCfg.shortTitle} (${SCHOOLS[task.schoolId].name}) ещё выполняет задачу в чате.`
+      );
+      if (sourceMode === 'voice') {
+        this.deps.onNotifyLiveVoice?.(
+          `Системное уведомление: ${modeCfg.shortTitle} (${SCHOOLS[task.schoolId].name}) ещё выполняет задачу в чате «${task.sessionTitle}». Сообщи Анне коротко (1 фраза), что специалист сейчас в процессе и ответ скоро будет готов.`
+        );
+      }
+      return;
+    }
+
+    // 2. Task completed with resultText
+    if (task && task.status === 'completed' && task.resultText) {
+      const analysis = task.analysis;
+      const brief =
+        analysis?.briefSummary ||
+        task.reviewSummary ||
+        task.resultText.slice(0, 220) + '…';
+      const taskSchoolCfg = SCHOOLS[task.schoolId];
+
+      const reportContent = [
+        `Анна, вот результат по поручению для **${SPECIALIST_NAMES_GENITIVE_RU[task.targetMode]}** (${taskSchoolCfg.name}):`,
+        ``,
+        `• **Исходный запрос:** «${task.instruction}»`,
+        `• **Краткая выжимка (TL;DR):** ${brief}`,
+        ``,
+        `**Оценка Пикселя:**`,
+        `• Вопрос решён: ${analysis?.allQuestionsAnswered !== false ? '✅ Да, вопрос проработан' : '⚠️ Требует дополнения'}`,
+        `• Специфика школы: ${analysis?.schoolConsidered !== false ? `✅ Учтена (${taskSchoolCfg.name})` : '⚠️ Общие слова'}`,
+        analysis?.actionableRecommendations && analysis.actionableRecommendations.length > 0
+          ? `• Практические рекомендации: ${analysis.actionableRecommendations.slice(0, 3).join('; ')}`
+          : '',
+        analysis?.critiqueRemarks && analysis.critiqueRemarks.length > 0
+          ? `• Замечания: ${analysis.critiqueRemarks.slice(0, 2).join('; ')}`
+          : '',
+        analysis?.proposedNextSteps && analysis.proposedNextSteps.length > 0
+          ? `\n**Рекомендуемые следующие шаги:**\n${analysis.proposedNextSteps.map((s) => `– ${s}`).join('\n')}`
+          : '',
+        ``,
+        `Вы можете нажать **«Озвучить ответ»**, чтобы я прочитал его вслух, или **«Запросить доработку»**, если нужно внести изменения.`,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const completedInqReply: CompanionMessage = {
+        id: `comp-pixel-inq-${nowMs}`,
+        role: 'pixel',
+        content: reportContent,
+        createdAt: formatTimeNow(now),
+        createdAtMs: nowMs,
+        schoolId: task.schoolId,
+        usedContextLabels: [
+          `Специалист: ${AGENT_MODES[task.targetMode].shortTitle}`,
+          `Школа: ${taskSchoolCfg.name}`,
+          'Результат поручения',
+        ],
+        delegatedTask: task,
+      };
+
+      const existing = this.deps.getCompanionMessages();
+      const nextMsgs = userCompanionMessage
+        ? [...existing, userCompanionMessage, completedInqReply]
+        : [...existing, completedInqReply];
+      await this.deps.onSaveCompanionMessages(nextMsgs);
+
+      this.showBubble(
+        `${AGENT_MODES[task.targetMode].shortTitle} (${taskSchoolCfg.name}): ${brief.slice(0, 90)}…`
+      );
+
+      if (sourceMode === 'voice') {
+        this.deps.onNotifyLiveVoice?.(
+          `Системное уведомление: Анна спросила результат ${SPECIALIST_NAMES_GENITIVE_RU[task.targetMode]} (${taskSchoolCfg.name}). Краткая выжимка: ${brief}. Зачитай Анне краткую выжимку (2-3 фразы) и предложи озвучить полный ответ или отправить замечания.`
+        );
+      }
+      return;
+    }
+
+    // 3. Fallback: check session history
+    const sessions = this.deps.getSessions();
+    const candidateSessions = sessions.filter(
+      (s) => s.schoolId === targetSchool && s.mode === targetMode
+    );
+    let candidateReply: { text: string; id: string; sessionTitle: string; sessionId: string } | null = null;
+    for (const sess of candidateSessions) {
+      const assistantMsgs = (sess.messages || []).filter(
+        (m) => !m.isStreaming && m.role === 'assistant' && m.content.trim().length > 0
+      );
+      if (assistantMsgs.length > 0) {
+        const last = assistantMsgs[assistantMsgs.length - 1];
+        candidateReply = {
+          text: last.content,
+          id: last.id,
+          sessionTitle: sess.title,
+          sessionId: sess.id,
+        };
+        break;
+      }
+    }
+
+    if (candidateReply) {
+      const snippet =
+        candidateReply.text.slice(0, 300) +
+        (candidateReply.text.length > 300 ? '…' : '');
+      const replyContent = [
+        `Анна, в чате «*${candidateReply.sessionTitle}*» есть ответ от **${genitiveName}** (${schoolCfg.name}):`,
+        ``,
+        snippet,
+        ``,
+        `Вы можете нажать **«Озвучить ответ»** ниже или открыть рабочий чат специалиста.`,
+      ].join('\n');
+
+      const fallbackReplyMsg: CompanionMessage = {
+        id: `comp-pixel-inq-${nowMs}`,
+        role: 'pixel',
+        content: replyContent,
+        createdAt: formatTimeNow(now),
+        createdAtMs: nowMs,
+        schoolId: targetSchool,
+        usedContextLabels: [
+          `Специалист: ${modeCfg.shortTitle}`,
+          `Школа: ${schoolCfg.name}`,
+          `Чат: ${candidateReply.sessionTitle}`,
+        ],
+      };
+
+      const existing = this.deps.getCompanionMessages();
+      const nextMsgs = userCompanionMessage
+        ? [...existing, userCompanionMessage, fallbackReplyMsg]
+        : [...existing, fallbackReplyMsg];
+      await this.deps.onSaveCompanionMessages(nextMsgs);
+      this.showBubble(
+        `Ответ ${genitiveName} (${schoolCfg.name}) найден в чате «${candidateReply.sessionTitle}».`
+      );
+      return;
+    }
+
+    // 4. No answers found
+    const notFoundReply: CompanionMessage = {
+      id: `comp-pixel-inq-${nowMs}`,
+      role: 'pixel',
+      content: `Анна, в диалогах **${genitiveName}** (${schoolCfg.name}) пока нет выполненных поручений или ответов.\n\nХотите, я подготовлю для него задачу? Напишите или скажите, что нужно сделать (например: *«Поручи Маркетологу составить план постов на неделю»*).`,
+      createdAt: formatTimeNow(now),
+      createdAtMs: nowMs,
+      schoolId: targetSchool,
+      usedContextLabels: [
+        `Специалист: ${modeCfg.shortTitle}`,
+        `Школа: ${schoolCfg.name}`,
+        'Нет выполненных задач',
+      ],
+    };
+
+    const existing = this.deps.getCompanionMessages();
+    const nextMsgs = userCompanionMessage
+      ? [...existing, userCompanionMessage, notFoundReply]
+      : [...existing, notFoundReply];
+    await this.deps.onSaveCompanionMessages(nextMsgs);
+    this.showBubble(
+      `В чате ${genitiveName} (${schoolCfg.name}) пока нет ответов.`
+    );
+  }
+
+  /**
+   * Stage 5: Detects when Anna wants to request a revision from a specialist:
+   * - «Попроси его доработать: ...»
+   * - «Попроси Маркетолога дополнить: ...»
+   * - «Пусть добавит смету и сроки»
+   * - «Отправь на доработку: ...»
+   */
+  public parseRevisionIntent(
+    rawText: string,
+    activeSchool: SchoolId
+  ): ParsedRevisionIntent | null {
+    const text = (rawText || '').trim();
+    if (text.length < 5) return null;
+
+    if (
+      this.parseReadAloudIntent(text, activeSchool) ||
+      this.parsePendingDraftAction(text).action !== 'none' ||
+      this.parsePendingRevisionAction(text).action !== 'none' ||
+      this.parseChatDeletionIntent(text, activeSchool)
+    ) {
+      return null;
+    }
+
+    const lower = text.toLowerCase();
+
+    const isRevisionCommand =
+      /(?:^|[^а-яёa-z0-9])(?:попроси(?:те|ть)?\s+(?:его\s+|её\s+|ее\s+|специалиста\s+|маркетолога\s+|менеджера\s+|методиста\s+|аналитика\s+)?(?:доработать|переделать|уточнить|исправить|дополнить|сократить|расширить|добавить)|пусть\s+(?:он|она|специалист|маркетолог|менеджер|методист|аналитик)\s+(?:доработает|добавит|уточнит|переделает|исправит|распишет|расширит|сократит)|отправь(?:те)?\s+(?:на\s+доработку|замечания|уточнения|доработку)|надо\s+(?:доработать|дополнить|уточнить|исправить)|нужно\s+(?:доработать|дополнить|уточнить|исправить))(?=$|[^а-яёa-z0-9])/i.test(
+        lower
+      );
+
+    if (!isRevisionCommand) return null;
+
+    const specMatch = detectSpecialistFromText(lower);
+    const explicitSchool = hasExplicitSchoolMention(text);
+    const targetSchool = explicitSchool
+      ? detectTargetSchoolFromText(text, activeSchool)
+      : undefined;
+
+    let cleanPrompt = text
+      .replace(/^(?:пиксель[\s,.:!-]*)+/i, '')
+      .replace(/^(?:пожалуйста[\s,.:!-]*)+/i, '')
+      .replace(
+        /^(?:попроси(?:те|ть)?\s+(?:его\s+|её\s+|ее\s+|специалиста\s+|маркетолога\s+|менеджера\s+|методиста\s+|аналитика\s+)?(?:доработать|переделать|уточнить|исправить|дополнить|сократить|расширить|добавить))[\s,.:;-]*/i,
+        ''
+      )
+      .replace(
+        /^пусть\s+(?:он|она|специалист|маркетолог|менеджер|методист|аналитик)\s+(?:доработает|добавит|уточнит|переделает|исправит|распишет|расширит|сократит)[\s,.:;-]*/i,
+        ''
+      )
+      .replace(
+        /^(?:отправь(?:те)?\s+(?:на\s+доработку|замечания|уточнения|доработку)|надо\s+(?:доработать|дополнить|уточнить|исправить)|нужно\s+(?:доработать|дополнить|уточнить|исправить))[\s,.:;-]*/i,
+        ''
+      )
+      .trim();
+
+    if (!cleanPrompt || cleanPrompt.length < 3) {
+      cleanPrompt = text;
+    }
+
+    return {
+      isRevision: true,
+      targetMode: specMatch.matched ? specMatch.mode : undefined,
+      targetSchool,
+      hasExplicitSchool: explicitSchool,
+      revisionPrompt: cleanPrompt,
+      originalText: text,
+    };
+  }
+
+  /**
+   * Stage 5: Parses whether Anna is confirming («Да, отправляй») or cancelling a revision draft.
+   */
+  public parsePendingRevisionAction(
+    rawText: string
+  ): ParsedPendingRevisionAction {
+    const draft = this.getPendingRevisionDraft();
+    if (!draft) return { action: 'none' };
+
+    const text = (rawText || '').trim();
+    if (!text) return { action: 'none' };
+    const lower = text.toLowerCase();
+
+    if (
+      /^(?:нет[\s,.-]*)?(?:не\s+отправляй(?:те)?|не\s+надо|не\s+нужно|отмена|отменить|отмени(?:\s+отправку)?|стоп|оставь)(?:[\s.!])*$/i.test(
+        lower
+      )
+    ) {
+      return { action: 'cancel', draft };
+    }
+
+    if (
+      /^(?:пиксель[\s,:-]*)?(?:да[\s,!-]*)*(?:отправляй(?:те)?|отправь(?:те)?|да,\s*отправляй(?:те)?|да,\s*отправь(?:те)?|подтверждаю|посылай|запускай|согласна|да|ок|хорошо|давай)[\s.!]*$/i.test(
+        lower
+      )
+    ) {
+      return { action: 'confirm', draft };
+    }
+
+    return { action: 'none' };
+  }
+
+  /**
+   * Stage 5 & 7: Prepares a revision draft for Anna's confirmation.
+   * Strictly never sends to specialist until confirmed.
+   */
+  public async prepareRevisionForConfirmation(params: {
+    intent: ParsedRevisionIntent;
+    sourceMode: 'text' | 'voice';
+    userCompanionMessage?: CompanionMessage;
+  }): Promise<PixelPendingRevisionDraft | null> {
+    if (!this.deps) return null;
+    const { intent, sourceMode, userCompanionMessage } = params;
+    const activeSchool = this.deps.getActiveSchool();
+    const targetMode = intent.targetMode || this.resolveActiveAgentMode();
+    const targetSchool = intent.targetSchool || activeSchool;
+    const modeCfg = AGENT_MODES[targetMode];
+    const schoolCfg = SCHOOLS[targetSchool];
+    const genitiveName = SPECIALIST_NAMES_GENITIVE_RU[targetMode];
+    const dativeName = SPECIALIST_NAMES_DATIVE_RU[targetMode];
+
+    const task =
+      this.getLatestTaskForSpecialist(targetMode, intent.targetSchool ? targetSchool : undefined) ||
+      this.getLatestCompletedTask(targetMode);
+
+    let targetSessionId = task?.sessionId;
+    let targetSessionTitle =
+      task?.sessionTitle || `${modeCfg.shortTitle} · ${schoolCfg.name}`;
+
+    if (!targetSessionId) {
+      const sessions = this.deps.getSessions();
+      const sess = sessions.find(
+        (s) => s.schoolId === targetSchool && s.mode === targetMode
+      );
+      if (sess) {
+        targetSessionId = sess.id;
+        targetSessionTitle = sess.title;
+      }
+    }
+
+    if (!targetSessionId) {
+      const noSessMsg: CompanionMessage = {
+        id: `comp-pixel-rev-nosess-${Date.now()}`,
+        role: 'pixel',
+        content: `Анна, я не нашёл активного диалога с **${genitiveName}** (${schoolCfg.name}), чтобы отправить доработку. Сначала создайте задачу для специалиста.`,
+        createdAt: formatTimeNow(new Date()),
+        createdAtMs: Date.now(),
+      };
+      const existing = this.deps.getCompanionMessages();
+      await this.deps.onSaveCompanionMessages(
+        userCompanionMessage
+          ? [...existing, userCompanionMessage, noSessMsg]
+          : [...existing, noSessMsg]
+      );
+      return null;
+    }
+
+    const now = new Date();
+    const nowMs = now.getTime();
+    const revisionDraftId = `prevdraft-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
+    const iteration = (task?.iterationCount || 0) + 1;
+    const cleanInstruction = buildCleanBusinessInstruction(
+      intent.revisionPrompt,
+      targetSchool
+    );
+
+    const revisionDraft: PixelPendingRevisionDraft = {
+      revisionDraftId,
+      taskId: task?.taskId || `ptask-${nowMs}`,
+      schoolId: targetSchool,
+      targetMode,
+      targetSpecialistNameRu: modeCfg.shortTitle,
+      sessionId: targetSessionId,
+      sessionTitle: targetSessionTitle,
+      iteration,
+      revisionPrompt: intent.revisionPrompt,
+      cleanInstruction,
+      status: 'awaiting_confirmation',
+      createdAt: formatTimeNow(now),
+      createdAtMs: nowMs,
+      sourceMode,
+    };
+
+    this.pendingRevisionDraft = revisionDraft;
+
+    const draftMsg: CompanionMessage = {
+      id: `comp-pixel-rev-card-${revisionDraftId}`,
+      role: 'pixel',
+      content: [
+        `Анна, я подготовил запрос на доработку #${iteration} для **${genitiveName}** (${schoolCfg.name}) в чат «*${targetSessionTitle}*»:`,
+        ``,
+        `• **Специалист:** ${modeCfg.shortTitle}`,
+        `• **Школа:** ${schoolCfg.name}`,
+        `• **Текст доработки:** «${cleanInstruction}»`,
+        ``,
+        `Отправить этот запрос специалисту? Скажите или напишите **«Да, отправляй»** (или нажмите кнопку ниже).`,
+      ].join('\n'),
+      createdAt: formatTimeNow(new Date(nowMs + 1)),
+      createdAtMs: nowMs + 1,
+      schoolId: targetSchool,
+      usedContextLabels: [
+        `Школа: ${schoolCfg.name}`,
+        `Специалист: ${modeCfg.shortTitle}`,
+        `Доработка #${iteration}`,
+        'Ожидает подтверждения: «Да, отправляй»',
+      ],
+      pendingRevisionDraft: revisionDraft,
+    };
+
+    const existing = this.deps.getCompanionMessages().map((m) =>
+      m.pendingRevisionDraft &&
+      m.pendingRevisionDraft.status === 'awaiting_confirmation'
+        ? {
+            ...m,
+            pendingRevisionDraft: {
+              ...m.pendingRevisionDraft,
+              status: 'cancelled' as const,
+            },
+          }
+        : m
+    );
+
+    const next = userCompanionMessage
+      ? [...existing, userCompanionMessage, draftMsg]
+      : [...existing, draftMsg];
+    await this.deps.onSaveCompanionMessages(next);
+    this.showBubble(
+      `Подготовлена доработка для ${genitiveName} (${schoolCfg.name}). Подтвердите: «Да, отправляй».`
+    );
+
+    if (sourceMode === 'voice') {
+      this.deps.onNotifyLiveVoice?.(
+        `Системное уведомление: Подготовлен запрос на доработку для ${genitiveName} (${schoolCfg.name}): «${cleanInstruction}». Запрос ждёт подтверждения Анны. Спроси Анну: «Отправить доработку ${dativeName}? Скажите: Да, отправляй».`
+      );
+    }
+
+    return revisionDraft;
+  }
+
+  /**
+   * Stage 5: Confirms and dispatches the revision to the exact same specialist chat.
+   */
+  public async confirmPendingRevision(params?: {
+    draftId?: string;
+    sourceMode?: 'text' | 'voice';
+    userCompanionMessage?: CompanionMessage;
+  }): Promise<PixelDelegatedTaskState | null> {
+    if (!this.deps) return null;
+    const targetId =
+      params?.draftId || this.pendingRevisionDraft?.revisionDraftId;
+    const draft =
+      (this.pendingRevisionDraft &&
+      (!targetId || this.pendingRevisionDraft.revisionDraftId === targetId)
+        ? this.pendingRevisionDraft
+        : null) ||
+      this.deps
+        .getCompanionMessages()
+        .find(
+          (m) =>
+            m.pendingRevisionDraft &&
+            (!targetId ||
+              m.pendingRevisionDraft.revisionDraftId === targetId) &&
+            m.pendingRevisionDraft.status === 'awaiting_confirmation'
+        )?.pendingRevisionDraft ||
+      null;
+
+    if (!draft) return null;
+    if (this.dispatchedDraftIds.has(draft.revisionDraftId)) return null;
+    this.dispatchedDraftIds.add(draft.revisionDraftId);
+    draft.status = 'confirmed';
+    this.pendingRevisionDraft = null;
+
+    const updatedMessages = this.deps.getCompanionMessages().map((m) =>
+      m.pendingRevisionDraft?.revisionDraftId === draft.revisionDraftId
+        ? {
+            ...m,
+            pendingRevisionDraft: {
+              ...m.pendingRevisionDraft,
+              status: 'confirmed' as const,
+            },
+          }
+        : m
+    );
+    await this.deps.onSaveCompanionMessages(updatedMessages);
+
+    const delegationIntent: ParsedDelegationIntent = {
+      isDelegation: true,
+      isSupportedSpecialist: true,
+      targetMode: draft.targetMode,
+      targetSpecialistNameRu: draft.targetSpecialistNameRu,
+      targetSchool: draft.schoolId,
+      instruction: draft.revisionPrompt,
+      cleanInstruction: draft.cleanInstruction,
+      originalText: draft.revisionPrompt,
+      preferredSessionId: draft.sessionId,
+      isFollowUp: true,
+    };
+
+    return await this.executeDelegation({
+      intent: delegationIntent,
+      sourceMode: params?.sourceMode || 'text',
+      userCompanionMessage: params?.userCompanionMessage,
+      existingTaskId: draft.taskId,
+    });
+  }
+
+  /**
+   * Stage 5: Cancels a pending revision draft.
+   */
+  public async cancelPendingRevision(
+    draftId?: string,
+    userCompanionMessage?: CompanionMessage
+  ): Promise<void> {
+    if (!this.deps) return;
+    const targetId = draftId || this.pendingRevisionDraft?.revisionDraftId;
+    if (
+      this.pendingRevisionDraft &&
+      (!targetId || this.pendingRevisionDraft.revisionDraftId === targetId)
+    ) {
+      this.pendingRevisionDraft = null;
+    }
+
+    const current = this.deps.getCompanionMessages();
+    const updated = current.map((m) =>
+      m.pendingRevisionDraft &&
+      (!targetId || m.pendingRevisionDraft.revisionDraftId === targetId) &&
+      m.pendingRevisionDraft.status === 'awaiting_confirmation'
+        ? {
+            ...m,
+            pendingRevisionDraft: {
+              ...m.pendingRevisionDraft,
+              status: 'cancelled' as const,
+            },
+          }
+        : m
+    );
+
+    if (userCompanionMessage) {
+      const now = new Date();
+      const cancelReply: CompanionMessage = {
+        id: `comp-pixel-rev-cancel-${now.getTime()}`,
+        role: 'pixel',
+        content:
+          'Хорошо, Анна! Отправка доработки отменена — специалисту ничего не отправлено.',
+        createdAt: formatTimeNow(now),
+        createdAtMs: now.getTime(),
+      };
+      await this.deps.onSaveCompanionMessages([
+        ...updated,
+        userCompanionMessage,
+        cancelReply,
+      ]);
+    } else {
+      await this.deps.onSaveCompanionMessages(updated);
+    }
+
+    this.showBubble('Отправка доработки отменена.');
   }
 
   /**
@@ -2889,32 +3685,42 @@ export class PixelAgentCoordinator {
       await storageProvider.saveSession(targetSession);
     }
 
-    // Stage 6.5 (1): Ensure the workspace is switched to targetSession so Anna sees the execution in real time
-    this.deps.onOpenDelegatedChat?.(targetSchool, targetMode, targetSession.id);
-
     const isContinuingExistingChat = targetSession.messages.length > 0;
+    const existingTask = params.existingTaskId
+      ? this.tasks.get(params.existingTaskId)
+      : undefined;
 
-    // 2. Initialize task state: 'created' (Создано)
+    const currentIteration = params.isRevisionExecution
+      ? params.revisionIteration || (existingTask?.iterationCount || 0) + 1
+      : (existingTask?.iterationCount || 0);
+
+    // 2. Initialize task state: 'created' (Создано) or 'in_progress'
     let taskState: PixelDelegatedTaskState = {
       taskId,
       targetMode,
       schoolId: targetSchool,
       instruction: intent.instruction,
+      cleanInstruction:
+        intent.cleanInstruction ||
+        buildCleanBusinessInstruction(intent.instruction, targetSchool),
       originalUserRequest: intent.originalText,
       status: 'created',
       statusLabelRu: PIXEL_DELEGATION_STATUS_LABELS.created,
       sessionId: targetSession.id,
-      iterationCount: 0,
+      sessionTitle: targetSession.title,
+      iterationCount: currentIteration,
       maxRevisions: MAX_DELEGATION_REVISIONS,
-      revisionFeedbackHistory: [],
-      createdAt: formatTimeNow(now),
+      revisions: existingTask?.revisions || [],
+      revisionFeedbackHistory: existingTask?.revisionFeedbackHistory || [],
+      createdAt: existingTask?.createdAt || formatTimeNow(now),
       updatedAt: formatTimeNow(now),
-      createdAtMs: nowMs,
+      createdAtMs: existingTask?.createdAtMs || nowMs,
       updatedAtMs: nowMs,
       sourceMode,
     };
 
     this.tasks.set(taskId, taskState);
+    this.saveTasksToStorage();
     this.notifyListeners(taskState);
 
     // Create Pixel status/report message in companionMessages
@@ -2923,7 +3729,7 @@ export class PixelAgentCoordinator {
       id: pixelCompanionMsgId,
       role: 'pixel',
       content: isContinuingExistingChat
-        ? `Анна, я передаю ваш вопрос / уточнение **${dativeName}** (${schoolCfg.name}) в текущий рабочий чат «*${targetSession.title}*»: «*${intent.instruction}*»…`
+        ? `Анна, я передаю ваш запрос **${dativeName}** (${schoolCfg.name}) в рабочий чат «*${targetSession.title}*»: «*${intent.instruction}*»…`
         : `Анна, я создал поручение для **${genitiveName}** (${schoolCfg.name}): «*${intent.instruction}*».\nОтправляю задачу в рабочий чат ${genitiveName} и запускаю выполнение…`,
       createdAt: formatTimeNow(new Date(nowMs + 1)),
       createdAtMs: nowMs + 1,
@@ -2932,7 +3738,7 @@ export class PixelAgentCoordinator {
         `Школа: ${schoolCfg.name}`,
         `Специалист: ${modeCfg.shortTitle}`,
         isContinuingExistingChat
-          ? `Продолжение чата: ${targetSession.title}`
+          ? `Чат: ${targetSession.title}`
           : `Поручение: ${taskId}`,
       ],
       delegatedTask: taskState,
@@ -2974,6 +3780,7 @@ export class PixelAgentCoordinator {
         updatedAtMs: updatedNow.getTime(),
       };
       this.tasks.set(taskId, taskState);
+      this.saveTasksToStorage();
       this.notifyListeners(taskState);
 
       const latestCompanion = this.deps.getCompanionMessages();
@@ -2983,7 +3790,7 @@ export class PixelAgentCoordinator {
               ...m,
               content: companionContent ?? m.content,
               delegatedTask: taskState,
-              isError: taskState.status === 'error',
+              isError: taskState.status === 'failed' || taskState.status === 'error',
             }
           : m
       );
@@ -3008,404 +3815,378 @@ export class PixelAgentCoordinator {
       );
     }
 
-    let currentIteration = 0;
-    let lastRevisionFeedback = '';
-    let finalSpecialistMessageId = '';
-    let finalSpecialistText = '';
-    let finalReviewSummary = '';
-    let finalProviderId: AIProviderId | undefined = undefined;
-    let finalModelName: string | undefined = undefined;
-
     try {
-      while (currentIteration <= MAX_DELEGATION_REVISIONS) {
-        const isRevision = currentIteration > 0;
-
-        // 3. Transition status to 'in_progress' (Выполняется)
-        await updateTaskAndCompanionMessage(
-          {
-            status: 'in_progress',
-            statusLabelRu: isRevision
+      // 3. Transition status to 'in_progress' (Выполняется)
+      await updateTaskAndCompanionMessage(
+        {
+          status: 'in_progress',
+          statusLabelRu:
+            currentIteration > 0
               ? `${PIXEL_DELEGATION_STATUS_LABELS.in_progress} (доработка #${currentIteration})`
               : PIXEL_DELEGATION_STATUS_LABELS.in_progress,
-            iterationCount: currentIteration,
-          },
-          isRevision
-            ? `Анна, я отправил ${dativeName} (${schoolCfg.name}) запрос на доработку #${currentIteration}. ${modeCfg.shortTitle} обновляет решение…`
-            : isContinuingExistingChat
-              ? `Анна, я написал ${dativeName} (${schoolCfg.name}) в текущий рабочий чат и жду ответа по вашему запросу: «*${intent.instruction}*»…`
-              : `Анна, я написал ${dativeName} (${schoolCfg.name}) в его рабочий чат и запустил разработку по вашему поручению: «*${intent.instruction}*»…`
-        );
+          iterationCount: currentIteration,
+        },
+        currentIteration > 0
+          ? `Анна, я отправил ${dativeName} (${schoolCfg.name}) запрос на доработку #${currentIteration}. ${modeCfg.shortTitle} готовит обновлённое решение…`
+          : isContinuingExistingChat
+            ? `Анна, я написал ${dativeName} (${schoolCfg.name}) в рабочий чат «*${targetSession.title}*» и жду ответа по запросу: «*${intent.instruction}*»…`
+            : `Анна, я написал ${dativeName} (${schoolCfg.name}) в рабочий чат и запустил разработку по поручению: «*${intent.instruction}*»…`
+      );
 
-        // Fetch fresh targetSession from state
-        const freshSessions = this.deps.getSessions();
-        const currentTargetSession =
-          freshSessions.find((s) => s.id === targetSession!.id) ||
-          targetSession!;
+      // Fetch fresh targetSession from state
+      const freshSessions = this.deps.getSessions();
+      const currentTargetSession =
+        freshSessions.find((s) => s.id === targetSession!.id) ||
+        targetSession!;
 
-        const hasExistingMessages = currentTargetSession.messages.length > 0;
+      const reqTime = new Date();
+      const reqMs = reqTime.getTime();
+      const repMs = reqMs + 1;
 
-        const reqTime = new Date();
-        const reqMs = reqTime.getTime();
-        const repMs = reqMs + 1;
+      const pixelMsgId = `msg-pixel-req-${taskId}-it${currentIteration}-${reqMs}`;
+      const specialistMsgId = `msg-${targetMode}-rep-${taskId}-it${currentIteration}-${repMs}`;
 
-        const pixelMsgId = `msg-pixel-req-${taskId}-it${currentIteration}-${reqMs}`;
-        const specialistMsgId = `msg-${targetMode}-rep-${taskId}-it${currentIteration}-${repMs}`;
+      const cleanInstructionToSend =
+        intent.cleanInstruction ||
+        buildCleanBusinessInstruction(intent.instruction, targetSchool);
 
-        const cleanInstructionToSend =
-          intent.cleanInstruction ||
-          buildCleanBusinessInstruction(intent.instruction, targetSchool);
+      const pixelMessageContent = cleanInstructionToSend;
 
-        const cleanRevisionFeedback = lastRevisionFeedback
-          .replace(/\*\*([^*]+)\*\*/g, '$1')
-          .replace(/\*([^*]+)\*/g, '$1')
-          .replace(/[•▪▫★☆▶►✔✓✕✖✅❌⚠️🤖🔄]/g, '')
-          .trim();
+      const pixelRequestMsg: ChatMessage = {
+        id: pixelMsgId,
+        sessionId: currentTargetSession.id,
+        role: 'user',
+        content: pixelMessageContent,
+        createdAt: formatTimeNow(reqTime),
+        createdAtMs: reqMs,
+        schoolId: targetSchool,
+        mode: targetMode,
+        delegatedByPixel: true,
+        delegationTaskId: taskId,
+        delegationIteration: currentIteration,
+        senderLabel:
+          currentIteration > 0
+            ? `Пиксель · Доработка #${currentIteration}`
+            : currentTargetSession.messages.length > 0
+              ? 'Пиксель · Запрос от Анны'
+              : 'Пиксель · Поручение Анны',
+      };
 
-        const pixelMessageContent = !isRevision
-          ? cleanInstructionToSend
-          : `Пожалуйста, доработайте предыдущий ответ для школы ${schoolCfg.name} с учётом следующих уточнений: ${cleanRevisionFeedback}`;
+      const initialSpecialistReply: ChatMessage = {
+        id: specialistMsgId,
+        sessionId: currentTargetSession.id,
+        role: 'assistant',
+        content: '',
+        createdAt: formatTimeNow(new Date(repMs)),
+        createdAtMs: repMs,
+        schoolId: targetSchool,
+        mode: targetMode,
+        usedContextSummary,
+        isStreaming: true,
+        delegatedByPixel: true,
+        delegationTaskId: taskId,
+        delegationIteration: currentIteration,
+      };
 
-        const pixelRequestMsg: ChatMessage = {
-          id: pixelMsgId,
-          sessionId: currentTargetSession.id,
-          role: 'user',
-          content: pixelMessageContent,
-          createdAt: formatTimeNow(reqTime),
-          createdAtMs: reqMs,
-          schoolId: targetSchool,
-          mode: targetMode,
-          delegatedByPixel: true,
-          delegationTaskId: taskId,
-          delegationIteration: currentIteration,
-          senderLabel: !isRevision
-            ? hasExistingMessages
-              ? 'Пиксель · Уточнение от Анны'
-              : 'Пиксель · Поручение Анны'
-            : `Пиксель · Доработка #${currentIteration}`,
-        };
+      const sessionTitle =
+        currentTargetSession.messages.length === 0
+          ? `Поручение Пикселя: ${intent.instruction.slice(0, 34)}${intent.instruction.length > 34 ? '…' : ''}`
+          : currentTargetSession.title;
 
-        const initialSpecialistReply: ChatMessage = {
-          id: specialistMsgId,
-          sessionId: currentTargetSession.id,
-          role: 'assistant',
-          content: '',
-          createdAt: formatTimeNow(new Date(repMs)),
-          createdAtMs: repMs,
-          schoolId: targetSchool,
-          mode: targetMode,
-          usedContextSummary,
-          isStreaming: true,
-          delegatedByPixel: true,
-          delegationTaskId: taskId,
-          delegationIteration: currentIteration,
-        };
-
-        const sessionTitle =
-          currentTargetSession.messages.length === 0
-            ? `Поручение Пикселя: ${intent.instruction.slice(0, 34)}${intent.instruction.length > 34 ? '…' : ''}`
-            : currentTargetSession.title;
-
-        const sessionWithStreaming: ChatSession = {
-          ...currentTargetSession,
-          title: sessionTitle,
-          updatedAt: formatTimeNow(new Date(repMs)),
-          updatedAtMs: repMs,
-          messages: [
-            ...currentTargetSession.messages,
-            pixelRequestMsg,
-            initialSpecialistReply,
-          ],
-        };
-
-        const updatedSessionsList = sortSessionsPinnedAndUpdatedDesc([
-          sessionWithStreaming,
-          ...this.deps
-            .getSessions()
-            .filter((s) => s.id !== sessionWithStreaming.id),
-        ]);
-        this.deps.onUpdateSessions(updatedSessionsList);
-
-        // Save Pixel's request message immediately to IndexedDB
-        await storageProvider.saveSessionAndMessages(sessionWithStreaming, [
+      const sessionWithStreaming: ChatSession = {
+        ...currentTargetSession,
+        title: sessionTitle,
+        updatedAt: formatTimeNow(new Date(repMs)),
+        updatedAtMs: repMs,
+        messages: [
+          ...currentTargetSession.messages,
           pixelRequestMsg,
-          {
-            ...initialSpecialistReply,
-            isStreaming: false,
-            content: `[Выполняется генерация ответа специалиста (${modeCfg.shortTitle}) по запросу Пикселя…]`,
-          },
-        ]);
+          initialSpecialistReply,
+        ],
+      };
 
-        this.deps.onSpecialistGenerationStateChange?.({
-          isGenerating: true,
-          sessionId: sessionWithStreaming.id,
-          stage: 'connecting',
-        });
+      const updatedSessionsList = sortSessionsPinnedAndUpdatedDesc([
+        sessionWithStreaming,
+        ...this.deps
+          .getSessions()
+          .filter((s) => s.id !== sessionWithStreaming.id),
+      ]);
+      this.deps.onUpdateSessions(updatedSessionsList);
 
-        const updateSpecialistReplyInStateAndDb = async (
-          patch: Partial<ChatMessage>,
-          persistToDb: boolean
-        ) => {
-          if (!this.deps) return;
-          const allSessions = this.deps.getSessions();
-          const sess = allSessions.find(
-            (s) => s.id === sessionWithStreaming.id
-          );
-          if (!sess) return;
+      await storageProvider.saveSessionAndMessages(sessionWithStreaming, [
+        pixelRequestMsg,
+        {
+          ...initialSpecialistReply,
+          isStreaming: false,
+          content: `[Выполняется генерация ответа специалиста (${modeCfg.shortTitle}) по запросу Пикселя…]`,
+        },
+      ]);
 
-          let updatedAssistantMsg: ChatMessage | null = null;
-          const updatedMsgs = sess.messages.map((m) => {
-            if (m.id === specialistMsgId) {
-              updatedAssistantMsg = { ...m, ...patch };
-              return updatedAssistantMsg;
-            }
-            return m;
-          });
+      this.deps.onSpecialistGenerationStateChange?.({
+        isGenerating: true,
+        sessionId: sessionWithStreaming.id,
+        stage: 'connecting',
+      });
 
-          const nextSess: ChatSession = {
-            ...sess,
-            updatedAt: formatTimeNow(new Date()),
-            updatedAtMs: Date.now(),
-            messages: updatedMsgs,
-          };
+      const updateSpecialistReplyInStateAndDb = async (
+        patch: Partial<ChatMessage>,
+        persistToDb: boolean
+      ) => {
+        if (!this.deps) return;
+        const allSessions = this.deps.getSessions();
+        const sess = allSessions.find(
+          (s) => s.id === sessionWithStreaming.id
+        );
+        if (!sess) return;
 
-          const nextAll = sortSessionsPinnedAndUpdatedDesc([
-            nextSess,
-            ...allSessions.filter((s) => s.id !== nextSess.id),
-          ]);
-          this.deps.onUpdateSessions(nextAll);
-
-          if (persistToDb && updatedAssistantMsg) {
-            await storageProvider.saveSessionAndMessages(nextSess, [
-              pixelRequestMsg,
-              updatedAssistantMsg,
-            ]);
+        let updatedAssistantMsg: ChatMessage | null = null;
+        const updatedMsgs = sess.messages.map((m) => {
+          if (m.id === specialistMsgId) {
+            updatedAssistantMsg = { ...m, ...patch };
+            return updatedAssistantMsg;
           }
+          return m;
+        });
+
+        const nextSess: ChatSession = {
+          ...sess,
+          updatedAt: formatTimeNow(new Date()),
+          updatedAtMs: Date.now(),
+          messages: updatedMsgs,
         };
 
-        // Stage 6.5 (1): Build strictly isolated conversation history for specialist API call
-        // (only messages from this exact session, schoolId, and specialist mode)
-        const historyForApi = [
-          ...currentTargetSession.messages
-            .filter(
-              (m) =>
-                !m.isStreaming &&
-                m.content.trim().length > 0 &&
-                (!m.sessionId || m.sessionId === currentTargetSession.id) &&
-                (!m.schoolId || m.schoolId === targetSchool) &&
-                (!m.mode || m.mode === targetMode)
-            )
-            .slice(-12),
-          pixelRequestMsg,
-        ].map((m) => ({
-          role: m.role,
-          content: m.content,
-        }));
+        const nextAll = sortSessionsPinnedAndUpdatedDesc([
+          nextSess,
+          ...allSessions.filter((s) => s.id !== nextSess.id),
+        ]);
+        this.deps.onUpdateSessions(nextAll);
 
-        const selectedProviderMode =
-          this.deps.getProviderSelection() || readStoredProviderSelection();
-
-        // Execute real generation via existing specialist mechanism (geminiProvider / aiProviderManager)
-        const generationResult =
-          selectedProviderMode !== 'auto' &&
-          aiProviderManager.providers[selectedProviderMode]
-            ? await aiProviderManager.providers[
-                selectedProviderMode
-              ].streamGenerate({
-                schoolId: targetSchool,
-                mode: targetMode,
-                sessionId: sessionWithStreaming.id,
-                messages: historyForApi,
-                knowledgeBaseContext: kbContext,
-                providerSelection: selectedProviderMode,
-                onStageChange: (stage) => {
-                  this.deps?.onSpecialistGenerationStateChange?.({
-                    isGenerating: true,
-                    sessionId: sessionWithStreaming.id,
-                    stage,
-                  });
-                },
-                onDelta: (_delta, accumulated) => {
-                  void updateSpecialistReplyInStateAndDb(
-                    {
-                      content: accumulated,
-                      isStreaming: true,
-                    },
-                    false
-                  );
-                },
-              })
-            : await geminiProvider.streamChat({
-                schoolId: targetSchool,
-                mode: targetMode,
-                sessionId: sessionWithStreaming.id,
-                messages: historyForApi,
-                knowledgeBaseContext: kbContext,
-                providerSelection: selectedProviderMode,
-                onStageChange: (stage) => {
-                  this.deps?.onSpecialistGenerationStateChange?.({
-                    isGenerating: true,
-                    sessionId: sessionWithStreaming.id,
-                    stage,
-                  });
-                },
-                onDelta: (_delta, accumulated) => {
-                  void updateSpecialistReplyInStateAndDb(
-                    {
-                      content: accumulated,
-                      isStreaming: true,
-                    },
-                    false
-                  );
-                },
-              });
-
-        this.deps.onSpecialistGenerationStateChange?.({
-          isGenerating: false,
-          sessionId: null,
-          stage: null,
-        });
-
-        const generatedText = (generationResult.text || '').trim();
-        if (generationResult.aborted || !generatedText) {
-          throw new Error(
-            generationResult.aborted
-              ? `Генерация ответа ${genitiveName} была остановлена.`
-              : `${modeCfg.shortTitle} вернул пустой ответ.`
-          );
+        if (persistToDb && updatedAssistantMsg) {
+          await storageProvider.saveSessionAndMessages(nextSess, [
+            pixelRequestMsg,
+            updatedAssistantMsg,
+          ]);
         }
+      };
 
-        // Save completed specialist response to IndexedDB and state
-        await updateSpecialistReplyInStateAndDb(
-          {
-            content: generatedText,
-            isStreaming: false,
-            isError: false,
-            modelName: generationResult.model,
-            providerId: generationResult.providerId,
-            providerLabel: generationResult.providerLabel,
-            failoverNotice: generationResult.failoverNotice,
-          },
-          true
+      const historyForApi = [
+        ...currentTargetSession.messages
+          .filter(
+            (m) =>
+              !m.isStreaming &&
+              m.content.trim().length > 0 &&
+              (!m.sessionId || m.sessionId === currentTargetSession.id) &&
+              (!m.schoolId || m.schoolId === targetSchool) &&
+              (!m.mode || m.mode === targetMode)
+          )
+          .slice(-12),
+        pixelRequestMsg,
+      ].map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+
+      const selectedProviderMode =
+        this.deps.getProviderSelection() || readStoredProviderSelection();
+
+      const generationResult =
+        selectedProviderMode !== 'auto' &&
+        aiProviderManager.providers[selectedProviderMode]
+          ? await aiProviderManager.providers[
+              selectedProviderMode
+            ].streamGenerate({
+              schoolId: targetSchool,
+              mode: targetMode,
+              sessionId: sessionWithStreaming.id,
+              messages: historyForApi,
+              knowledgeBaseContext: kbContext,
+              providerSelection: selectedProviderMode,
+              onStageChange: (stage) => {
+                this.deps?.onSpecialistGenerationStateChange?.({
+                  isGenerating: true,
+                  sessionId: sessionWithStreaming.id,
+                  stage,
+                });
+              },
+              onDelta: (_delta, accumulated) => {
+                void updateSpecialistReplyInStateAndDb(
+                  {
+                    content: accumulated,
+                    isStreaming: true,
+                  },
+                  false
+                );
+              },
+            })
+          : await geminiProvider.streamChat({
+              schoolId: targetSchool,
+              mode: targetMode,
+              sessionId: sessionWithStreaming.id,
+              messages: historyForApi,
+              knowledgeBaseContext: kbContext,
+              providerSelection: selectedProviderMode,
+              onStageChange: (stage) => {
+                this.deps?.onSpecialistGenerationStateChange?.({
+                  isGenerating: true,
+                  sessionId: sessionWithStreaming.id,
+                  stage,
+                });
+              },
+              onDelta: (_delta, accumulated) => {
+                void updateSpecialistReplyInStateAndDb(
+                  {
+                    content: accumulated,
+                    isStreaming: true,
+                  },
+                  false
+                );
+              },
+            });
+
+      this.deps.onSpecialistGenerationStateChange?.({
+        isGenerating: false,
+        sessionId: null,
+        stage: null,
+      });
+
+      const generatedText = (generationResult.text || '').trim();
+      if (generationResult.aborted || !generatedText) {
+        throw new Error(
+          generationResult.aborted
+            ? `Генерация ответа ${genitiveName} была остановлена.`
+            : `${modeCfg.shortTitle} вернул пустой ответ.`
         );
-
-        finalSpecialistMessageId = specialistMsgId;
-        finalSpecialistText = generatedText;
-        finalProviderId = generationResult.providerId;
-        finalModelName = generationResult.model;
-
-        // 4. Transition status to 'reviewing' (Проверяется Пикселем)
-        await updateTaskAndCompanionMessage(
-          {
-            status: 'reviewing',
-            statusLabelRu: PIXEL_DELEGATION_STATUS_LABELS.reviewing,
-            lastSpecialistMessageId: specialistMsgId,
-            specialistReplyPreview:
-              generatedText.slice(0, 260) +
-              (generatedText.length > 260 ? '…' : ''),
-          },
-          `${modeCfg.shortTitle} (${schoolCfg.name}) подготовил ответ. Проверяю результат на соответствие вашему запросу…`
-        );
-
-        // 5. Pixel checks the specialist's response
-        const verification = await this.verifySpecialistResult({
-          taskId,
-          iteration: currentIteration,
-          schoolId: targetSchool,
-          targetMode,
-          instruction: intent.instruction,
-          specialistReply: generatedText,
-          providerSelection: selectedProviderMode,
-        });
-
-        if (
-          verification.approved ||
-          currentIteration >= MAX_DELEGATION_REVISIONS
-        ) {
-          finalReviewSummary = verification.comment;
-          break;
-        }
-
-        // 6. Needs revision ('needs_revision' — Требует доработки)
-        lastRevisionFeedback = verification.comment;
-        const nextHistory = [
-          ...(taskState.revisionFeedbackHistory || []),
-          lastRevisionFeedback,
-        ];
-
-        await updateTaskAndCompanionMessage(
-          {
-            status: 'needs_revision',
-            statusLabelRu: `${PIXEL_DELEGATION_STATUS_LABELS.needs_revision} (#${currentIteration + 1})`,
-            revisionFeedbackHistory: nextHistory,
-            reviewSummary: lastRevisionFeedback,
-          },
-          `Проверил ответ ${genitiveName} (${schoolCfg.name}) — требуется доработка (#${currentIteration + 1}): ${lastRevisionFeedback}`
-        );
-
-        currentIteration += 1;
       }
 
-      // 7. Transition status to 'completed' (Завершено)
-      const iterationsNote =
-        currentIteration > 0
-          ? `Выполнено с доработкой (проведено итераций доработки: ${currentIteration})`
-          : 'Принято с первой итерации';
+      await updateSpecialistReplyInStateAndDb(
+        {
+          content: generatedText,
+          isStreaming: false,
+          isError: false,
+          modelName: generationResult.model,
+          providerId: generationResult.providerId,
+          providerLabel: generationResult.providerLabel,
+          failoverNotice: generationResult.failoverNotice,
+        },
+        true
+      );
+
+      // 4. Transition status to 'reviewing' (Проверяется Пикселем)
+      await updateTaskAndCompanionMessage(
+        {
+          status: 'reviewing',
+          statusLabelRu: PIXEL_DELEGATION_STATUS_LABELS.reviewing,
+          lastSpecialistMessageId: specialistMsgId,
+          resultMessageId: specialistMsgId,
+          resultText: generatedText,
+          messageId: pixelMsgId,
+          specialistReplyPreview:
+            generatedText.slice(0, 260) +
+            (generatedText.length > 260 ? '…' : ''),
+        },
+        `${modeCfg.shortTitle} (${schoolCfg.name}) подготовил ответ. Провожу анализ соответствия задаче…`
+      );
+
+      // 5. Pixel performs deep quality analysis across all 6 criteria (Stage 4)
+      const analysis = await this.analyzeSpecialistResponse({
+        taskId,
+        schoolId: targetSchool,
+        targetMode,
+        instruction: intent.instruction,
+        specialistReply: generatedText,
+        iteration: currentIteration,
+        providerSelection: selectedProviderMode,
+      });
+
+      // 6. Record revision item if this was a revision run
+      const nextRevisions = [...(taskState.revisions || [])];
+      if (currentIteration > 0) {
+        nextRevisions.push({
+          id: `rev-${Date.now()}`,
+          iteration: currentIteration,
+          requestedAt: formatTimeNow(new Date()),
+          requestedAtMs: Date.now(),
+          revisionPrompt: intent.instruction,
+          cleanInstruction: pixelMessageContent,
+          status: 'completed',
+          resultMessageId: specialistMsgId,
+          resultPreview: generatedText.slice(0, 160) + '…',
+          reviewComment: analysis.briefSummary,
+        });
+      }
+
+      const completedAtDate = new Date();
+      const completedAtTime = formatTimeNow(completedAtDate);
+      const completedAtMs = completedAtDate.getTime();
+
+      const finalStatus =
+        analysis.verdict === 'needs_revision' ? 'needs_revision' : 'completed';
 
       const completedContent = [
         isContinuingExistingChat
-          ? `Анна, **${modeCfg.shortTitle}** (${schoolCfg.name}) ответил на ваш запрос в рабочем чате, и я проверил результат!`
-          : `Анна, поручение для **${genitiveName}** (${schoolCfg.name}) успешно выполнено и проверено мной!`,
+          ? `Анна, **${modeCfg.shortTitle}** (${schoolCfg.name}) ответил на запрос в рабочем чате!`
+          : `Анна, поручение для **${genitiveName}** (${schoolCfg.name}) выполнено!`,
         ``,
-        `• **Запрос:** ${intent.instruction}`,
-        `• **Статус:** Завершено (${iterationsNote})`,
-        `• **Проверка Пикселя:** ${finalReviewSummary}`,
+        `• **Запрос:** «${intent.instruction}»`,
+        `• **Краткая выжимка (TL;DR):** ${analysis.briefSummary}`,
         ``,
-        `**Что можно сделать дальше:**`,
-        `- Скажите или напишите *«Пиксель, прочитай ответ»* (или нажмите кнопку **«Озвучить ответ»** ниже), чтобы я зачитал ответ вслух.`,
-        `- Задайте мне любой вопрос по содержанию ответа или скажите *«Попроси его доработать…»*, чтобы продолжить диалог в этом же чате.`,
-      ].join('\n');
+        `**Оценка Пикселя:**`,
+        `• Вопрос проработан: ${analysis.allQuestionsAnswered ? '✅ Да, полностью' : '⚠️ Требует дополнения'}`,
+        `• Специфика школы: ${analysis.schoolConsidered ? `✅ Учтена (${schoolCfg.name})` : '⚠️ Общие формулировки'}`,
+        analysis.actionableRecommendations.length > 0
+          ? `• Рекомендации: ${analysis.actionableRecommendations.slice(0, 3).join('; ')}`
+          : '',
+        analysis.critiqueRemarks.length > 0
+          ? `• Замечания: ${analysis.critiqueRemarks.slice(0, 2).join('; ')}`
+          : '',
+        analysis.proposedNextSteps.length > 0
+          ? `\n**Следующие шаги:**\n${analysis.proposedNextSteps.map((s) => `– ${s}`).join('\n')}`
+          : '',
+        ``,
+        `**Что можно сделать:**`,
+        `- Нажмите **«Озвучить ответ»** (или скажите *«Пиксель, прочитай ответ»*), чтобы я зачитал текст вслух.`,
+        `- Нажмите **«Запросить доработку»** (или скажите *«Попроси его доработать…»*), чтобы отправить замечания.`,
+      ]
+        .filter(Boolean)
+        .join('\n');
 
       await updateTaskAndCompanionMessage(
         {
-          status: 'completed',
-          statusLabelRu: PIXEL_DELEGATION_STATUS_LABELS.completed,
-          lastSpecialistMessageId: finalSpecialistMessageId,
-          reviewSummary: finalReviewSummary,
+          status: finalStatus,
+          statusLabelRu: PIXEL_DELEGATION_STATUS_LABELS[finalStatus],
+          resultMessageId: specialistMsgId,
+          lastSpecialistMessageId: specialistMsgId,
+          resultText: generatedText,
+          messageId: pixelMsgId,
+          completedAt: completedAtTime,
+          completedAtMs,
+          analysis,
+          reviewSummary: analysis.briefSummary,
+          revisions: nextRevisions,
           specialistReplyPreview:
-            finalSpecialistText.slice(0, 280) +
-            (finalSpecialistText.length > 280 ? '…' : ''),
+            generatedText.slice(0, 280) +
+            (generatedText.length > 280 ? '…' : ''),
         },
         completedContent
       );
 
-      // Highlight the new specialist reply in the chat view
-      if (this.deps && targetSession && finalSpecialistMessageId) {
-        this.deps.onOpenDelegatedChat?.(
-          targetSchool,
-          targetMode,
-          targetSession.id,
-          finalSpecialistMessageId
-        );
-      }
-
-      // Update provider attribution on the companion message
-      if (this.deps && (finalProviderId || finalModelName)) {
+      // Attribution
+      if (this.deps && (generationResult.providerId || generationResult.model)) {
         const latestMsgs = this.deps.getCompanionMessages();
         const attributed = latestMsgs.map((m) =>
           m.id === pixelCompanionMsgId
             ? {
                 ...m,
-                providerId: finalProviderId,
-                modelName: finalModelName,
+                providerId: generationResult.providerId,
+                modelName: generationResult.model,
               }
             : m
         );
         await this.deps.onSaveCompanionMessages(attributed);
       }
 
-      // If initiated or active in Live Voice, notify Anna via Live session
       this.deps?.onNotifyLiveVoice?.(
-        `Системное уведомление о выполнении запроса: ${modeCfg.shortTitle} (${schoolCfg.name}) ответил в рабочем чате по запросу «${intent.instruction}». Резюме проверки Пикселя: ${finalReviewSummary}. Сообщи Анне голосом кратко (1-2 фразы), что ${modeCfg.shortTitle} подготовил ответ в чате, и предложи зачитать его вслух или обсудить детали.`
+        `Системное уведомление: ${modeCfg.shortTitle} (${schoolCfg.name}) ответил по запросу «${intent.instruction}». Краткая выжимка: ${analysis.briefSummary}. Сообщи Анне голосом в 1-2 фразы, что специалист ответил, и предложи озвучить полный ответ или отправить доработку.`
       );
 
       return taskState;
@@ -3421,7 +4202,6 @@ export class PixelAgentCoordinator {
           ? err.message
           : `Не удалось выполнить генерацию ответа ${genitiveName}.`;
 
-      // Clean up any stuck streaming message in the target session
       if (this.deps && targetSession) {
         const allSessions = this.deps.getSessions();
         const sess = allSessions.find((s) => s.id === targetSession!.id);
@@ -3432,7 +4212,7 @@ export class PixelAgentCoordinator {
                   ...m,
                   isStreaming: false,
                   isError: true,
-                  content: `Ошибка выполнения поручения Пикселя: ${errorMsg}`,
+                  content: `Ошибка выполнения поручения: ${errorMsg}`,
                 }
               : m
           );
@@ -3457,11 +4237,11 @@ export class PixelAgentCoordinator {
           statusLabelRu: PIXEL_DELEGATION_STATUS_LABELS.error,
           errorMessage: errorMsg,
         },
-        `Анна, я передал запрос ${dativeName} (${schoolCfg.name}), но при генерации ответа возникла ошибка: **${errorMsg}**.\n\nПоручение не завершено. Вы можете нажать «Повторить поручение» ниже или открыть чат ${genitiveName}.`
+        `Анна, при генерации ответа ${dativeName} (${schoolCfg.name}) возникла ошибка: **${errorMsg}**.\n\nПоручение не завершено. Вы можете нажать «Повторить поручение» ниже или открыть диалог со специалистом.`
       );
 
       this.deps?.onNotifyLiveVoice?.(
-        `Системное уведомление: при выполнении поручения ${dativeName} (${schoolCfg.name}) произошла ошибка: ${errorMsg}. Честно сообщи Анне, что генерация не запустилась или завершилась ошибкой.`
+        `Системное уведомление: при выполнении поручения ${dativeName} (${schoolCfg.name}) произошла ошибка: ${errorMsg}. Честно сообщи Анне, что генерация завершилась ошибкой.`
       );
 
       return taskState;
@@ -3471,141 +4251,212 @@ export class PixelAgentCoordinator {
   }
 
   /**
-   * Verifies the specialist's actual response against Anna's instruction and target school.
-   * Combines deterministic quality checks with an AI verification pass by Pixel.
+   * Stage 4: Critical evaluation of the specialist's response across 6 criteria:
+   * 1. Answered initial questions?
+   * 2. Actionable recommendations vs generic fluff?
+   * 3. Target school context honored (KIBERONE vs RENDERIA)?
+   * 4. Contradictions or gaps?
+   * 5. Missing data / questions to Anna?
+   * 6. Recommended next steps?
    */
-  private async verifySpecialistResult(params: {
+  public async analyzeSpecialistResponse(params: {
     taskId: string;
-    iteration: number;
     schoolId: SchoolId;
     targetMode: AgentMode;
     instruction: string;
     specialistReply: string;
-    providerSelection: AIProviderSelectionMode;
-  }): Promise<{ approved: boolean; comment: string }> {
+    iteration?: number;
+    providerSelection?: AIProviderSelectionMode;
+  }): Promise<SpecialistAnalysisResult> {
     const {
-      taskId,
-      iteration,
       schoolId,
       targetMode,
       instruction,
       specialistReply,
-      providerSelection,
+      iteration = 0,
+      providerSelection = 'auto',
     } = params;
     const schoolCfg = SCHOOLS[schoolId];
     const modeCfg = AGENT_MODES[targetMode];
-    const genitiveName = SPECIALIST_NAMES_GENITIVE_RU[targetMode];
     const otherSchoolId: SchoolId =
       schoolId === 'kiberone' ? 'renderia' : 'kiberone';
     const otherSchoolName = SCHOOLS[otherSchoolId].name;
-
     const trimmed = specialistReply.trim();
+    const lower = trimmed.toLowerCase();
 
-    // 1. Deterministic check: response must be substantive and non-empty
-    if (trimmed.length < 80) {
-      return {
-        approved: false,
-        comment:
-          'Ответ слишком короткий и не содержит детальной проработки запроса. Необходимо расписать структуру и конкретные рекомендации для школы.',
-      };
-    }
-
-    // 2. Deterministic check: school isolation (must not confuse KIBERONE and RENDERIA)
-    const lowerReply = trimmed.toLowerCase();
-    const mentionsTargetSchool =
+    // 1. Deterministic checks
+    const mentionsTarget =
       schoolId === 'renderia'
-        ? lowerReply.includes('renderia') || lowerReply.includes('рендери')
-        : lowerReply.includes('kiber') ||
-          lowerReply.includes('киберван') ||
-          lowerReply.includes('киберон');
-    const mentionsOtherSchool =
+        ? lower.includes('renderia') || lower.includes('рендери')
+        : lower.includes('kiber') ||
+          lower.includes('киберван') ||
+          lower.includes('киберон');
+    const mentionsOther =
       otherSchoolId === 'renderia'
-        ? lowerReply.includes('renderia') || lowerReply.includes('рендери')
-        : lowerReply.includes('kiberone') ||
-          lowerReply.includes('киберван') ||
-          lowerReply.includes('киберон');
+        ? lower.includes('renderia') || lower.includes('рендери')
+        : lower.includes('kiber') ||
+          lower.includes('киберван') ||
+          lower.includes('киберон');
 
-    if (!mentionsTargetSchool && mentionsOtherSchool) {
-      return {
-        approved: false,
-        comment: `В ответе упомянута школа ${otherSchoolName} вместо целевой школы ${schoolCfg.name}. Необходимо строго подготовить материал для школы ${schoolCfg.name}.`,
-      };
-    }
+    const schoolConsidered =
+      mentionsTarget || (!mentionsOther && trimmed.length > 100);
 
-    // 3. AI verification call by Pixel
+    const sentences = trimmed
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 15 && !s.startsWith('#'));
+    const defaultBrief =
+      sentences.slice(0, 2).join(' ') ||
+      `Специалист ИИ-${modeCfg.shortTitle} подготовил ответ по запросу для школы ${schoolCfg.name}.`;
+
+    const recommendationLines = trimmed
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(
+        (l) =>
+          /^[•\-*\d.]+\s+/.test(l) ||
+          /^(?:рекоменду(?:ется|ю)|шаг|пункт|этап)\b/i.test(l)
+      )
+      .map((l) =>
+        l
+          .replace(/^[•\-*\d.]+\s+/, '')
+          .replace(/\*\*([^*]+)\*\*/g, '$1')
+          .trim()
+      )
+      .filter((l) => l.length > 12)
+      .slice(0, 4);
+
+    let result: SpecialistAnalysisResult = {
+      isTaskCompleted: trimmed.length >= 80,
+      allQuestionsAnswered: trimmed.length >= 100,
+      actionableRecommendations:
+        recommendationLines.length > 0
+          ? recommendationLines
+          : [
+              `Ознакомиться со структурой ответа ${modeCfg.shortTitle}`,
+              `Применить рекомендации в рабочих процессах ${schoolCfg.name}`,
+            ],
+      schoolConsidered,
+      schoolName: schoolCfg.name,
+      contradictionsOrGaps: !schoolConsidered
+        ? [`Упомянута школа ${otherSchoolName} вместо ${schoolCfg.name}`]
+        : [],
+      missingData: [],
+      critiqueRemarks: [
+        trimmed.length >= 150
+          ? `Ответ структурирован (${trimmed.length} симв.)`
+          : 'Ответ лаконичен, при необходимости можно запросить расширение',
+      ],
+      unresolvedQuestions: [],
+      proposedNextSteps: [
+        `Озвучить ответ голосом Пикселя`,
+        `Задать уточняющий вопрос или направить замечания`,
+      ],
+      briefSummary: defaultBrief,
+      verdict:
+        trimmed.length >= 80 && schoolConsidered ? 'approved' : 'needs_revision',
+    };
+
+    // 2. Perform deep AI quality evaluation using Gemini
     try {
-      const reviewPrompt = [
-        `Проверьте выполненный специалистом «ИИ-${modeCfg.shortTitle}» ответ по поручению управляющей Анны.`,
-        `Целевая школа: ${schoolCfg.name}`,
-        `Запрос / поручение Анны: «${instruction}»`,
+      const evaluationPrompt = [
+        `Вы — ИИ-ассистент Пиксель, координатор специалистов для управляющей Анны.`,
+        `Проанализируйте ответ специалиста «ИИ-${modeCfg.shortTitle}» для школы «${schoolCfg.name}».`,
+        `Задание Анны: «${instruction}»`,
         `Итерация: ${iteration + 1}`,
         ``,
-        `Текст ответа специалиста (${modeCfg.shortTitle}):`,
+        `Ответ специалиста (${modeCfg.shortTitle}):`,
         `"""`,
-        trimmed.slice(0, 5000),
+        trimmed.slice(0, 4500),
         `"""`,
         ``,
-        `Критерии проверки:`,
-        `1. Ответ прямо отвечает на запрос «${instruction}» для школы ${schoolCfg.name}.`,
-        `2. Ответ структурирован, практичен и не обрывается на полуслове.`,
-        `3. Нет путаницы со второй школой (${otherSchoolName}).`,
+        `Оцените ответ строго по 6 критериям:`,
+        `1. Ответил ли специалист на исходный вопрос Анны?`,
+        `2. Содержит ли ответ конкретные рекомендации или только общие слова?`,
+        `3. Учтена ли специфика школы ${schoolCfg.name} (без смешивания с ${otherSchoolName})?`,
+        `4. Нет ли явных пробелов или противоречий?`,
+        `5. Нужны ли дополнительные данные от Анны?`,
+        `6. Какие следующие шаги рекомендуются?`,
         ``,
-        `Ответьте СТРОГО в 2 строки без лишнего текста:`,
-        `ВЕРДИКТ: ПРИНЯТО или ДОРАБОТАТЬ`,
-        `РЕЗЮМЕ: <если ПРИНЯТО — краткий вывод в 1-2 предложениях для Анны о том, что именно подготовил ${modeCfg.shortTitle}; если ДОРАБОТАТЬ — конкретное замечание специалисту, что нужно исправить или дополнить>`,
+        `Верните ТОЛЬКО валидный JSON без markdown-тегов:`,
+        `{`,
+        `  "allQuestionsAnswered": true,`,
+        `  "actionableRecommendations": ["конкретная рекомендация 1", "конкретная рекомендация 2"],`,
+        `  "schoolConsidered": true,`,
+        `  "contradictionsOrGaps": ["пробел или замечание, если есть"],`,
+        `  "missingData": ["каких данных не хватает, если есть"],`,
+        `  "critiqueRemarks": ["что получилось хорошо, а что стоит доработать"],`,
+        `  "unresolvedQuestions": ["открытые вопросы, если есть"],`,
+        `  "proposedNextSteps": ["рекомендуемый шаг 1", "рекомендуемый шаг 2"],`,
+        `  "briefSummary": "Краткая выжимка (TL;DR) в 1-2 предложениях для Анны",`,
+        `  "verdict": "approved"`,
+        `}`,
       ].join('\n');
 
-      const reviewResult = await geminiProvider.streamChat({
+      const evaluationResp = await geminiProvider.streamChat({
         schoolId,
         mode: 'pixel',
-        sessionId: `pixel-verify-${taskId}-${iteration}`,
-        messages: [{ role: 'user', content: reviewPrompt }],
+        sessionId: `pixel-analysis-${params.taskId}-${iteration}`,
+        messages: [{ role: 'user', content: evaluationPrompt }],
         providerSelection,
-        timeoutMs: 25000,
+        timeoutMs: 18000,
         onDelta: () => {},
       });
 
-      const reviewText = (reviewResult.text || '').trim();
-      const lines = reviewText
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean);
-
-      const verdictLine =
-        lines.find((l) => /^вердикт\s*:/i.test(l)) || lines[0] || '';
-      const summaryLine =
-        lines.find((l) => /^резюме\s*:/i.test(l)) ||
-        lines.slice(1).join(' ') ||
-        reviewText;
-
-      const cleanSummary = summaryLine
-        .replace(/^(?:резюме|комментарий)\s*:\s*/i, '')
+      const rawJson = (evaluationResp.text || '')
+        .replace(/^```(?:json)?/im, '')
+        .replace(/```$/im, '')
         .trim();
 
-      const needsRevision =
-        /доработать|needs_revision|требует\s+доработки/i.test(verdictLine) &&
-        !/принято/i.test(verdictLine);
-
-      if (needsRevision && cleanSummary.length > 5) {
-        return {
-          approved: false,
-          comment: cleanSummary,
+      const parsed = JSON.parse(rawJson);
+      if (parsed && typeof parsed === 'object') {
+        result = {
+          isTaskCompleted: true,
+          allQuestionsAnswered: Boolean(parsed.allQuestionsAnswered ?? true),
+          actionableRecommendations:
+            Array.isArray(parsed.actionableRecommendations) &&
+            parsed.actionableRecommendations.length > 0
+              ? parsed.actionableRecommendations
+              : result.actionableRecommendations,
+          schoolConsidered: Boolean(parsed.schoolConsidered ?? schoolConsidered),
+          schoolName: schoolCfg.name,
+          contradictionsOrGaps: Array.isArray(parsed.contradictionsOrGaps)
+            ? parsed.contradictionsOrGaps
+            : result.contradictionsOrGaps,
+          missingData: Array.isArray(parsed.missingData)
+            ? parsed.missingData
+            : [],
+          critiqueRemarks:
+            Array.isArray(parsed.critiqueRemarks) &&
+            parsed.critiqueRemarks.length > 0
+              ? parsed.critiqueRemarks
+              : result.critiqueRemarks,
+          unresolvedQuestions: Array.isArray(parsed.unresolvedQuestions)
+            ? parsed.unresolvedQuestions
+            : [],
+          proposedNextSteps:
+            Array.isArray(parsed.proposedNextSteps) &&
+            parsed.proposedNextSteps.length > 0
+              ? parsed.proposedNextSteps
+              : result.proposedNextSteps,
+          briefSummary:
+            typeof parsed.briefSummary === 'string' &&
+            parsed.briefSummary.trim()
+              ? parsed.briefSummary.trim()
+              : defaultBrief,
+          verdict:
+            parsed.verdict === 'approved' ||
+            parsed.verdict === 'needs_revision' ||
+            parsed.verdict === 'acceptable'
+              ? parsed.verdict
+              : 'approved',
         };
       }
-
-      return {
-        approved: true,
-        comment:
-          cleanSummary ||
-          `Ответ ${genitiveName} полностью соответствует запросу для школы ${schoolCfg.name}, структурирован и готов к использованию.`,
-      };
     } catch {
-      // Fallback if secondary review request times out while primary specialist response passed deterministic checks
-      return {
-        approved: true,
-        comment: `Ответ ${genitiveName} для школы ${schoolCfg.name} проверен по структуре и полноте (${trimmed.length} симв.) и соответствует запросу.`,
-      };
+      // Fallback: result already holds sensible deterministic analysis
     }
+
+    return result;
   }
 }
 

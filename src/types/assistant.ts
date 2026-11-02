@@ -311,33 +311,79 @@ export interface ProposedCompanionMemoryDraft {
   schoolId?: SchoolId | 'both';
 }
 
-export type PixelDelegationStatus =
+export type CoordinatorTaskStatus =
+  | 'draft'
+  | 'pending_confirmation'
+  | 'sent'
+  | 'processing'
+  | 'completed'
+  | 'needs_revision'
+  | 'failed'
+  | 'cancelled'
   | 'created'
   | 'in_progress'
   | 'reviewing'
-  | 'needs_revision'
-  | 'completed'
   | 'error';
+
+export type PixelDelegationStatus = CoordinatorTaskStatus;
+
+export interface SpecialistAnalysisResult {
+  isTaskCompleted: boolean;
+  allQuestionsAnswered: boolean;
+  actionableRecommendations: string[];
+  schoolConsidered: boolean;
+  schoolName: string;
+  contradictionsOrGaps?: string[];
+  missingData?: string[];
+  critiqueRemarks: string[];
+  unresolvedQuestions?: string[];
+  proposedNextSteps: string[];
+  briefSummary: string;
+  verdict: 'approved' | 'needs_revision' | 'acceptable';
+}
+
+export interface SpecialistRevisionItem {
+  id: string;
+  iteration: number;
+  requestedAt: string;
+  requestedAtMs: number;
+  revisionPrompt: string;
+  cleanInstruction?: string;
+  status: 'pending_confirmation' | 'sent' | 'completed' | 'cancelled';
+  resultMessageId?: string;
+  resultPreview?: string;
+  reviewComment?: string;
+}
 
 export interface PixelDelegatedTaskState {
   taskId: string;
   targetMode: AgentMode;
+  specialistId?: AgentMode;
   schoolId: SchoolId;
   instruction: string;
+  cleanInstruction?: string;
   originalUserRequest: string;
-  status: PixelDelegationStatus;
+  status: CoordinatorTaskStatus;
   statusLabelRu: string;
   sessionId: string;
+  sessionTitle?: string;
+  messageId?: string;
+  resultMessageId?: string;
   lastSpecialistMessageId?: string;
+  resultText?: string;
   iterationCount: number;
   maxRevisions: number;
+  analysis?: SpecialistAnalysisResult;
   reviewSummary?: string;
+  revisions?: SpecialistRevisionItem[];
   revisionFeedbackHistory?: string[];
   specialistReplyPreview?: string;
   errorMessage?: string;
   createdAt: string;
+  completedAt?: string;
   updatedAt: string;
   createdAtMs: number;
+  completedAtMs?: number;
   updatedAtMs: number;
   sourceMode: 'text' | 'voice';
 }
@@ -352,6 +398,23 @@ export interface PixelPendingDelegationDraft {
   sessionId?: string;
   sessionTitle?: string;
   isFollowUp?: boolean;
+  status: 'awaiting_confirmation' | 'confirmed' | 'cancelled';
+  createdAt: string;
+  createdAtMs: number;
+  sourceMode: 'text' | 'voice';
+}
+
+export interface PixelPendingRevisionDraft {
+  revisionDraftId: string;
+  taskId: string;
+  schoolId: SchoolId;
+  targetMode: AgentMode;
+  targetSpecialistNameRu: string;
+  sessionId: string;
+  sessionTitle: string;
+  iteration: number;
+  revisionPrompt: string;
+  cleanInstruction: string;
   status: 'awaiting_confirmation' | 'confirmed' | 'cancelled';
   createdAt: string;
   createdAtMs: number;
@@ -400,6 +463,7 @@ export interface CompanionMessage {
   proposedMemory?: ProposedCompanionMemoryDraft;
   proposalStatus?: 'pending' | 'confirmed' | 'dismissed';
   pendingDelegationDraft?: PixelPendingDelegationDraft;
+  pendingRevisionDraft?: PixelPendingRevisionDraft;
   pendingChatDeletion?: PixelPendingChatDeletion;
   deletableChatsList?: PixelChatNavigationItem[];
   chatDisambiguationList?: PixelChatNavigationItem[];
