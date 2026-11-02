@@ -127,9 +127,11 @@ const VALID_MEMORY_CATEGORIES = new Set<CompanionMemoryCategory>([
 const VALID_TASK_STATUSES = new Set<CompanionTaskStatus>([
   'new',
   'in_progress',
-  'done',
-  'postponed',
   'waiting_response',
+  'waiting_anna_action',
+  'done',
+  'cancelled',
+  'postponed',
 ]);
 
 const VALID_TASK_PRIORITIES = new Set<CompanionTaskPriority>([
@@ -539,9 +541,9 @@ function assembleLoadedWorkspaceData(
 
   // 7. Sort companion tasks: active first, then by due date / createdAtMs
   const sortedCompanionTasks = rawCompanionTasks.slice().sort((a, b) => {
-    const aDone = a.status === 'done';
-    const bDone = b.status === 'done';
-    if (aDone !== bDone) return aDone ? 1 : -1;
+    const aFinished = a.status === 'done' || a.status === 'cancelled';
+    const bFinished = b.status === 'done' || b.status === 'cancelled';
+    if (aFinished !== bFinished) return aFinished ? 1 : -1;
     if (a.dueDate && b.dueDate && a.dueDate !== b.dueDate) {
       return a.dueDate.localeCompare(b.dueDate);
     }

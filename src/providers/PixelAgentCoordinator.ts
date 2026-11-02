@@ -328,7 +328,7 @@ export function buildCleanBusinessInstruction(
   rawInstruction: string,
   targetSchool: SchoolId
 ): string {
-  const schoolName = SCHOOLS[targetSchool].name;
+  void targetSchool;
 
   let text = (rawInstruction || '')
     // Remove markdown bold/italic/headers/code/strikethrough
@@ -345,7 +345,7 @@ export function buildCleanBusinessInstruction(
     .replace(/[•▪▫★☆▶►✔✓✕✖✅❌⚠️🤖🔄]/g, '')
     // Remove technical task IDs if accidentally present
     .replace(/\bptask-[a-z0-9-]+\b/gi, '')
-    .replace(/^(?:чтобы\s+(?:он|она|специалист)\s+)/i, '')
+    .replace(/^(?:чтобы\s+(?:он|она|они|специалист)\s+)/i, '')
     .replace(/^(?:что\s+нужно\s+)/i, '')
     .replace(/^[,.:;—–-]+\s*/, '')
     .replace(/\s{2,}/g, ' ')
@@ -353,29 +353,47 @@ export function buildCleanBusinessInstruction(
 
   if (!text) return '';
 
-  // Convert common leading infinitive verbs or past-tense subjunctive («разработал») into polite business imperative
+  const isSimpleGreeting = /^(?:привет|здравствуй(?:те)?|добрый\s+(?:день|вечер)|доброе\s+утро)$/i.test(
+    text.replace(/[.!?,]+$/, '').trim()
+  );
+
+  if (isSimpleGreeting) {
+    const rawGreeting = text.replace(/[.!?,]+$/, '').trim();
+    return rawGreeting.charAt(0).toUpperCase() + rawGreeting.slice(1);
+  }
+
+  const DELIM = '(?=$|[^а-яёa-z0-9])';
+
+  // Convert common leading infinitive verbs, past subjunctive, or informal imperatives into polite business plural imperative
   const verbConversions: Array<[RegExp, string]> = [
-    [/^(?:разработать|разработал(?:а)?)\b/i, 'Разработайте'],
-    [/^(?:составить|составил(?:а)?)\b/i, 'Составьте'],
-    [/^(?:подготовить|подготовил(?:а)?)\b/i, 'Подготовьте'],
-    [/^(?:написать|написал(?:а)?)\b/i, 'Напишите'],
-    [/^(?:сделать|сделал(?:а)?)\b/i, 'Сделайте'],
-    [/^(?:доработать|доработал(?:а)?)\b/i, 'Доработайте'],
-    [/^(?:переделать|переделал(?:а)?)\b/i, 'Переделайте'],
-    [/^(?:исправить|исправил(?:а)?)\b/i, 'Исправьте'],
-    [/^(?:уточнить|уточнил(?:а)?)\b/i, 'Уточните'],
-    [/^(?:дополнить|дополнил(?:а)?)\b/i, 'Дополните'],
-    [/^(?:расширить|расширил(?:а)?)\b/i, 'Расширьте'],
-    [/^(?:сократить|сократил(?:а)?)\b/i, 'Сократите'],
-    [/^(?:добавить|добавил(?:а)?)\b/i, 'Добавьте'],
-    [/^(?:проанализировать|проанализировал(?:а)?)\b/i, 'Проанализируйте'],
-    [/^(?:рассчитать|рассчитал(?:а)?)\b/i, 'Рассчитайте'],
-    [/^(?:придумать|придумал(?:а)?)\b/i, 'Придумайте'],
-    [/^(?:предложить|предложил(?:а)?)\b/i, 'Предложите'],
-    [/^(?:проверить|проверил(?:а)?)\b/i, 'Проверьте'],
-    [/^(?:описать|описал(?:а)?)\b/i, 'Опишите'],
-    [/^(?:расписать|расписал(?:а)?)\b/i, 'Распишите'],
-    [/^(?:подобрать|подобрал(?:а)?)\b/i, 'Подберите'],
+    [new RegExp('^(?:разработать|разработал(?:а)?|разработай)' + DELIM, 'i'), 'Разработайте'],
+    [new RegExp('^(?:составить|составил(?:а)?|составь)' + DELIM, 'i'), 'Составьте'],
+    [new RegExp('^(?:подготовить|подготовил(?:а)?|подготовь)' + DELIM, 'i'), 'Подготовьте'],
+    [new RegExp('^(?:написать|написал(?:а)?|напиши)' + DELIM, 'i'), 'Напишите'],
+    [new RegExp('^(?:сделать|сделал(?:а)?|сделай)' + DELIM, 'i'), 'Сделайте'],
+    [new RegExp('^(?:доработать|доработал(?:а)?|доработай)' + DELIM, 'i'), 'Доработайте'],
+    [new RegExp('^(?:переделать|переделал(?:а)?|переделай)' + DELIM, 'i'), 'Переделайте'],
+    [new RegExp('^(?:исправить|исправил(?:а)?|исправь)' + DELIM, 'i'), 'Исправьте'],
+    [new RegExp('^(?:уточнить|уточнил(?:а)?|уточни)' + DELIM, 'i'), 'Уточните'],
+    [new RegExp('^(?:дополнить|дополнил(?:а)?|дополни)' + DELIM, 'i'), 'Дополните'],
+    [new RegExp('^(?:расширить|расширил(?:а)?|расширь)' + DELIM, 'i'), 'Расширьте'],
+    [new RegExp('^(?:сократить|сократил(?:а)?|сократи)' + DELIM, 'i'), 'Сократите'],
+    [new RegExp('^(?:добавить|добавил(?:а)?|добавь)' + DELIM, 'i'), 'Добавьте'],
+    [new RegExp('^(?:проанализировать|проанализировал(?:а)?|проанализируй)' + DELIM, 'i'), 'Проанализируйте'],
+    [new RegExp('^(?:рассчитать|рассчитал(?:а)?|рассчитай)' + DELIM, 'i'), 'Рассчитайте'],
+    [new RegExp('^(?:придумать|придумал(?:а)?|придумай)' + DELIM, 'i'), 'Придумайте'],
+    [new RegExp('^(?:предложить|предложил(?:а)?|предложи)' + DELIM, 'i'), 'Предложите'],
+    [new RegExp('^(?:проверить|проверил(?:а)?|проверь)' + DELIM, 'i'), 'Проверьте'],
+    [new RegExp('^(?:описать|описал(?:а)?|опиши)' + DELIM, 'i'), 'Опишите'],
+    [new RegExp('^(?:расписать|расписал(?:а)?|распиши)' + DELIM, 'i'), 'Распишите'],
+    [new RegExp('^(?:подобрать|подобрал(?:а)?|подбери)' + DELIM, 'i'), 'Подберите'],
+    [new RegExp('^(?:сформировать|сформировал(?:а)?|сформируй)' + DELIM, 'i'), 'Сформируйте'],
+    [new RegExp('^(?:собрать|собрал(?:а)?|собери)' + DELIM, 'i'), 'Соберите'],
+    [new RegExp('^(?:отправить|отправил(?:а)?|отправь)' + DELIM, 'i'), 'Отправьте'],
+    [new RegExp('^(?:передать|передал(?:а)?|передай)' + DELIM, 'i'), 'Передайте'],
+    [new RegExp('^(?:связаться|связался|связалась|свяжись)' + DELIM, 'i'), 'Свяжитесь'],
+    [new RegExp('^(?:позвонить|позвонил(?:а)?|позвони)' + DELIM, 'i'), 'Позвоните'],
+    [new RegExp('^(?:ответить|ответил(?:а)?|ответь)' + DELIM, 'i'), 'Ответьте'],
   ];
 
   for (const [rx, replacement] of verbConversions) {
@@ -385,18 +403,27 @@ export function buildCleanBusinessInstruction(
     }
   }
 
+  // Convert secondary coordinated verbs after 'и' or 'а также'
+  const secondaryConversions: Array<[RegExp, string]> = [
+    [/\b(и|а\s+также)\s+(?:исправить|исправь|исправил(?:а)?)\b/gi, '$1 исправьте'],
+    [/\b(и|а\s+также)\s+(?:доработать|доработай|доработал(?:а)?)\b/gi, '$1 доработайте'],
+    [/\b(и|а\s+также)\s+(?:подготовить|подготовь|подготовил(?:а)?)\b/gi, '$1 подготовьте'],
+    [/\b(и|а\s+также)\s+(?:составить|составь|составил(?:а)?)\b/gi, '$1 составьте'],
+    [/\b(и|а\s+также)\s+(?:написать|напиши|написал(?:а)?)\b/gi, '$1 напишите'],
+    [/\b(и|а\s+также)\s+(?:прислать|пришли|прислал(?:а)?)\b/gi, '$1 пришлите'],
+    [/\b(и|а\s+также)\s+(?:предложить|предложи|предложил(?:а)?)\b/gi, '$1 предложите'],
+    [/\b(и|а\s+также)\s+(?:проверить|проверь|проверил(?:а)?)\b/gi, '$1 проверьте'],
+    [/\b(и|а\s+также)\s+(?:добавить|добавь|добавил(?:а)?)\b/gi, '$1 добавьте'],
+  ];
+
+  for (const [rx, replacement] of secondaryConversions) {
+    text = text.replace(rx, replacement);
+  }
+
   // Capitalize first letter
   text = text.charAt(0).toUpperCase() + text.slice(1);
 
-  // Normalize school name mention if present, or append school context naturally if not mentioned
-  const lower = text.toLowerCase();
-  const hasSchoolMention =
-    lower.includes('renderia') ||
-    lower.includes('рендери') ||
-    lower.includes('kiber') ||
-    lower.includes('киберван') ||
-    lower.includes('киберон');
-
+  // Normalize school name mention casing if already present in instruction
   text = text
     .replace(/\b(?:рендерия|рендерии|рендерию|renderia)\b/gi, 'RENDERIA')
     .replace(/\b(?:киберван|киберон|kiberone)\b/gi, 'KIBERONE');
@@ -408,10 +435,6 @@ export function buildCleanBusinessInstruction(
     ) || text.endsWith('?');
 
   text = text.replace(/[.!?,:;—–-]+$/, '').trim();
-
-  if (!hasSchoolMention) {
-    text = `${text} для школы ${schoolName}`;
-  }
 
   return isQuestion ? `${text}?` : `${text}.`;
 }
@@ -453,9 +476,18 @@ export function checkUtteranceCompleteness(
     };
   }
 
+  // Greetings (e.g. «Привет», «Здравствуйте», «Добрый день») are intentional concise messages
+  const isGreeting =
+    /^(?:привет|здравствуй(?:те)?|добрый\s+(?:день|вечер)|доброе\s+утро)(?:[,.!?-]|\s|$)/i.test(
+      instrTrimmed
+    );
+  if (isGreeting) {
+    return { isIncomplete: false };
+  }
+
   // 3. Instruction is just a bare verb or polite/filler words without real business object (e.g., «пожалуйста», «новое сообщение», «написать для Renderia»)
   const fillerRegex =
-    /(?:^|[^\p{L}\p{N}])(?:пожалуйста|плиз|пжл|пж|новое\s+сообщение|новое\s+поручение|новое\s+задание|новую\s+задачу|новое\s+письмо|сообщение|поручение|задание|задача|задачу|вопрос|письмо|привет|здравствуй|здравствуйте|добрый\s+день|добрый\s+вечер|доброе\s+утро|спасибо|благодарю)(?=$|[^\p{L}\p{N}])/giu;
+    /(?:^|[^\p{L}\p{N}])(?:пожалуйста|плиз|пжл|пж|новое\s+сообщение|новое\s+поручение|новое\s+задание|новую\s+задачу|новое\s+письмо|сообщение|поручение|задание|задача|задачу|вопрос|письмо|спасибо|благодарю)(?=$|[^\p{L}\p{N}])/giu;
 
   const strippedSchool = instrTrimmed
     .replace(/(?:^|[^\p{L}\p{N}])(?:для\s+)?(?:школы\s+)?(?:renderia|рендерия|рендерии|рендерию|kiberone|киберван|киберон)(?=$|[^\p{L}\p{N}])/giu, ' ')

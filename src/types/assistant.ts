@@ -4,6 +4,7 @@ export type AgentMode = 'marketer' | 'manager' | 'methodist' | 'analyst';
 
 export type NavSection =
   | 'home'
+  | 'tasks'
   | 'marketer'
   | 'manager'
   | 'methodist'
@@ -285,9 +286,11 @@ export interface CompanionMemoryRecord {
 export type CompanionTaskStatus =
   | 'new'
   | 'in_progress'
-  | 'postponed'
   | 'waiting_response'
-  | 'done';
+  | 'waiting_anna_action'
+  | 'done'
+  | 'cancelled'
+  | 'postponed';
 
 export type CompanionTaskPriority = 'low' | 'medium' | 'high';
 

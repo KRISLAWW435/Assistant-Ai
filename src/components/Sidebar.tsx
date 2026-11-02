@@ -6,6 +6,7 @@ import {
   BarChart3,
   BookOpen,
   Check,
+  CheckSquare,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -107,6 +108,12 @@ const APP_SECTION_ITEMS: AppSectionItem[] = [
     label: 'Обзор кабинета',
     sublabel: 'Быстрый старт и сводка',
     icon: Home,
+  },
+  {
+    id: 'tasks',
+    label: 'Мои задачи',
+    sublabel: 'Все дела, поручения и календарь',
+    icon: CheckSquare,
   },
   {
     id: 'knowledge',

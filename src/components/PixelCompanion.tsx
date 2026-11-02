@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArrowRight,
   Bell,
   BellOff,
   Brain,
@@ -141,6 +142,7 @@ interface PixelCompanionProps {
   onOpenLiveVoice?: () => void;
   onOpenRightPanelVoiceSettings?: () => void;
   forceOpenChatTrigger?: number;
+  onNavigate?: (section: NavSection) => void;
 }
 
 type CompanionPanelTab = 'chat' | 'tasks' | 'memory';
@@ -151,7 +153,9 @@ type TaskFilterMode =
   | 'week'
   | 'urgent'
   | 'overdue'
-  | 'waiting_response';
+  | 'waiting_response'
+  | 'waiting_anna'
+  | 'undated';
 
 interface FloatingHeartItem {
   id: string;
@@ -188,9 +192,11 @@ const AUTONOMOUS_MESSAGES: readonly string[] = [
 const TASK_STATUS_LABELS: Record<CompanionTaskStatus, string> = {
   new: 'Новая',
   in_progress: 'В работе',
-  postponed: 'Отложена',
-  waiting_response: 'Ждёт ответа',
-  done: 'Выполнена',
+  waiting_response: 'Ожидает ответа',
+  waiting_anna_action: 'Ожидает действия Анны',
+  done: 'Завершена',
+  cancelled: 'Отменена',
+  postponed: 'Ожидает действия Анны',
 };
 
 const TASK_PRIORITY_LABELS: Record<CompanionTaskPriority, string> = {
@@ -259,6 +265,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   onOpenLiveVoice,
   onOpenRightPanelVoiceSettings,
   forceOpenChatTrigger,
+  onNavigate,
 }) => {
   // Speech bubble state (separate from character)
   const [speechBubble, setSpeechBubble] = useState<{
@@ -2414,11 +2421,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
   const handleCycleTaskStatus = async (task: CompanionTaskRecord) => {
     const nextStatus: CompanionTaskStatus =
-      task.status === 'new' || task.status === 'postponed' || task.status === 'waiting_response'
+      task.status === 'done'
         ? 'in_progress'
         : task.status === 'in_progress'
-          ? 'done'
-          : 'new';
+        ? 'waiting_anna_action'
+        : task.status === 'waiting_anna_action' ||
+          task.status === 'waiting_response' ||
+          task.status === 'new' ||
+          task.status === 'postponed'
+        ? 'done'
+        : 'in_progress';
     const now = new Date();
 
     const updated: CompanionTaskRecord = {
@@ -2572,6 +2584,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       return schoolTasks.filter(
         (t) =>
           t.status === 'waiting_response' || Boolean(t.linkedDelegationTaskId)
+      );
+    }
+    if (taskFilter === 'waiting_anna') {
+      return schoolTasks.filter(
+        (t) => t.status === 'waiting_anna_action' || t.status === 'postponed'
+      );
+    }
+    if (taskFilter === 'undated') {
+      return schoolTasks.filter(
+        (t) => !t.dueDate && t.status !== 'done' && t.status !== 'cancelled'
       );
     }
     return schoolTasks;
@@ -4577,6 +4599,27 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                           ).length
                         })`,
                       },
+                      {
+                        id: 'waiting_anna',
+                        label: `Ждут действия (${
+                          schoolTasks.filter(
+                            (t) =>
+                              t.status === 'waiting_anna_action' ||
+                              t.status === 'postponed'
+                          ).length
+                        })`,
+                      },
+                      {
+                        id: 'undated',
+                        label: `Без даты (${
+                          schoolTasks.filter(
+                            (t) =>
+                              !t.dueDate &&
+                              t.status !== 'done' &&
+                              t.status !== 'cancelled'
+                          ).length
+                        })`,
+                      },
                     ] as Array<{ id: TaskFilterMode; label: string }>
                   ).map((tab) => (
                     <button
@@ -4595,6 +4638,17 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {onNavigate && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('tasks')}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer"
+                      title="Перейти в полноэкранный органайзер с календарём"
+                    >
+                      <span>Раздел «Мои задачи»</span>
+                      <ArrowRight className="w-3.5 h-3.5 text-[#00A8B5]" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setShowNewTaskForm((v) => !v)}

@@ -78,6 +78,7 @@ import {
 } from './components/KnowledgeBaseView';
 import { BackupsView } from './components/BackupsView';
 import { ConnectionsView } from './components/ConnectionsView';
+import { TasksView } from './components/TasksView';
 import {
   formatFileSizeRu,
   RightWorkspacePanel,
@@ -554,13 +555,28 @@ export default function App() {
           day: '2-digit',
         }).format(now);
 
-        const mappedStatus: CompanionTaskRecord['status'] =
-          delegationState.status === 'completed'
-            ? 'done'
-            : delegationState.status === 'needs_revision' ||
-                delegationState.status === 'error'
-              ? 'in_progress'
-              : 'waiting_response';
+        let mappedStatus: CompanionTaskRecord['status'];
+        if (existing && (existing.status === 'done' || existing.status === 'cancelled')) {
+          mappedStatus = existing.status;
+        } else if (delegationState.status === 'cancelled') {
+          mappedStatus = 'cancelled';
+        } else if (delegationState.status === 'draft') {
+          mappedStatus = 'new';
+        } else if (delegationState.status === 'pending_confirmation') {
+          mappedStatus = 'waiting_anna_action';
+        } else if (
+          delegationState.status === 'sent' ||
+          delegationState.status === 'processing'
+        ) {
+          mappedStatus = 'waiting_response';
+        } else if (delegationState.status === 'completed') {
+          // Specialist finished answering. Now Anna needs to review/act on the result!
+          mappedStatus = 'waiting_anna_action';
+        } else if (delegationState.status === 'needs_revision') {
+          mappedStatus = 'in_progress';
+        } else {
+          mappedStatus = 'in_progress';
+        }
 
         const summaryText =
           delegationState.reviewSummary ||
@@ -2518,6 +2534,23 @@ export default function App() {
                 />
               )}
 
+              {activeSection === 'tasks' && (
+                <TasksView
+                  tasks={companionTasks}
+                  activeSchool={activeSchool}
+                  onSaveTask={handleSaveCompanionTask}
+                  onDeleteTask={handleDeleteCompanionTask}
+                  onNavigate={handleSelectSection}
+                  onOpenSpecialistChat={(mode, schoolId, sessionId) => {
+                    handleSelectSchool(schoolId);
+                    handleChangeChatMode(mode);
+                    if (sessionId) {
+                      handleSelectSession(sessionId);
+                    }
+                  }}
+                />
+              )}
+
               {isAgentModeSection(activeSection) && (
                 <UnifiedChatView
                   activeMode={activeAgentMode}
@@ -2685,6 +2718,7 @@ export default function App() {
         onSaveCompanionPreferences={handleSaveCompanionPreferences}
         onOpenLiveVoice={handleOpenRightPanelVoiceSettings}
         onOpenRightPanelVoiceSettings={handleOpenRightPanelVoiceSettings}
+        onNavigate={handleSelectSection}
       />
 
       {/* MODAL 1: Chat File Preview & Manager Confirmation Modal */}

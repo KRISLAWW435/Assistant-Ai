@@ -33,6 +33,7 @@ interface TopBarProps {
 
 const SECTION_TITLES: Record<NavSection, string> = {
   home: 'Обзор кабинета',
+  tasks: 'Мои задачи',
   marketer: 'Маркетолог',
   manager: 'Менеджер по работе с родителями',
   methodist: 'Методист',

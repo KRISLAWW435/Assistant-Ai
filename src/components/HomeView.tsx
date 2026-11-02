@@ -5,6 +5,7 @@ import {
   BarChart3,
   BookOpen,
   Check,
+  CheckSquare,
   Clock,
   Cpu,
   GraduationCap,
@@ -105,6 +106,14 @@ export const HomeView: React.FC<HomeViewProps> = ({
               </button>
 
               {/* Secondary Subtle Links */}
+              <button
+                type="button"
+                onClick={() => onNavigate('tasks')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-slate-700 bg-slate-100 hover:text-slate-900 hover:bg-slate-200/90 transition-colors"
+              >
+                <CheckSquare className="w-4 h-4 text-[#00A8B5]" />
+                <span>Мои задачи</span>
+              </button>
               <button
                 type="button"
                 onClick={() => onNavigate('knowledge')}
