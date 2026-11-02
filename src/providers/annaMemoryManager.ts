@@ -65,6 +65,18 @@ class AnnaMemoryManager {
         const raw = localStorage.getItem(WEB_STORAGE_KEY);
         if (raw) {
           const parsed = JSON.parse(raw) as AnnaMemoryBundle;
+          if (parsed && Array.isArray(parsed.memories)) {
+            let changed = false;
+            for (const initMem of INITIAL_ANNA_MEMORIES) {
+              if (!parsed.memories.some((m) => m.id === initMem.id)) {
+                parsed.memories.unshift(initMem);
+                changed = true;
+              }
+            }
+            if (changed) {
+              this.persistWebBundle(parsed);
+            }
+          }
           this.bundle = parsed;
           return parsed;
         }

@@ -730,6 +730,7 @@ export class VoiceManager {
     this.activeReadingSession = null;
     geminiTtsOutput.stop();
     browserSpeechOutput.stop();
+    geminiLiveClient.stopModelAudioPlayback();
     this.emitAudioLevel(0);
     this.updatePlaybackState({
       messageId: null,

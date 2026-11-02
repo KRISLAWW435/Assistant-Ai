@@ -98,6 +98,7 @@ import {
 import { MarkdownMessageContent } from './MarkdownMessageContent';
 import { browserSpeechInput } from '../providers/voice/browserSpeechInputProvider';
 import { voiceManager } from '../providers/voice/voiceManager';
+import { geminiLiveClient } from '../providers/voice/geminiLiveClient';
 import {
   CoordinatorSnapshot,
   pixelVoiceCoordinator,
@@ -1674,9 +1675,28 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       return;
     }
 
-    // 1.2 Stage 6.3 (2), 6.4 (1) & 6.5 (1, 4): Verbatim read aloud of last specialist response or resume stopped reading
-    // Strictly does NOT create a copy of the specialist's message in Pixel's chat (`companionMessages`)
+    // 1.2 Stage 6.3 (2), 6.4 (1) & 6.5 (1, 4): Verbatim read aloud or stop reading
     if (!EffectiveImage) {
+      if (pixelAgentCoordinator.parseStopReadingIntent(text)) {
+        if (voiceManager.isSpeaking() || voiceManager.isPaused()) {
+          voiceManager.stopSpeaking(true);
+          geminiLiveClient.stopModelAudioPlayback();
+          const stopNoticeMsg: CompanionMessage = {
+            id: `comp-pixel-stop-${nowMs + 1}`,
+            role: 'pixel',
+            content:
+              'Остановил чтение вслух. Вы можете сказать «Продолжи чтение», чтобы дослушать с места остановки.',
+            createdAt: formatTimeOnly(new Date(nowMs + 1)),
+            createdAtMs: nowMs + 1,
+            schoolId: activeSchool,
+            usedContextLabels: ['Остановка чтения'],
+          };
+          await onSaveCompanionMessages([...historyWithUser, stopNoticeMsg]);
+          updatePreferences({ mood: 'curious' });
+          return;
+        }
+      }
+
       const readAloudIntent = pixelAgentCoordinator.parseReadAloudIntent(
         text,
         activeSchool
@@ -1913,21 +1933,14 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         return;
       }
 
-      // Stage 1 requirement: On explicit commands («попроси Маркетолога...», «отправь Методисту...»),
-      // dispatch the internal delegation immediately without redundant confirmation or switching Anna's screen.
+      // Mandatory confirmation flow: prepare draft card with buttons («Отправить», «Изменить», «Отменить»)
+      // Strictly do NOT send to specialist before Anna confirms!
       updatePreferences({ mood: 'thinking' });
-      setIsPixelGenerating(true);
-      setPixelGenerationStage('generating');
-      try {
-        await pixelAgentCoordinator.executeDelegation({
-          intent: delegationIntent,
-          sourceMode: 'text',
-          userCompanionMessage: existingLastUser ? undefined : userMsg,
-        });
-      } finally {
-        setIsPixelGenerating(false);
-        setPixelGenerationStage(null);
-      }
+      await pixelAgentCoordinator.prepareDelegationForConfirmation({
+        intent: delegationIntent,
+        sourceMode: 'text',
+        userCompanionMessage: existingLastUser ? undefined : userMsg,
+      });
       return;
     }
 

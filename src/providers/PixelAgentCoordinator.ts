@@ -36,6 +36,7 @@ import {
   storageProvider,
 } from './storageProvider';
 import { voiceManager } from './voice/voiceManager';
+import { geminiLiveClient } from './voice/geminiLiveClient';
 import { getSyzranNow } from '../utils/syzranTime';
 
 export const PIXEL_DELEGATION_STATUS_LABELS: Record<
@@ -452,10 +453,14 @@ export function checkUtteranceCompleteness(
     };
   }
 
-  // 3. Instruction is just a bare verb or 1 short word without object (e.g., «разработать», «сделать для Renderia»)
+  // 3. Instruction is just a bare verb or polite/filler words without real business object (e.g., «пожалуйста», «новое сообщение», «написать для Renderia»)
+  const fillerRegex =
+    /(?:^|[^\p{L}\p{N}])(?:пожалуйста|плиз|пжл|пж|новое\s+сообщение|новое\s+поручение|новое\s+задание|новую\s+задачу|новое\s+письмо|сообщение|поручение|задание|задача|задачу|вопрос|письмо|привет|здравствуй|здравствуйте|добрый\s+день|добрый\s+вечер|доброе\s+утро|спасибо|благодарю)(?=$|[^\p{L}\p{N}])/giu;
+
   const strippedSchool = instrTrimmed
-    .replace(/\b(?:для\s+)?(?:школы\s+)?(?:renderia|рендерия|рендерии|рендерию|kiberone|киберван|киберон)\b/gi, '')
-    .replace(/[.!?,:;—–-]+/g, '')
+    .replace(/(?:^|[^\p{L}\p{N}])(?:для\s+)?(?:школы\s+)?(?:renderia|рендерия|рендерии|рендерию|kiberone|киберван|киберон)(?=$|[^\p{L}\p{N}])/giu, ' ')
+    .replace(fillerRegex, ' ')
+    .replace(/[.!?,:;—–-]+/g, ' ')
     .trim();
 
   const meaningfulWords = strippedSchool
@@ -465,7 +470,7 @@ export function checkUtteranceCompleteness(
   if (
     meaningfulWords.length === 0 ||
     (meaningfulWords.length === 1 &&
-      /^(?:разработать|разработайте|сделать|сделайте|написать|напишите|подготовить|подготовьте|составить|составьте|доработать|доработайте|переделать|переделайте|исправить|исправьте|уточнить|уточните|дополнить|дополните|добавить|добавьте|проверить|проверьте|придумать|придумайте|предложить|предложите|задача|поручение|вопрос|сообщение|ответ)$/i.test(
+      /^(?:разработать|разработайте|сделать|сделайте|написать|напишите|подготовить|подготовьте|составить|составьте|доработать|доработайте|переделать|переделайте|исправить|исправьте|уточнить|уточните|дополнить|дополните|добавить|добавьте|проверить|проверьте|придумать|придумайте|предложить|предложите|попросить|попроси|попросите|поручить|поручи|поручите|отправить|отправь|отправьте|передать|передай|передайте|задача|поручение|вопрос|сообщение|ответ)$/i.test(
         meaningfulWords[0]
       ))
   ) {
@@ -1131,6 +1136,23 @@ export class PixelAgentCoordinator {
   }
 
   /**
+   * Stage 6.4 (1): Detects natural commands to stop or pause ongoing read-aloud playback:
+   * - «Стоп»
+   * - «Останови чтение»
+   * - «Хватит»
+   * - «Пауза»
+   * - «Перестань читать»
+   */
+  public parseStopReadingIntent(rawText: string): boolean {
+    const text = (rawText || '').trim();
+    if (!text || text.length < 3) return false;
+    const lower = text.toLowerCase();
+    return /^(?:пиксель[\s,:-]*)?(?:стоп|останови(?:те)?\s+(?:чтение|озвучку)|остановись|хватит|перестань(?:\s+читать)?|пауза|поставь\s+на\s+паузу|замолчи)(?:[\s.!,])*$/i.test(
+      lower
+    );
+  }
+
+  /**
    * Stage 6.4 (1), Stage 6.5 (1 & 4) & Coordinator Stage 6: Reads aloud the full specialist response
    * verbatim in sequential chunks using Pixel's single unified voice:
    * - Decoupled from currently open screen or chat: queries completed delegation tasks or specialist sessions directly.
@@ -1147,6 +1169,9 @@ export class PixelAgentCoordinator {
     messageId?: string;
     reason?: string;
   }> {
+    // 0. Immediately silence any active Live Voice conversational speech so voices never overlap!
+    geminiLiveClient.stopModelAudioPlayback();
+
     const activeSchool = this.deps?.getActiveSchool() || 'kiberone';
     const targetMode = intent.targetMode || this.resolveActiveAgentMode();
     let resolvedSchool: SchoolId = intent.targetSchool || activeSchool;
@@ -3443,10 +3468,25 @@ export class PixelAgentCoordinator {
 
     cleaned = cleaned.replace(/^[,.:;-]+\s*/, '').trim();
 
+    // Strip polite words and generic conversational fillers from the end or entire phrase
+    const fillerWordRegex =
+      /(?:^|[^\p{L}\p{N}])(?:пожалуйста|плиз|пжл|пж|новое\s+сообщение|новое\s+поручение|новое\s+задание|новую\s+задачу|новое\s+письмо|сообщение|поручение|задание|задача|задачу|вопрос|письмо)(?=$|[^\p{L}\p{N}])/giu;
+    const strippedMeaningful = cleaned
+      .replace(fillerWordRegex, ' ')
+      .replace(/^[,.:;-]+\s*/, '')
+      .replace(/[,.:;-]+\s*$/, '')
+      .trim();
+
+    const hasRealInstruction = strippedMeaningful.length >= 3;
+    if (!hasRealInstruction) {
+      cleaned = '';
+    }
+
     const completeness = checkUtteranceCompleteness(text, cleaned);
 
     const isBareOrVague =
       completeness.isIncomplete ||
+      !hasRealInstruction ||
       cleaned.length < 4 ||
       /^(?:доработать(?:\s+(?:ответ|его|это|результат|вариант))?|переделать(?:\s+(?:ответ|его|это))?|исправить(?:\s+(?:ответ|его|это))?|уточнить(?:\s+(?:ответ|детали|это))?|дополнить(?:\s+(?:ответ|его|это))?|задать\s+(?:уточняющий\s+)?вопрос|уточняющий\s+вопрос|вопрос|сообщение|что-нибудь|это|ответ|ещё\s+раз)$/i.test(
         cleaned
@@ -3455,13 +3495,12 @@ export class PixelAgentCoordinator {
     if (cleaned.length >= 2) {
       cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
     } else {
-      cleaned = text;
+      cleaned = '';
     }
 
-    const cleanInstruction = buildCleanBusinessInstruction(
-      cleaned,
-      targetSchool
-    );
+    const cleanInstruction = cleaned
+      ? buildCleanBusinessInstruction(cleaned, targetSchool)
+      : '';
 
     return {
       isDelegation: true,
@@ -3492,6 +3531,19 @@ export class PixelAgentCoordinator {
       if (this.processedSpokenTurnIds.has(msg.id)) continue;
 
       const activeSchool = this.deps.getActiveSchool();
+
+      // 0. Check stop / pause reading command («Стоп», «Останови чтение», «Хватит», «Пауза»)
+      if (this.parseStopReadingIntent(msg.content)) {
+        this.processedSpokenTurnIds.add(msg.id);
+        if (voiceManager.isSpeaking() || voiceManager.isPaused()) {
+          voiceManager.stopSpeaking(true);
+          geminiLiveClient.stopModelAudioPlayback();
+          this.showBubble(
+            'Остановил чтение. Скажите «Продолжи чтение», чтобы дослушать с места остановки.'
+          );
+        }
+        continue;
+      }
 
       // 1. Check read-aloud / resume command («Пиксель, прочитай ответ», «Продолжи чтение»)
       const readIntent = this.parseReadAloudIntent(msg.content, activeSchool);
@@ -3588,7 +3640,7 @@ export class PixelAgentCoordinator {
         if (clarifiedIntent.isAmbiguous) {
           void this.requestClarificationForAmbiguousIntent(clarifiedIntent);
         } else {
-          void this.executeDelegation({
+          void this.prepareDelegationForConfirmation({
             intent: clarifiedIntent,
             sourceMode: 'voice',
             skipAddingUserCompanionMessage: true,
@@ -3608,8 +3660,8 @@ export class PixelAgentCoordinator {
         continue;
       }
 
-      // Stage 1: Direct execution of explicit specialist delegation without unnecessary confirmation
-      void this.executeDelegation({
+      // Always present draft for confirmation with buttons («Отправить», «Изменить», «Отменить»)
+      void this.prepareDelegationForConfirmation({
         intent,
         sourceMode: 'voice',
         skipAddingUserCompanionMessage: true,

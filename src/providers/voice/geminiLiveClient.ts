@@ -485,7 +485,11 @@ export class GeminiLiveClient {
     }, 600);
   }
 
-  private stopModelAudioPlayback(): void {
+  public isModelAudioPlaying(): boolean {
+    return this.modelIsSpeaking;
+  }
+
+  public stopModelAudioPlayback(): void {
     this.modelIsSpeaking = false;
     this.emitOutputAudioLevel(0);
     for (const source of this.activeSourceNodes) {
