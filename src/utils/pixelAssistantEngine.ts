@@ -10,6 +10,11 @@ import {
   SchoolId,
 } from '../types/assistant';
 import { SCHOOLS } from '../config/schoolsAndModes';
+import {
+  formatSyzranIsoDateRu,
+  getSyzranNow,
+  toSyzranIsoDate,
+} from './syzranTime';
 
 export const MEMORY_CATEGORY_META: Record<
   CompanionMemoryCategory,
@@ -37,27 +42,12 @@ export const MEMORY_CATEGORY_META: Record<
   },
 };
 
-export function toIsoDateString(date: Date): string {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const dd = String(date.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+export function toIsoDateString(date: Date = new Date()): string {
+  return toSyzranIsoDate(date);
 }
 
 export function formatIsoDateRu(isoDate: string): string {
-  if (!isoDate) return 'Без срока';
-  const today = toIsoDateString(new Date());
-  const tomorrowDate = new Date();
-  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-  const tomorrow = toIsoDateString(tomorrowDate);
-
-  const parts = isoDate.split('-');
-  if (parts.length !== 3) return isoDate;
-  const formatted = `${parts[2]}.${parts[1]}.${parts[0]}`;
-
-  if (isoDate === today) return `Сегодня (${formatted})`;
-  if (isoDate === tomorrow) return `Завтра (${formatted})`;
-  return formatted;
+  return formatSyzranIsoDateRu(isoDate);
 }
 
 const SENSITIVE_PATTERNS = [
@@ -339,7 +329,11 @@ export function buildSelectivePixelContext(
       status: t.status,
     }));
 
-  const contextSummaryLabels: string[] = [`Школа: ${schoolCfg.name}`];
+  const syzranNow = getSyzranNow();
+  const contextSummaryLabels: string[] = [
+    `Школа: ${schoolCfg.name}`,
+    `Сызрань: ${syzranNow.time24}`,
+  ];
   if (activeChatContext) {
     contextSummaryLabels.push(
       `Чат: ${activeChatContext.specialistTitle} (${activeChatContext.messagesCount} сообщ.)`

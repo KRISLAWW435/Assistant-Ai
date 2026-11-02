@@ -268,6 +268,13 @@ export class GeminiTtsOutputProvider implements ISpeechOutputProvider {
     }
   }
 
+  public setVolume(volume: number): void {
+    const clamped = Math.max(0, Math.min(1, Number(volume) || 0));
+    if (this.currentAudio) {
+      this.currentAudio.volume = clamped;
+    }
+  }
+
   private startAudioLevelTracking(
     audio: HTMLAudioElement,
     envelope: number[],

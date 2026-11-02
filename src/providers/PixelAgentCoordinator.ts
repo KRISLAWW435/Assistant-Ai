@@ -36,6 +36,7 @@ import {
   storageProvider,
 } from './storageProvider';
 import { voiceManager } from './voice/voiceManager';
+import { getSyzranNow } from '../utils/syzranTime';
 
 export const PIXEL_DELEGATION_STATUS_LABELS: Record<
   CoordinatorTaskStatus,
@@ -46,7 +47,7 @@ export const PIXEL_DELEGATION_STATUS_LABELS: Record<
   sent: 'Отправлено',
   processing: 'Выполняется',
   completed: 'Завершено',
-  needs_revision: 'Требует доработки',
+  needs_revision: 'Требуется доработка',
   failed: 'Ошибка',
   cancelled: 'Отменено',
   created: 'Создано',
@@ -106,6 +107,8 @@ export interface ParsedDelegationIntent {
   targetMode: AgentMode;
   targetSpecialistNameRu: string;
   targetSchool: SchoolId;
+  targetBothSchools?: boolean;
+  forceNewChat?: boolean;
   hasExplicitSchool?: boolean;
   preferredSessionId?: string;
   instruction: string;
@@ -187,6 +190,7 @@ export interface PixelAgentCoordinatorDeps {
   ) => void;
   onShowPixelBubble?: (text: string) => void;
   onNotifyLiveVoice?: (notificationText: string) => void;
+  onDelegatedTaskSyncToAnnaTasks?: (taskState: PixelDelegatedTaskState) => void;
 }
 
 function isAgentModeSection(section: NavSection): section is AgentMode {
@@ -199,10 +203,7 @@ function isAgentModeSection(section: NavSection): section is AgentMode {
 }
 
 function formatTimeNow(date: Date = new Date()): string {
-  return date.toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return getSyzranNow(date).time24;
 }
 
 function hasExplicitSchoolMention(text: string): boolean {
@@ -1341,8 +1342,7 @@ export class PixelAgentCoordinator {
     if (!this.deps) return;
     const activeSchool = this.deps.getActiveSchool();
     const targetMode = intent.targetMode || this.resolveActiveAgentMode();
-    const targetSchool =
-      intent.targetSchool || (intent.hasExplicitSchool ? intent.targetSchool : activeSchool);
+    const targetSchool: SchoolId = intent.targetSchool || activeSchool;
     const modeCfg = AGENT_MODES[targetMode];
     const schoolCfg = SCHOOLS[targetSchool];
     const genitiveName = SPECIALIST_NAMES_GENITIVE_RU[targetMode];
@@ -1846,6 +1846,8 @@ export class PixelAgentCoordinator {
       sourceMode: params?.sourceMode || 'text',
       userCompanionMessage: params?.userCompanionMessage,
       existingTaskId: draft.taskId,
+      isRevisionExecution: true,
+      revisionIteration: draft.iteration,
     });
   }
 
@@ -2788,12 +2790,11 @@ export class PixelAgentCoordinator {
   ): Promise<void> {
     if (!this.deps) return;
 
-    await this.switchToWorkingChat({
-      schoolId: intent.targetSchool,
-      mode: intent.targetMode,
-      createIfMissing: true,
-      announceInChat: false,
-    });
+    // Do NOT switch Anna's screen when asking a clarification question
+    const matchingChats = this.getAllWorkingChats().filter(
+      (c) => c.schoolId === intent.targetSchool && c.mode === intent.targetMode
+    );
+    void matchingChats;
 
     this.pendingClarification = {
       targetMode: intent.targetMode,
@@ -2897,18 +2898,14 @@ export class PixelAgentCoordinator {
       intent.cleanInstruction ||
       buildCleanBusinessInstruction(intent.instruction, targetSchool);
 
-    // Stage 6.5 (1): Autonomously find or open the target chat for (targetSchool, targetMode)
-    const switchedItem = await this.switchToWorkingChat({
-      schoolId: targetSchool,
-      mode: targetMode,
-      sessionId: intent.preferredSessionId,
-      createIfMissing: true,
-      announceInChat: false,
-    });
-
+    // Find existing working chat without forcibly switching Anna's main screen
     const matchingChats = this.getAllWorkingChats().filter(
       (c) => c.schoolId === targetSchool && c.mode === targetMode
     );
+    const switchedItem =
+      (intent.preferredSessionId
+        ? matchingChats.find((c) => c.sessionId === intent.preferredSessionId)
+        : undefined) || matchingChats[0] || null;
 
     const draft: PixelPendingDelegationDraft = {
       draftId,
@@ -3402,15 +3399,27 @@ export class PixelAgentCoordinator {
     const isSupportedSpecialist = true;
     const targetSchool = detectTargetSchoolFromText(text, activeSchool);
 
-    const isFollowUp =
-      hasImplicitFollowUpPattern ||
-      /(?:^|[^а-яёa-z0-9])(?:спроси|уточни|доработать|доработай|доработку|переделать|исправить|дополнить|уточняющий\s+вопрос|задай\s+вопрос)(?=$|[^а-яёa-z0-9])/i.test(
+    const hasBothSchoolsKeywords =
+      /(?:обе(?:их|им)?\s+школ|по\s+обеим\s+школам|для\s+обеих\s+школ|в\s+обе\s+школы|(?:kiber|киберван|киберон).*?(?:renderia|рендери)|(?:renderia|рендери).*?(?:kiber|киберван|киберон))/i.test(
         lower
       );
+
+    const forceNewChat =
+      /(?:создай(?:те)?\s+новый\s+чат|в\s+новом\s+чате|открой(?:те)?\s+новый\s+чат|начни(?:те)?\s+новый\s+(?:чат|диалог)|нов(?:ый|ую)\s+(?:чат|ветку|сессию))/i.test(
+        lower
+      );
+
+    const isFollowUp =
+      !forceNewChat &&
+      (hasImplicitFollowUpPattern ||
+        /(?:^|[^а-яёa-z0-9])(?:спроси|уточни|доработать|доработай|доработку|переделать|исправить|дополнить|уточняющий\s+вопрос|задай\s+вопрос)(?=$|[^а-яёa-z0-9])/i.test(
+          lower
+        ));
 
     let cleaned = text
       .replace(/^(?:пиксель[\s,.:!-]*)+/i, '')
       .replace(/^(?:пожалуйста[\s,.:!-]*)+/i, '')
+      .replace(/(?:создай(?:те)?\s+новый\s+чат\s+(?:с\s+[а-яё]+\s+)?(?:и\s+)?|в\s+новом\s+чате\s*)/gi, '')
       .trim();
 
     const prefixPatterns: RegExp[] = [
@@ -3460,6 +3469,8 @@ export class PixelAgentCoordinator {
       targetMode,
       targetSpecialistNameRu,
       targetSchool,
+      targetBothSchools: hasBothSchoolsKeywords,
+      forceNewChat,
       instruction: cleaned,
       cleanInstruction,
       originalText: text,
@@ -3577,7 +3588,7 @@ export class PixelAgentCoordinator {
         if (clarifiedIntent.isAmbiguous) {
           void this.requestClarificationForAmbiguousIntent(clarifiedIntent);
         } else {
-          void this.prepareDelegationForConfirmation({
+          void this.executeDelegation({
             intent: clarifiedIntent,
             sourceMode: 'voice',
             skipAddingUserCompanionMessage: true,
@@ -3597,7 +3608,8 @@ export class PixelAgentCoordinator {
         continue;
       }
 
-      void this.prepareDelegationForConfirmation({
+      // Stage 1: Direct execution of explicit specialist delegation without unnecessary confirmation
+      void this.executeDelegation({
         intent,
         sourceMode: 'voice',
         skipAddingUserCompanionMessage: true,
@@ -3606,13 +3618,14 @@ export class PixelAgentCoordinator {
   }
 
   /**
-   * Executes a real delegated task or follow-up message in the target specialist's existing working chat:
-   * 1. Status 'created' (Создано): Finds the target session for targetMode & targetSchool and switches workspace to it.
-   * 2. Status 'in_progress' (Выполняется): Sends real message from Pixel with taskId to specialist chat & runs AI generation.
-   * 3. Saves specialist's response to IndexedDB & session state.
-   * 4. Status 'reviewing' (Проверяется Пикселем): Verifies the actual result against Anna's instruction.
-   * 5. Status 'needs_revision' (Требует доработки): Up to 3 iterations of revision if needed.
-   * 6. Status 'completed' (Завершено) or 'error' (Ошибка): Updates Anna in Pixel chat / Live Voice and offers read-aloud & next steps.
+   * Executes a real delegated task or follow-up message in the target specialist's working chat
+   * WITHOUT forcibly switching Anna's main screen away from her current work:
+   * 1. Status 'created' (Создано): Finds or creates the target session for targetMode & targetSchool.
+   * 2. Status 'sent' (Отправлено): Persists real message from Pixel with taskId to specialist chat.
+   * 3. Status 'in_progress' (Выполняется): Streams AI specialist generation in background.
+   * 4. Saves specialist's response to IndexedDB & session state regardless of which chat is open.
+   * 5. Status 'completed' (Завершено) or 'needs_revision' (Требуется доработка) or 'error' (Ошибка):
+   *    Analyzes response, delivers summary & next steps into Pixel's dialog, and syncs to Anna's Task Manager.
    */
   public async executeDelegation(params: {
     intent: ParsedDelegationIntent;
@@ -3620,12 +3633,50 @@ export class PixelAgentCoordinator {
     userCompanionMessage?: CompanionMessage;
     skipAddingUserCompanionMessage?: boolean;
     existingTaskId?: string;
+    isRevisionExecution?: boolean;
+    revisionIteration?: number;
+    isSecondaryBothSchoolRun?: boolean;
   }): Promise<PixelDelegatedTaskState> {
     if (!this.deps) {
       throw new Error('PixelAgentCoordinator не инициализирован.');
     }
 
     const { intent, sourceMode } = params;
+
+    // If Anna asked to delegate to BOTH schools («для обеих школ»), execute for KIBERONE and RENDERIA
+    if (intent.targetBothSchools && !params.isSecondaryBothSchoolRun) {
+      const primarySchool: SchoolId = 'kiberone';
+      const secondarySchool: SchoolId = 'renderia';
+      const primaryResult = await this.executeDelegation({
+        ...params,
+        intent: {
+          ...intent,
+          targetSchool: primarySchool,
+          targetBothSchools: false,
+          cleanInstruction: buildCleanBusinessInstruction(
+            intent.instruction,
+            primarySchool
+          ),
+        },
+        isSecondaryBothSchoolRun: true,
+      });
+      void this.executeDelegation({
+        ...params,
+        skipAddingUserCompanionMessage: true,
+        intent: {
+          ...intent,
+          targetSchool: secondarySchool,
+          targetBothSchools: false,
+          cleanInstruction: buildCleanBusinessInstruction(
+            intent.instruction,
+            secondarySchool
+          ),
+        },
+        isSecondaryBothSchoolRun: true,
+      });
+      return primaryResult;
+    }
+
     const targetSchool = intent.targetSchool;
     const targetMode: AgentMode = intent.targetMode;
     const schoolCfg = SCHOOLS[targetSchool];
@@ -3652,26 +3703,31 @@ export class PixelAgentCoordinator {
       intent.preferredSessionId || this.deps.getActiveSessionId?.() || null;
 
     let targetSession: ChatSession | undefined;
-    if (activeSessionId) {
-      const openCandidate = currentSessions.find(
-        (s) => s.id === activeSessionId
-      );
-      if (
-        openCandidate &&
-        openCandidate.schoolId === targetSchool &&
-        openCandidate.mode === targetMode
-      ) {
-        targetSession = openCandidate;
+    let isNewChatCreated = false;
+
+    if (!intent.forceNewChat) {
+      if (activeSessionId) {
+        const openCandidate = currentSessions.find(
+          (s) => s.id === activeSessionId
+        );
+        if (
+          openCandidate &&
+          openCandidate.schoolId === targetSchool &&
+          openCandidate.mode === targetMode
+        ) {
+          targetSession = openCandidate;
+        }
+      }
+
+      if (!targetSession) {
+        targetSession = currentSessions.find(
+          (s) => s.schoolId === targetSchool && s.mode === targetMode
+        );
       }
     }
 
     if (!targetSession) {
-      targetSession = currentSessions.find(
-        (s) => s.schoolId === targetSchool && s.mode === targetMode
-      );
-    }
-
-    if (!targetSession) {
+      isNewChatCreated = true;
       targetSession = buildNewSpecialistSession(
         targetMode,
         targetSchool,
@@ -3685,7 +3741,8 @@ export class PixelAgentCoordinator {
       await storageProvider.saveSession(targetSession);
     }
 
-    const isContinuingExistingChat = targetSession.messages.length > 0;
+    const isContinuingExistingChat =
+      !isNewChatCreated && targetSession.messages.length > 0;
     const existingTask = params.existingTaskId
       ? this.tasks.get(params.existingTaskId)
       : undefined;
@@ -3694,11 +3751,16 @@ export class PixelAgentCoordinator {
       ? params.revisionIteration || (existingTask?.iterationCount || 0) + 1
       : (existingTask?.iterationCount || 0);
 
-    // 2. Initialize task state: 'created' (Создано) or 'in_progress'
+    // 2. Initialize task state: 'created' (Создано) with all required linked entities
     let taskState: PixelDelegatedTaskState = {
       taskId,
       targetMode,
+      specialistId: targetMode,
       schoolId: targetSchool,
+      chatId: targetSession.id,
+      sessionId: targetSession.id,
+      sessionTitle: targetSession.title,
+      isNewChatCreated,
       instruction: intent.instruction,
       cleanInstruction:
         intent.cleanInstruction ||
@@ -3706,8 +3768,6 @@ export class PixelAgentCoordinator {
       originalUserRequest: intent.originalText,
       status: 'created',
       statusLabelRu: PIXEL_DELEGATION_STATUS_LABELS.created,
-      sessionId: targetSession.id,
-      sessionTitle: targetSession.title,
       iterationCount: currentIteration,
       maxRevisions: MAX_DELEGATION_REVISIONS,
       revisions: existingTask?.revisions || [],
@@ -3722,24 +3782,28 @@ export class PixelAgentCoordinator {
     this.tasks.set(taskId, taskState);
     this.saveTasksToStorage();
     this.notifyListeners(taskState);
+    this.deps.onDelegatedTaskSyncToAnnaTasks?.(taskState);
 
-    // Create Pixel status/report message in companionMessages
+    // Create Pixel status/report message in companionMessages showing chat creation & message dispatch
     const pixelCompanionMsgId = `comp-pixel-delegation-${taskId}`;
     const initialPixelCompanionMsg: CompanionMessage = {
       id: pixelCompanionMsgId,
       role: 'pixel',
-      content: isContinuingExistingChat
-        ? `Анна, я передаю ваш запрос **${dativeName}** (${schoolCfg.name}) в рабочий чат «*${targetSession.title}*»: «*${intent.instruction}*»…`
-        : `Анна, я создал поручение для **${genitiveName}** (${schoolCfg.name}): «*${intent.instruction}*».\nОтправляю задачу в рабочий чат ${genitiveName} и запускаю выполнение…`,
+      content: isNewChatCreated
+        ? `✅ **Создан новый чат** «*${targetSession.title}*» (${modeCfg.shortTitle} · ${schoolCfg.name}).\nОтправляю поручение **${dativeName}**: «*${intent.instruction}*»…`
+        : isContinuingExistingChat
+        ? `✅ **Найден рабочий чат** «*${targetSession.title}*» (${modeCfg.shortTitle} · ${schoolCfg.name}).\nПередаю запрос **${dativeName}**: «*${intent.instruction}*»…`
+        : `✅ **Чат специалиста:** «*${targetSession.title}*» (${modeCfg.shortTitle} · ${schoolCfg.name}).\nОтправляю поручение **${dativeName}**: «*${intent.instruction}*»…`,
       createdAt: formatTimeNow(new Date(nowMs + 1)),
       createdAtMs: nowMs + 1,
       schoolId: targetSchool,
       usedContextLabels: [
         `Школа: ${schoolCfg.name}`,
         `Специалист: ${modeCfg.shortTitle}`,
-        isContinuingExistingChat
-          ? `Чат: ${targetSession.title}`
-          : `Поручение: ${taskId}`,
+        isNewChatCreated
+          ? `Новый чат: ${targetSession.title}`
+          : `Чат: ${targetSession.title}`,
+        `Поручение: ${taskId}`,
       ],
       delegatedTask: taskState,
     };
@@ -3782,6 +3846,7 @@ export class PixelAgentCoordinator {
       this.tasks.set(taskId, taskState);
       this.saveTasksToStorage();
       this.notifyListeners(taskState);
+      this.deps.onDelegatedTaskSyncToAnnaTasks?.(taskState);
 
       const latestCompanion = this.deps.getCompanionMessages();
       const updatedCompanion = latestCompanion.map((m) =>
@@ -3921,6 +3986,37 @@ export class PixelAgentCoordinator {
           content: `[Выполняется генерация ответа специалиста (${modeCfg.shortTitle}) по запросу Пикселя…]`,
         },
       ]);
+
+      // Transition status to 'sent' (Отправлено) then 'in_progress' (Выполняется) with concrete messageId & chatId
+      await updateTaskAndCompanionMessage(
+        {
+          status: 'sent',
+          statusLabelRu: PIXEL_DELEGATION_STATUS_LABELS.sent,
+          chatId: sessionWithStreaming.id,
+          sessionId: sessionWithStreaming.id,
+          sessionTitle: sessionWithStreaming.title,
+          specialistId: targetMode,
+          messageId: pixelMsgId,
+          resultMessageId: specialistMsgId,
+        },
+        isNewChatCreated
+          ? `✅ **Создан новый чат** «*${sessionWithStreaming.title}*» (${modeCfg.shortTitle} · ${schoolCfg.name}).\n📨 **Сообщение отправлено** (${pixelMsgId}). Специалист готовит ответ…`
+          : `📨 **Сообщение отправлено** в чат «*${sessionWithStreaming.title}*» (${modeCfg.shortTitle} · ${schoolCfg.name}).\n⏳ **Выполняется:** специалист готовит ответ по запросу «*${intent.instruction}*»…`
+      );
+
+      await updateTaskAndCompanionMessage({
+        status: 'in_progress',
+        statusLabelRu:
+          currentIteration > 0
+            ? `${PIXEL_DELEGATION_STATUS_LABELS.in_progress} (доработка #${currentIteration})`
+            : PIXEL_DELEGATION_STATUS_LABELS.in_progress,
+        chatId: sessionWithStreaming.id,
+        sessionId: sessionWithStreaming.id,
+        sessionTitle: sessionWithStreaming.title,
+        specialistId: targetMode,
+        messageId: pixelMsgId,
+        resultMessageId: specialistMsgId,
+      });
 
       this.deps.onSpecialistGenerationStateChange?.({
         isGenerating: true,

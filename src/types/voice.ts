@@ -153,6 +153,8 @@ export interface GeminiVoiceSampleOption {
 }
 
 export interface PixelVoiceSettings {
+  ttsEnabled?: boolean; // whether voice output (TTS) is enabled (default true)
+  continuousListeningEnabled?: boolean; // whether continuous listening mode is enabled
   ttsProviderId: PixelTtsProviderId;
   selectedGeminiVoice: string; // 'Aoede' | 'Achernar' | 'Sulafat' | 'Vindemiatrix'
   selectedTimbreId: PixelTimbreId; // 'natural' | 'bright' | 'high'
@@ -463,6 +465,8 @@ export const WAKE_WORD_STATE_META: Record<WakeWordState, WakeWordStateMeta> = {
 };
 
 export const DEFAULT_PIXEL_VOICE_SETTINGS: PixelVoiceSettings = {
+  ttsEnabled: true,
+  continuousListeningEnabled: false,
   ttsProviderId: 'gemini',
   selectedGeminiVoice: 'Aoede',
   selectedTimbreId: 'bright',
@@ -472,7 +476,7 @@ export const DEFAULT_PIXEL_VOICE_SETTINGS: PixelVoiceSettings = {
   rate: 1.0,
   pitch: 1.05,
   volume: 1.0,
-  wakeWordEnabled: true,
+  wakeWordEnabled: false,
   wakeWordSensitivity: 'normal',
   ttsModel: 'gemini-3.8-flash-lite-tts',
 };

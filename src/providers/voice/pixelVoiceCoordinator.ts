@@ -31,6 +31,7 @@ import {
 } from './geminiLiveClient';
 import { wakeWordManager } from './wakeWordManager';
 import { voiceManager } from './voiceManager';
+import { browserSpeechInput } from './browserSpeechInputProvider';
 import { LiveVoiceState, PixelVoiceMode, WakeWordState } from '../../types/voice';
 
 export interface CoordinatorSnapshot {
@@ -148,20 +149,39 @@ export class PixelVoiceCoordinator {
    * Set global mode (OFF | STANDBY | LIVE)
    */
   public async setMode(targetMode: PixelVoiceMode): Promise<void> {
-    if (this.mode === targetMode) return;
-
     if (targetMode === 'OFF') {
       await this.stopLive(false);
       wakeWordManager.stop();
+      browserSpeechInput.cancel();
+      browserSpeechInput.stop();
       this.mode = 'OFF';
-      await voiceManager.updateSettings({ wakeWordEnabled: false });
+      this.liveState = 'idle';
+      this.wakeWordState = 'mic_muted';
+      this.errorDetail = undefined;
+      voiceManager.updateSettings({
+        wakeWordEnabled: false,
+        continuousListeningEnabled: false,
+      });
       this.notifyListeners();
-    } else if (targetMode === 'STANDBY') {
+      return;
+    }
+
+    if (this.mode === targetMode) return;
+
+    if (targetMode === 'STANDBY') {
       if (this.mode === 'LIVE') {
+        voiceManager.updateSettings({
+          wakeWordEnabled: true,
+          continuousListeningEnabled: true,
+        });
         await this.stopLive(true);
       } else {
         this.mode = 'STANDBY';
-        await voiceManager.updateSettings({ wakeWordEnabled: true });
+        this.errorDetail = undefined;
+        voiceManager.updateSettings({
+          wakeWordEnabled: true,
+          continuousListeningEnabled: true,
+        });
         wakeWordManager.startListening();
       }
       this.notifyListeners();
@@ -242,12 +262,10 @@ export class PixelVoiceCoordinator {
       const msg = err instanceof Error ? err.message : String(err);
       this.errorDetail = msg;
       this.liveState = 'error';
-      // If mic or connection failed, recover back to STANDBY after short pause
-      setTimeout(() => {
-        if (this.liveState === 'error') {
-          void this.stopLive(true);
-        }
-      }, 3000);
+      this.mode = 'OFF';
+      this.stopTimer();
+      geminiLiveClient.stopSession();
+      wakeWordManager.stop();
     } finally {
       this.isTransitioning = false;
       this.notifyListeners();
@@ -255,13 +273,15 @@ export class PixelVoiceCoordinator {
   }
 
   /**
-   * Stop Live Voice session cleanly and optionally restore STANDBY
+   * Stop Live Voice session cleanly and optionally restore STANDBY only if wakeWordEnabled is true
    */
-  public async stopLive(restoreStandby = true): Promise<void> {
+  public async stopLive(restoreStandby = false): Promise<void> {
     if (this.isStoppingLive) return;
     this.isStoppingLive = true;
 
-    const targetMode: PixelVoiceMode = restoreStandby ? 'STANDBY' : 'OFF';
+    const shouldRestoreStandby =
+      Boolean(restoreStandby) && Boolean(voiceManager.getSettings().wakeWordEnabled);
+    const targetMode: PixelVoiceMode = shouldRestoreStandby ? 'STANDBY' : 'OFF';
     this.mode = targetMode;
     this.liveState = 'idle';
 
@@ -283,11 +303,50 @@ export class PixelVoiceCoordinator {
         wakeWordManager.resumeAfterLiveMode();
       } else {
         wakeWordManager.stop();
+        this.wakeWordState = 'mic_muted';
       }
     } finally {
       this.isStoppingLive = false;
       this.notifyListeners();
     }
+  }
+
+  /**
+   * Guaranteed master stop for all voice activity:
+   * Stops microphone capture, Gemini Live session, wake word detection, browser STT, and TTS audio playback.
+   */
+  public async disableAllVoiceActivity(disableTtsSetting = false): Promise<void> {
+    this.stopTimer();
+    geminiLiveClient.stopSession();
+    wakeWordManager.stop();
+    browserSpeechInput.cancel();
+    browserSpeechInput.stop();
+    voiceManager.stopAll();
+
+    this.mode = 'OFF';
+    this.liveState = 'idle';
+    this.wakeWordState = 'mic_muted';
+    this.isMicMuted = false;
+    this.isPaused = false;
+    this.sessionStartTime = null;
+    this.sessionElapsedSec = 0;
+    this.errorDetail = undefined;
+
+    voiceManager.updateSettings({
+      wakeWordEnabled: false,
+      continuousListeningEnabled: false,
+      ...(disableTtsSetting ? { ttsEnabled: false } : {}),
+    });
+
+    this.notifyListeners();
+  }
+
+  public clearError(): void {
+    this.errorDetail = undefined;
+    if (this.liveState === 'error') {
+      this.liveState = 'idle';
+    }
+    this.notifyListeners();
   }
 
   /**
@@ -320,7 +379,8 @@ export class PixelVoiceCoordinator {
    */
   public async toggleStandby(): Promise<void> {
     if (this.mode === 'LIVE') {
-      await this.stopLive(true);
+      const restoreStandby = Boolean(voiceManager.getSettings().wakeWordEnabled);
+      await this.stopLive(restoreStandby);
       return;
     }
     if (this.mode === 'STANDBY') {
@@ -337,6 +397,11 @@ export class PixelVoiceCoordinator {
     const success = await wakeWordManager.requestMicrophonePermission();
     if (success) {
       this.mode = 'STANDBY';
+      this.errorDetail = undefined;
+      voiceManager.updateSettings({
+        wakeWordEnabled: true,
+        continuousListeningEnabled: true,
+      });
       this.notifyListeners();
     }
     return success;
@@ -344,7 +409,8 @@ export class PixelVoiceCoordinator {
 
   private async handleSessionEnded(): Promise<void> {
     if (this.mode !== 'LIVE' || this.isStoppingLive) return;
-    await this.stopLive(true);
+    const restoreStandby = Boolean(voiceManager.getSettings().wakeWordEnabled);
+    await this.stopLive(restoreStandby);
   }
 
   private startTimer(): void {

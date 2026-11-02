@@ -12,7 +12,7 @@ export type NavSection =
   | 'backups'
   | 'connections';
 
-export type RightPanelTab = 'materials' | 'preview' | 'search' | 'context';
+export type RightPanelTab = 'materials' | 'preview' | 'search' | 'context' | 'voice';
 
 export type KnowledgeCategoryKey =
   | 'description'
@@ -66,6 +66,7 @@ export interface ChatAttachment {
   name: string;
   extension: string;
   sizeBytes: number;
+  sizeFormatted?: string;
   extractedText: string;
   status?: DocumentProcessingStatus;
   statusMessage?: string;
@@ -76,6 +77,8 @@ export interface ChatAttachment {
   createdAtMs?: number;
   dataUrl?: string;
   messageId?: string;
+  schoolId?: SchoolId;
+  uploadedAt?: string;
 }
 
 export interface ChatAttachmentMeta {
@@ -86,6 +89,7 @@ export interface ChatAttachmentMeta {
   status?: DocumentProcessingStatus;
   mimeType?: string;
   createdAt?: string;
+  dataUrl?: string;
 }
 
 export type AIProviderId = 'gemini' | 'openrouter' | 'ollama';
@@ -278,18 +282,62 @@ export interface CompanionMemoryRecord {
   updatedAtMs: number;
 }
 
-export type CompanionTaskStatus = 'new' | 'in_progress' | 'done';
+export type CompanionTaskStatus =
+  | 'new'
+  | 'in_progress'
+  | 'postponed'
+  | 'waiting_response'
+  | 'done';
 
 export type CompanionTaskPriority = 'low' | 'medium' | 'high';
+
+export type CompanionTaskReminderRepeat =
+  | 'none'
+  | 'daily'
+  | 'weekdays'
+  | 'weekly';
+
+export interface CompanionTaskStep {
+  id: string;
+  title: string;
+  done: boolean;
+}
+
+export interface CompanionTaskScheduleProposal {
+  proposedDueDate: string;
+  reason: string;
+  createdAtMs: number;
+}
 
 export interface CompanionTaskRecord {
   id: string;
   title: string;
   description: string;
   dueDate: string; // YYYY-MM-DD or ''
+  dueTime?: string; // HH:mm in Europe/Samara
   priority: CompanionTaskPriority;
+  priorityReason?: string;
+  urgencyScore?: number; // 1-10
+  importanceScore?: number; // 1-10
+  estimatedMinutes?: number;
+  consequencesIfDelayed?: string;
+  dependencyNote?: string;
+  steps?: CompanionTaskStep[];
   status: CompanionTaskStatus;
   schoolId?: SchoolId | 'both';
+  sourceType?: 'manual' | 'conversation_auto' | 'voice_command' | 'delegation';
+  sourceExcerpt?: string;
+  sourceMessageId?: string;
+  linkedDelegationTaskId?: string;
+  linkedSpecialistId?: AgentMode;
+  linkedChatId?: string;
+  reminderAt?: string; // ISO string or YYYY-MM-DDTHH:mm
+  reminderRepeat?: CompanionTaskReminderRepeat;
+  lastReminderFiredAtMs?: number;
+  deadlineWarningFired?: boolean;
+  overdueWarningFired?: boolean;
+  postponedAtMs?: number;
+  pendingScheduleProposal?: CompanionTaskScheduleProposal;
   createdAt: string;
   createdAtMs: number;
   completedAt?: string;
@@ -302,6 +350,8 @@ export interface ProposedCompanionTaskDraft {
   dueDate: string;
   priority: CompanionTaskPriority;
   schoolId?: SchoolId | 'both';
+  priorityReason?: string;
+  estimatedMinutes?: number;
 }
 
 export interface ProposedCompanionMemoryDraft {
@@ -358,15 +408,17 @@ export interface SpecialistRevisionItem {
 export interface PixelDelegatedTaskState {
   taskId: string;
   targetMode: AgentMode;
-  specialistId?: AgentMode;
+  specialistId: AgentMode;
   schoolId: SchoolId;
+  chatId: string;
+  sessionId: string;
+  sessionTitle?: string;
+  isNewChatCreated?: boolean;
   instruction: string;
   cleanInstruction?: string;
   originalUserRequest: string;
   status: CoordinatorTaskStatus;
   statusLabelRu: string;
-  sessionId: string;
-  sessionTitle?: string;
   messageId?: string;
   resultMessageId?: string;
   lastSpecialistMessageId?: string;
@@ -462,6 +514,8 @@ export interface CompanionMessage {
   proposedTask?: ProposedCompanionTaskDraft;
   proposedMemory?: ProposedCompanionMemoryDraft;
   proposalStatus?: 'pending' | 'confirmed' | 'dismissed';
+  autoCreatedTask?: CompanionTaskRecord;
+  taskUndoAvailable?: boolean;
   pendingDelegationDraft?: PixelPendingDelegationDraft;
   pendingRevisionDraft?: PixelPendingRevisionDraft;
   pendingChatDeletion?: PixelPendingChatDeletion;
@@ -477,6 +531,7 @@ export interface CompanionMessage {
   durationMs?: number;
   selectedProvider?: AIProviderSelectionMode;
   errorReason?: string;
+  imageAttachment?: ChatAttachment;
 }
 
 export interface CompanionCustomPosition {
@@ -491,6 +546,9 @@ export interface CompanionPreferencesRecord {
   quietMode: boolean;
   breakRemindersEnabled: boolean;
   proactiveTipsEnabled?: boolean;
+  autoCaptureTasksEnabled?: boolean;
+  interactionPaused?: boolean;
+  characterHidden?: boolean;
   activeWorkElapsedMs: number;
   breakSnoozeUntilMs?: number | null;
   lastActiveInteractionMs: number;

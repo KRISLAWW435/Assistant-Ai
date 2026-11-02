@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BookOpen,
@@ -15,10 +15,19 @@ import {
   Info,
   Layers,
   Loader2,
+  MessageCircleHeart,
+  Mic,
+  MicOff,
   Paperclip,
+  PowerOff,
+  Radio,
   Search,
+  Sliders,
   Sparkles,
+  Square,
   Trash2,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import {
@@ -40,6 +49,20 @@ import {
 } from '../config/schoolsAndModes';
 import { renderStatusBadge } from './KnowledgeBaseView';
 import { AIProvidersSystemState } from '../providers/aiProviderManager';
+import { voiceManager } from '../providers/voice/voiceManager';
+import {
+  CoordinatorSnapshot,
+  pixelVoiceCoordinator,
+} from '../providers/voice/pixelVoiceCoordinator';
+import { browserSpeechInput } from '../providers/voice/browserSpeechInputProvider';
+import {
+  GEMINI_TTS_VOICES,
+  MessagePlaybackState,
+  PIXEL_TIMBRE_OPTIONS,
+  PixelTimbreId,
+  PixelVoiceSettings,
+  SpeechInputStatus,
+} from '../types/voice';
 
 interface RightWorkspacePanelProps {
   collapsed: boolean;
@@ -72,6 +95,7 @@ interface RightWorkspacePanelProps {
   onChangeProviderSelection?: (mode: AIProviderSelectionMode) => void;
   onCheckProvidersOnDemand?: () => Promise<void>;
   isCheckingProviders?: boolean;
+  onOpenPixelChat?: () => void;
 }
 
 interface SearchHit {
@@ -133,12 +157,243 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
   onChangeProviderSelection,
   onCheckProvidersOnDemand,
   isCheckingProviders = false,
+  onOpenPixelChat,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [attachmentPendingDelete, setAttachmentPendingDelete] =
     useState<ChatAttachment | null>(null);
   const [isDeletingAttachment, setIsDeletingAttachment] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Unified Pixel Voice State in Right Panel
+  const [voiceSettings, setVoiceSettings] = useState<PixelVoiceSettings>(() =>
+    voiceManager.getSettings()
+  );
+  const [coordinatorSnap, setCoordinatorSnap] = useState<CoordinatorSnapshot>(
+    () => pixelVoiceCoordinator.getSnapshot()
+  );
+  const [playbackState, setPlaybackState] = useState<MessagePlaybackState>(() =>
+    voiceManager.getPlaybackState()
+  );
+  const [speechInputStatus, setSpeechInputStatus] = useState<SpeechInputStatus>(
+    () => browserSpeechInput.getStatus()
+  );
+  const [speechInputError, setSpeechInputError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsubSettings = voiceManager.onSettingsChange((s) => {
+      setVoiceSettings(s);
+    });
+    const unsubCoord = pixelVoiceCoordinator.onStateChange((snap) => {
+      setCoordinatorSnap(snap);
+    });
+    const unsubPlayback = voiceManager.onPlaybackStateChange((st) => {
+      setPlaybackState(st);
+    });
+    const unsubSttStatus = browserSpeechInput.onStatusChange((status) => {
+      setSpeechInputStatus(status);
+      if (status !== 'error') {
+        setSpeechInputError(null);
+      }
+    });
+    const unsubSttErr = browserSpeechInput.onError((err) => {
+      setSpeechInputError(err.message);
+    });
+    return () => {
+      unsubSettings();
+      unsubCoord();
+      unsubPlayback();
+      unsubSttStatus();
+      unsubSttErr();
+    };
+  }, []);
+
+  // Computed unified voice status
+  const isPlayingAudio =
+    playbackState.status === 'playing' ||
+    playbackState.status === 'loading' ||
+    coordinatorSnap.liveState === 'speaking';
+
+  const isMicActivelyCapturing =
+    (coordinatorSnap.mode === 'LIVE' &&
+      !coordinatorSnap.isMicMuted &&
+      !coordinatorSnap.isPaused &&
+      coordinatorSnap.liveState !== 'error') ||
+    speechInputStatus === 'listening' ||
+    speechInputStatus === 'recognizing';
+
+  const isContinuousListeningActive =
+    coordinatorSnap.mode === 'LIVE' ||
+    (coordinatorSnap.mode === 'STANDBY' &&
+      (coordinatorSnap.wakeWordState === 'standby_listening' ||
+        coordinatorSnap.wakeWordState === 'hearing_speech' ||
+        coordinatorSnap.wakeWordState === 'wake_word_triggered'));
+
+  const isListeningAny = isMicActivelyCapturing || isContinuousListeningActive;
+
+  const micErrorMessage =
+    speechInputError ||
+    coordinatorSnap.errorDetail ||
+    (coordinatorSnap.wakeWordState === 'permission_denied'
+      ? 'Доступ к микрофону заблокирован в браузере. Разрешите доступ к микрофону в адресной строке.'
+      : coordinatorSnap.wakeWordState === 'error'
+        ? 'Ошибка захвата микрофона или распознавания речи.'
+        : null);
+
+  const hasMicError =
+    Boolean(micErrorMessage) ||
+    coordinatorSnap.liveState === 'error' ||
+    coordinatorSnap.wakeWordState === 'permission_denied' ||
+    coordinatorSnap.wakeWordState === 'error' ||
+    speechInputStatus === 'error';
+
+  const isTtsEnabled = voiceSettings.ttsEnabled !== false;
+  const isWakeWordEnabled = Boolean(voiceSettings.wakeWordEnabled);
+
+  const voiceVisualStatus: {
+    key: 'error' | 'playing' | 'listening' | 'enabled' | 'disabled';
+    label: string;
+    sublabel: string;
+    badgeClass: string;
+    dotClass: string;
+  } = useMemo(() => {
+    if (hasMicError) {
+      return {
+        key: 'error',
+        label: 'Ошибка микрофона',
+        sublabel: micErrorMessage || 'Проверьте доступ к микрофону в браузере',
+        badgeClass: 'bg-rose-50 text-rose-900 border-rose-300',
+        dotClass: 'bg-rose-500 animate-pulse',
+      };
+    }
+    if (isPlayingAudio) {
+      return {
+        key: 'playing',
+        label: 'Идёт воспроизведение',
+        sublabel:
+          coordinatorSnap.liveState === 'speaking'
+            ? 'Пиксель отвечает вслух (Live)'
+            : `Озвучивание ответа (${playbackState.voiceName || voiceSettings.selectedGeminiVoice || 'Aoede'})`,
+        badgeClass: 'bg-cyan-50 text-cyan-950 border-cyan-300',
+        dotClass: 'bg-cyan-500 animate-ping',
+      };
+    }
+    if (isMicActivelyCapturing) {
+      return {
+        key: 'listening',
+        label: 'Идёт прослушивание',
+        sublabel:
+          coordinatorSnap.mode === 'LIVE'
+            ? 'Активен голосовой диалог (микрофон включён)'
+            : 'Идёт запись голосового ввода в чат',
+        badgeClass: 'bg-emerald-50 text-emerald-950 border-emerald-300',
+        dotClass: 'bg-emerald-500 animate-ping',
+      };
+    }
+    if (isContinuousListeningActive) {
+      return {
+        key: 'listening',
+        label: 'Идёт прослушивание («Пиксель»)',
+        sublabel: 'Ожидание ключевого слова «Пиксель»',
+        badgeClass: 'bg-emerald-50/90 text-emerald-900 border-emerald-200',
+        dotClass: 'bg-emerald-500 animate-pulse',
+      };
+    }
+    if (isTtsEnabled || isWakeWordEnabled) {
+      return {
+        key: 'enabled',
+        label: 'Включено (микрофон выкл.)',
+        sublabel: isTtsEnabled
+          ? 'Озвучивание ответов (TTS) доступно по кнопке'
+          : 'Готов к работе',
+        badgeClass: 'bg-slate-100 text-slate-800 border-slate-300',
+        dotClass: 'bg-[#00A8B5]',
+      };
+    }
+    return {
+      key: 'disabled',
+      label: 'Выключено',
+      sublabel: 'Микрофон, прослушивание и озвучка полностью отключены',
+      badgeClass: 'bg-slate-100 text-slate-500 border-slate-200',
+      dotClass: 'bg-slate-400',
+    };
+  }, [
+    hasMicError,
+    micErrorMessage,
+    isPlayingAudio,
+    coordinatorSnap.liveState,
+    coordinatorSnap.mode,
+    playbackState.voiceName,
+    voiceSettings.selectedGeminiVoice,
+    isMicActivelyCapturing,
+    isContinuousListeningActive,
+    isTtsEnabled,
+    isWakeWordEnabled,
+  ]);
+
+  // Voice Control Handlers
+  const handleToggleMicrophone = async () => {
+    setSpeechInputError(null);
+    pixelVoiceCoordinator.clearError();
+
+    // If any microphone capture is currently active, stop it immediately
+    if (
+      coordinatorSnap.mode === 'LIVE' ||
+      speechInputStatus === 'listening' ||
+      speechInputStatus === 'recognizing'
+    ) {
+      browserSpeechInput.cancel();
+      browserSpeechInput.stop();
+      await pixelVoiceCoordinator.stopLive(false);
+      return;
+    }
+
+    // Otherwise start Live voice microphone capture
+    await pixelVoiceCoordinator.startLive();
+  };
+
+  const handleToggleContinuousListening = async () => {
+    setSpeechInputError(null);
+    pixelVoiceCoordinator.clearError();
+
+    if (isContinuousListeningActive) {
+      await pixelVoiceCoordinator.setMode('OFF');
+    } else {
+      await pixelVoiceCoordinator.setMode('STANDBY');
+    }
+  };
+
+  const handleToggleWakeWord = async () => {
+    setSpeechInputError(null);
+    pixelVoiceCoordinator.clearError();
+
+    if (isWakeWordEnabled || coordinatorSnap.mode === 'STANDBY') {
+      await pixelVoiceCoordinator.setMode('OFF');
+    } else {
+      await pixelVoiceCoordinator.setMode('STANDBY');
+    }
+  };
+
+  const handleToggleTts = () => {
+    const next = !isTtsEnabled;
+    voiceManager.setTtsEnabled(next);
+  };
+
+  const handleVolumeChange = (nextVol: number) => {
+    voiceManager.setVolume(nextVol);
+  };
+
+  const handleStopPlayback = () => {
+    voiceManager.stopSpeaking();
+    if (coordinatorSnap.liveState === 'speaking') {
+      void pixelVoiceCoordinator.stopLive(false);
+    }
+  };
+
+  const handleDisableAllVoiceActivity = async () => {
+    setSpeechInputError(null);
+    await pixelVoiceCoordinator.disableAllVoiceActivity(true);
+  };
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -310,6 +565,11 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
     badge?: number;
   }[] = [
     {
+      id: 'voice',
+      label: 'Пиксель',
+      icon: Sliders,
+    },
+    {
       id: 'materials',
       label: 'Материалы',
       icon: FolderOpen,
@@ -335,16 +595,64 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
   // Collapsed slim rail on desktop
   if (collapsed && !mobileOpen) {
     return (
-      <aside className="hidden xl:flex flex-col items-center w-14 shrink-0 h-screen sticky top-0 bg-white border-l border-slate-200/80 py-3.5 gap-3 z-30 select-none">
+      <aside className="hidden xl:flex flex-col items-center w-14 shrink-0 h-screen sticky top-0 bg-white border-l border-slate-200/80 py-3.5 gap-2.5 z-30 select-none">
         <button
           type="button"
           onClick={onToggleCollapsed}
-          title="Развернуть панель «Рабочие материалы»"
+          title="Развернуть правую панель инструментов и управления Пикселем"
           aria-label="Развернуть правую панель"
-          className="w-9 h-9 rounded-xl border border-slate-200/90 bg-slate-50 text-slate-700 hover:bg-slate-900 hover:text-white hover:border-slate-900 flex items-center justify-center transition-colors shadow-2xs"
+          className="w-9 h-9 rounded-xl border border-slate-200/90 bg-slate-50 text-slate-700 hover:bg-slate-900 hover:text-white hover:border-slate-900 flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
         >
           <ChevronLeft className="w-4 h-4" />
         </button>
+
+        {/* Quick 1-click Voice Controls in Collapsed Rail (no need to open any modal) */}
+        <div className="flex flex-col items-center gap-1.5 py-1.5 px-1 rounded-xl bg-slate-50 border border-slate-200/80">
+          <button
+            type="button"
+            onClick={() => void handleToggleMicrophone()}
+            title={
+              isListeningAny
+                ? 'Выключить микрофон и прослушивание'
+                : 'Включить микрофон Пикселя'
+            }
+            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
+              hasMicError
+                ? 'bg-rose-100 text-rose-700 border border-rose-300'
+                : isListeningAny
+                  ? 'bg-emerald-600 text-white shadow-2xs animate-pulse'
+                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            {isListeningAny ? (
+              <Mic className="w-4 h-4" />
+            ) : (
+              <MicOff className="w-4 h-4" />
+            )}
+          </button>
+
+          {isPlayingAudio && (
+            <button
+              type="button"
+              onClick={handleStopPlayback}
+              title="Остановить текущее воспроизведение"
+              className="w-8 h-8 rounded-lg bg-rose-600 text-white hover:bg-rose-700 flex items-center justify-center transition-colors cursor-pointer shadow-2xs"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+            </button>
+          )}
+
+          {(isListeningAny || isPlayingAudio || isWakeWordEnabled) && (
+            <button
+              type="button"
+              onClick={() => void handleDisableAllVoiceActivity()}
+              title="Полностью отключить всю голосовую активность (микрофон, «Пиксель», озвучку)"
+              className="w-8 h-8 rounded-lg bg-slate-900 text-white hover:bg-rose-700 flex items-center justify-center transition-colors cursor-pointer"
+            >
+              <PowerOff className="w-3.5 h-3.5 text-[#FFD700]" />
+            </button>
+          )}
+        </div>
 
         <div className="w-7 border-t border-slate-200/80 my-0.5" />
 
@@ -362,13 +670,18 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   }}
                   title={`${tab.label}${tab.badge ? ` (${tab.badge})` : ''}`}
                   aria-label={tab.label}
-                  className={`relative w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${
+                  className={`relative w-9 h-9 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
                     isActive
                       ? 'bg-slate-900 text-white shadow-2xs'
                       : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                   }`}
                 >
                   <Icon className="w-4 h-4" />
+                  {tab.id === 'voice' && (isListeningAny || isPlayingAudio || hasMicError) && (
+                    <span
+                      className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-white ${voiceVisualStatus.dotClass}`}
+                    />
+                  )}
                   {typeof tab.badge === 'number' && tab.badge > 0 && (
                     <span
                       className={`absolute -top-1 -right-1 px-1 rounded-full text-[9px] font-mono-tabular font-bold leading-tight ${
@@ -402,13 +715,13 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
       } shrink-0 select-none`}
     >
       {/* Header */}
-      <div className="px-4 py-3.5 border-b border-slate-200/80 flex items-center justify-between gap-2">
+      <div className="px-4 py-3 border-b border-slate-200/80 flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h2 className="font-display font-bold text-sm text-slate-900 truncate">
-            Рабочие материалы
+            Панель инструментов и Пиксель
           </h2>
           <p className="text-[11px] text-slate-500 truncate">
-            Документы диалога, просмотр, поиск и контекст
+            Голос Пикселя, материалы, просмотр и контекст
           </p>
         </div>
 
@@ -425,7 +738,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
           <button
             type="button"
             onClick={onToggleCollapsed}
-            title="Свернуть панель «Рабочие материалы» (>>)"
+            title="Свернуть правую панель (>>)"
             aria-label="Свернуть правую панель"
             className="inline-flex items-center justify-center gap-1 w-8 h-8 rounded-xl border border-slate-200/90 bg-slate-50 text-slate-700 hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-colors shrink-0 cursor-pointer"
           >
@@ -434,9 +747,76 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
         )}
       </div>
 
-      {/* 4 Tabs Navigation */}
-      <div className="px-3 pt-2.5 pb-2 border-b border-slate-200/70 bg-slate-50/70">
-        <div className="grid grid-cols-4 gap-1 p-1 bg-slate-200/60 rounded-xl">
+      {/* Persistent Quick Voice Status & 1-Click Stop Strip (Always accessible regardless of active tab or Pixel chat) */}
+      <div className="px-3.5 py-2.5 bg-slate-50/90 border-b border-slate-200/80 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className={`w-2.5 h-2.5 rounded-full shrink-0 ${voiceVisualStatus.dotClass}`}
+            />
+            <div className="min-w-0">
+              <div className="text-[11px] font-bold text-slate-900 truncate">
+                Голос: {voiceVisualStatus.label}
+              </div>
+              <div className="text-[10px] text-slate-500 truncate">
+                {voiceVisualStatus.sublabel}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            {/* Quick Mic Toggle */}
+            <button
+              type="button"
+              onClick={() => void handleToggleMicrophone()}
+              title={
+                isMicActivelyCapturing
+                  ? 'Выключить микрофон'
+                  : 'Включить микрофон'
+              }
+              className={`p-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                isMicActivelyCapturing
+                  ? 'bg-emerald-600 text-white border-emerald-700'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              {isMicActivelyCapturing ? (
+                <Mic className="w-3.5 h-3.5" />
+              ) : (
+                <MicOff className="w-3.5 h-3.5 text-slate-400" />
+              )}
+            </button>
+
+            {/* Quick Stop Playback */}
+            {isPlayingAudio && (
+              <button
+                type="button"
+                onClick={handleStopPlayback}
+                title="Остановить текущее воспроизведение"
+                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-rose-600 text-white text-[10px] font-bold hover:bg-rose-700 transition-colors cursor-pointer"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                <span>Стоп</span>
+              </button>
+            )}
+
+            {/* Quick Master Disable All Voice */}
+            <button
+              type="button"
+              onClick={() => void handleDisableAllVoiceActivity()}
+              title="Отключить всю голосовую активность (микрофон, прослушивание, «Пиксель» и озвучку)"
+              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-900 hover:bg-rose-700 text-white text-[10px] font-semibold transition-colors cursor-pointer"
+            >
+              <PowerOff className="w-3 h-3 text-[#FFD700]" />
+              <span>Выкл. всё</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 5 Tabs Navigation */}
+      <div className="px-3 pt-2 pb-2 border-b border-slate-200/70 bg-slate-50/70">
+        <div className="grid grid-cols-5 gap-1 p-1 bg-slate-200/60 rounded-xl">
           {TABS.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -445,7 +825,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                 key={tab.id}
                 type="button"
                 onClick={() => onChangeTab(tab.id)}
-                className={`relative flex flex-col items-center justify-center gap-1 py-1.5 px-1 rounded-lg text-[11px] font-semibold transition-all ${
+                className={`relative flex flex-col items-center justify-center gap-1 py-1.5 px-0.5 rounded-lg text-[10px] font-semibold transition-all cursor-pointer ${
                   isActive
                     ? 'bg-white text-slate-900 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -455,7 +835,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   <Icon className="w-3.5 h-3.5" />
                   {typeof tab.badge === 'number' && tab.badge > 0 && (
                     <span
-                      className={`ml-1 px-1 rounded text-[9px] font-mono-tabular font-bold ${
+                      className={`ml-0.5 px-1 rounded text-[9px] font-mono-tabular font-bold ${
                         activeSchool === 'renderia'
                           ? 'bg-[#84CC16] text-slate-950'
                           : 'bg-[#F5B800] text-slate-950'
@@ -474,6 +854,335 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
 
       {/* Tab Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 select-text">
+        {/* TAB 0: ПИКСЕЛЬ И УПРАВЛЕНИЕ ГОЛОСОМ */}
+        {activeTab === 'voice' && (
+          <div className="space-y-4">
+            {/* Visual Status Card */}
+            <div
+              className={`rounded-2xl p-3.5 border space-y-2 ${voiceVisualStatus.badgeClass}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full shrink-0 ${voiceVisualStatus.dotClass}`}
+                  />
+                  <span className="font-display font-bold text-xs truncate">
+                    {voiceVisualStatus.label}
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono-tabular uppercase px-2 py-0.5 rounded-md bg-white/80 text-slate-800 font-semibold border border-black/5">
+                  {voiceVisualStatus.key === 'listening'
+                    ? 'Слушает'
+                    : voiceVisualStatus.key === 'playing'
+                      ? 'Говорит'
+                      : voiceVisualStatus.key === 'error'
+                        ? 'Ошибка'
+                        : voiceVisualStatus.key === 'enabled'
+                          ? 'Включено'
+                          : 'Выключено'}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed opacity-90">
+                {voiceVisualStatus.sublabel}
+              </p>
+
+              {hasMicError && (
+                <div className="pt-1 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void pixelVoiceCoordinator.requestMicrophonePermission()
+                    }
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-semibold hover:bg-slate-800 cursor-pointer"
+                  >
+                    Проверить доступ к микрофону
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSpeechInputError(null);
+                      pixelVoiceCoordinator.clearError();
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-white/90 text-slate-700 border border-slate-300 text-[11px] font-medium hover:bg-white cursor-pointer"
+                  >
+                    Скрыть ошибку
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* 1. Master Disable All Voice Activity Button & Stop Playback Button */}
+            <div className="grid grid-cols-1 gap-2">
+              <button
+                type="button"
+                onClick={() => void handleDisableAllVoiceActivity()}
+                className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-rose-700 text-white text-xs font-bold transition-colors shadow-2xs cursor-pointer"
+              >
+                <PowerOff className="w-4 h-4 text-[#FFD700]" />
+                <span>Отключить всю голосовую активность</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={!isPlayingAudio}
+                onClick={handleStopPlayback}
+                className={`w-full inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors ${
+                  isPlayingAudio
+                    ? 'bg-rose-600 text-white border-rose-700 hover:bg-rose-700 cursor-pointer shadow-2xs'
+                    : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                }`}
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Остановить текущее воспроизведение</span>
+              </button>
+            </div>
+
+            {/* 2. Core Toggles: Microphone, Continuous Listening, Wake Word, TTS */}
+            <div className="rounded-2xl border border-slate-200/90 bg-white divide-y divide-slate-100 overflow-hidden">
+              {/* Toggle 1: Microphone On/Off */}
+              <div className="p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                    {isMicActivelyCapturing ? (
+                      <Mic className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <MicOff className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    )}
+                    <span>Микрофон (голосовой диалог)</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                    {isMicActivelyCapturing
+                      ? 'Захват звука активен. Нажмите для мгновенного отключения.'
+                      : 'Микрофон выключен, запись звука не ведётся.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isMicActivelyCapturing}
+                  onClick={() => void handleToggleMicrophone()}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-colors cursor-pointer ${
+                    isMicActivelyCapturing
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {isMicActivelyCapturing ? 'Вкл' : 'Выкл'}
+                </button>
+              </div>
+
+              {/* Toggle 2: Continuous Listening On/Off */}
+              <div className="p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                    <Radio
+                      className={`w-3.5 h-3.5 shrink-0 ${
+                        isContinuousListeningActive
+                          ? 'text-emerald-600'
+                          : 'text-slate-400'
+                      }`}
+                    />
+                    <span>Постоянное прослушивание</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                    {isContinuousListeningActive
+                      ? 'Непрерывное фоновое прослушивание включено.'
+                      : 'Фоновое прослушивание остановлено.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isContinuousListeningActive}
+                  onClick={() => void handleToggleContinuousListening()}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-colors cursor-pointer ${
+                    isContinuousListeningActive
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {isContinuousListeningActive ? 'Вкл' : 'Выкл'}
+                </button>
+              </div>
+
+              {/* Toggle 3: Wake Word «Пиксель» */}
+              <div className="p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                    <Sparkles
+                      className={`w-3.5 h-3.5 shrink-0 ${
+                        isWakeWordEnabled ? 'text-[#00A8B5]' : 'text-slate-400'
+                      }`}
+                    />
+                    <span>Активация по слову «Пиксель»</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                    Отклик на голосовое обращение «Пиксель» в любом разделе.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isWakeWordEnabled}
+                  onClick={() => void handleToggleWakeWord()}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-colors cursor-pointer ${
+                    isWakeWordEnabled
+                      ? 'bg-[#00A8B5] text-white hover:bg-[#008f9a]'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {isWakeWordEnabled ? 'Вкл' : 'Выкл'}
+                </button>
+              </div>
+
+              {/* Toggle 4: Voice Replies (TTS) */}
+              <div className="p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                    {isTtsEnabled ? (
+                      <Volume2 className="w-3.5 h-3.5 text-[#00A8B5] shrink-0" />
+                    ) : (
+                      <VolumeX className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    )}
+                    <span>Голосовые ответы (TTS)</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                    {isTtsEnabled
+                      ? 'Синтез речи разрешён (озвучивание ответов).'
+                      : 'Озвучивание ответов полностью отключено.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isTtsEnabled}
+                  onClick={handleToggleTts}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-colors cursor-pointer ${
+                    isTtsEnabled
+                      ? 'bg-[#00A8B5] text-white hover:bg-[#008f9a]'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {isTtsEnabled ? 'Вкл' : 'Выкл'}
+                </button>
+              </div>
+            </div>
+
+            {/* 3. Volume Slider */}
+            <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                  <Volume2 className="w-3.5 h-3.5 text-[#00A8B5]" />
+                  <span>Громкость голоса Пикселя</span>
+                </span>
+                <span className="font-mono-tabular font-bold text-slate-800">
+                  {Math.round((voiceSettings.volume ?? 1) * 100)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={voiceSettings.volume ?? 1}
+                onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                className="w-full accent-[#00A8B5] cursor-pointer"
+                aria-label="Регулировка громкости"
+              />
+              <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono-tabular">
+                <span>0% (Тихо)</span>
+                <span>50%</span>
+                <span>100% (Макс.)</span>
+              </div>
+            </div>
+
+            {/* 4. Compact Voice & Timbre Selection */}
+            <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 space-y-3 text-xs">
+              <div className="font-bold text-slate-900">
+                Тембр и студийный голос Пикселя
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Голос Gemini TTS (24 кГц):
+                </label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {GEMINI_TTS_VOICES.map((v) => {
+                    const isSelected =
+                      (voiceSettings.selectedGeminiVoice || 'Aoede') === v.id;
+                    return (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() =>
+                          voiceManager.updateSettings({
+                            selectedGeminiVoice: v.id,
+                          })
+                        }
+                        className={`p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                            : 'bg-slate-50 text-slate-700 border-slate-200/80 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="font-bold text-[11px]">{v.name}</div>
+                        <div
+                          className={`text-[10px] truncate ${
+                            isSelected ? 'text-slate-300' : 'text-slate-500'
+                          }`}
+                        >
+                          {v.description}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Регистр звучания:
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {PIXEL_TIMBRE_OPTIONS.map((t) => {
+                    const isSelected =
+                      (voiceSettings.selectedTimbreId || 'bright') === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() =>
+                          voiceManager.updateSettings({
+                            selectedTimbreId: t.id as PixelTimbreId,
+                          })
+                        }
+                        className={`py-1.5 px-2 rounded-xl border text-[11px] font-semibold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#00A8B5] text-white border-[#00A8B5]'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {t.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {onOpenPixelChat && (
+                <button
+                  type="button"
+                  onClick={onOpenPixelChat}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs transition-colors cursor-pointer"
+                >
+                  <MessageCircleHeart className="w-3.5 h-3.5 text-pink-500" />
+                  <span>Открыть компактный чат с Пикселем</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* TAB 1: МАТЕРИАЛЫ (Files of the current dialogue ONLY) */}
         {activeTab === 'materials' && (
           <div className="space-y-4">
@@ -483,14 +1192,14 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   Файлы текущего диалога
                 </div>
                 <div className="text-[11px] text-slate-500">
-                  PDF, DOCX, PPTX, TXT, CSV, MD
+                  Изображения (PNG, JPG, WEBP) и документы (PDF, DOCX, TXT, CSV)
                 </div>
               </div>
 
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,.docx,.pptx,.txt,.md,.csv"
+                accept=".png,.jpg,.jpeg,.webp,.pdf,.docx,.pptx,.txt,.md,.csv"
                 onChange={handleFileInputChange}
                 className="hidden"
               />

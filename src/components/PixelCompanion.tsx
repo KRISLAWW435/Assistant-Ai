@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  Bell,
   BellOff,
   Brain,
   Calendar,
@@ -12,7 +13,10 @@ import {
   Coffee,
   Copy,
   Edit3,
+  Eye,
+  EyeOff,
   FolderOpen,
+  Image as ImageIcon,
   ListTodo,
   Loader2,
   MessageCircleHeart,
@@ -36,6 +40,7 @@ import {
 } from 'lucide-react';
 import {
   AgentMode,
+  ChatAttachment,
   CompanionCustomPosition,
   CompanionMemoryCategory,
   CompanionMemoryRecord,
@@ -44,6 +49,7 @@ import {
   CompanionPreferencesRecord,
   CompanionTaskPriority,
   CompanionTaskRecord,
+  CompanionTaskReminderRepeat,
   CompanionTaskStatus,
   NavSection,
   PixelDelegatedTaskState,
@@ -62,6 +68,21 @@ import {
   parseTaskProposalFromMessage,
   toIsoDateString,
 } from '../utils/pixelAssistantEngine';
+import {
+  addDaysToIsoDate,
+  buildSyzranTimeResponse,
+  formatSyzranIsoDateRu,
+  getSyzranNow,
+  isSyzranTimeQuestion,
+  toSyzranIsoDate,
+} from '../utils/syzranTime';
+import {
+  checkDueTaskAndDelegationReminders,
+  evaluateTaskPriorityMultiCriteria,
+  extractAutoTaskFromConversation,
+  generateTaskSteps,
+  parseAndExecuteTaskCommand,
+} from '../utils/pixelTaskManagerEngine';
 import {
   geminiProvider,
   GenerationStage,
@@ -114,11 +135,19 @@ interface PixelCompanionProps {
     prefs: CompanionPreferencesRecord
   ) => Promise<void>;
   onOpenLiveVoice?: () => void;
+  onOpenRightPanelVoiceSettings?: () => void;
   forceOpenChatTrigger?: number;
 }
 
 type CompanionPanelTab = 'chat' | 'tasks' | 'memory';
-type TaskFilterMode = 'all' | 'today';
+type TaskFilterMode =
+  | 'all'
+  | 'today'
+  | 'tomorrow'
+  | 'week'
+  | 'urgent'
+  | 'overdue'
+  | 'waiting_response';
 
 interface FloatingHeartItem {
   id: string;
@@ -155,6 +184,8 @@ const AUTONOMOUS_MESSAGES: readonly string[] = [
 const TASK_STATUS_LABELS: Record<CompanionTaskStatus, string> = {
   new: 'Новая',
   in_progress: 'В работе',
+  postponed: 'Отложена',
+  waiting_response: 'Ждёт ответа',
   done: 'Выполнена',
 };
 
@@ -165,20 +196,12 @@ const TASK_PRIORITY_LABELS: Record<CompanionTaskPriority, string> = {
 };
 
 function formatDateTimeShort(date: Date = new Date()): string {
-  return date.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const s = getSyzranNow(date);
+  return `${s.dateShortRu}, ${s.time24}`;
 }
 
 function formatTimeOnly(date: Date = new Date()): string {
-  return date.toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return getSyzranNow(date).time24;
 }
 
 function cleanSpeechBubbleText(text: string): string {
@@ -230,6 +253,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   onDeleteCompanionTask,
   onSaveCompanionPreferences,
   onOpenLiveVoice,
+  onOpenRightPanelVoiceSettings,
   forceOpenChatTrigger,
 }) => {
   // Speech bubble state (separate from character)
@@ -333,6 +357,17 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<CompanionPanelTab>('chat');
 
+  const handleClosePixelDialog = () => {
+    // Never enable microphone on close; if one-shot dictation was active in chat input, stop it cleanly
+    if (
+      speechInputStatus === 'listening' ||
+      speechInputStatus === 'recognizing'
+    ) {
+      browserSpeechInput.stop();
+    }
+    setDialogOpen(false);
+  };
+
   useEffect(() => {
     if (forceOpenChatTrigger && forceOpenChatTrigger > 0) {
       setDialogOpen(true);
@@ -340,21 +375,21 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     }
   }, [forceOpenChatTrigger]);
 
-  // Petting animation & floating hearts state (Part 4)
+  // Petting animation & floating hearts state (Part 4) — compact size so Pixel doesn't block workspace
   const [isPetting, setIsPetting] = useState(false);
   const [petTriggerCount, setPetTriggerCount] = useState(0);
   const [characterSize, setCharacterSize] = useState<number>(() => {
-    if (typeof window === 'undefined') return 74;
-    if (window.innerWidth < 640) return 54;
-    if (window.innerWidth < 1024) return 64;
-    return 74;
+    if (typeof window === 'undefined') return 48;
+    if (window.innerWidth < 640) return 40;
+    if (window.innerWidth < 1024) return 44;
+    return 48;
   });
 
   useEffect(() => {
     const handleResize = () => {
-      if (window.innerWidth < 640) setCharacterSize(54);
-      else if (window.innerWidth < 1024) setCharacterSize(64);
-      else setCharacterSize(74);
+      if (window.innerWidth < 640) setCharacterSize(40);
+      else if (window.innerWidth < 1024) setCharacterSize(44);
+      else setCharacterSize(48);
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
@@ -394,8 +429,11 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const [controlsVisibleByTap, setControlsVisibleByTap] = useState(false);
   const [isRecentHistoryExpanded, setIsRecentHistoryExpanded] = useState(false);
 
-  // Chat input & streaming state
+  // Chat input, image attachment & streaming state
   const [chatInput, setChatInput] = useState('');
+  const [draftImage, setDraftImage] = useState<ChatAttachment | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const pixelImageInputRef = useRef<HTMLInputElement | null>(null);
   const [isPixelGenerating, setIsPixelGenerating] = useState(false);
   const [pixelGenerationStage, setPixelGenerationStage] =
     useState<GenerationStage | null>(null);
@@ -409,6 +447,68 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
+
+  const handleSelectPixelImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setImageError(null);
+
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const validMime = ['image/png', 'image/jpeg', 'image/webp'].includes(
+      file.type
+    );
+    const validExt = ['png', 'jpg', 'jpeg', 'webp'].includes(ext);
+
+    if (!validMime && !validExt) {
+      setImageError(
+        'Поддерживаются только изображения форматов PNG, JPG, JPEG и WEBP.'
+      );
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setImageError('Размер изображения не должен превышать 10 МБ.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (!dataUrl) {
+        setImageError('Не удалось прочитать файл изображения.');
+        return;
+      }
+      const sizeKb = Math.max(1, Math.round(file.size / 1024));
+      const sizeFormatted =
+        sizeKb >= 1024
+          ? `${(sizeKb / 1024).toFixed(1)} МБ`
+          : `${sizeKb} КБ`;
+
+      setDraftImage({
+        id: `pixel-img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: file.name,
+        sizeFormatted,
+        sizeBytes: file.size,
+        mimeType:
+          file.type ||
+          (ext === 'png'
+            ? 'image/png'
+            : ext === 'webp'
+              ? 'image/webp'
+              : 'image/jpeg'),
+        extension: ext === 'png' ? 'png' : ext === 'webp' ? 'webp' : ext === 'jpeg' ? 'jpeg' : 'jpg',
+        status: 'processed',
+        extractedText: '',
+        dataUrl,
+        schoolId: activeSchool,
+        uploadedAt: formatTimeOnly(new Date()),
+      });
+    };
+    reader.onerror = () => {
+      setImageError('Ошибка чтения изображения.');
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleMessagesScroll = () => {
     const el = messagesContainerRef.current;
@@ -767,7 +867,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       };
     }
 
-    // 3. Autonomous reminder, break reminder, or petting reaction
+    // 3. Autonomous reminder, break reminder, task notification, or petting reaction ONLY
+    // Stage 2 requirement: Do NOT show a permanent speech bubble with the last chat message when idle.
     if (speechBubble) {
       return {
         id: `bubble-${speechBubble.text.slice(0, 16)}`,
@@ -778,24 +879,6 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         isListening: false,
         isUser: false,
       };
-    }
-
-    // 4. Most recent conversation turn between Anna and Pixel
-    if (companionMessages.length > 0) {
-      const lastMsg = companionMessages[companionMessages.length - 1];
-      if (lastMsg) {
-        const clean = cleanSpeechBubbleText(lastMsg.content);
-        if (clean && !isTechnicalOrErrorMessage(clean)) {
-          return {
-            id: lastMsg.id,
-            speaker: lastMsg.role === 'pixel' ? 'Пиксель' : 'Анна',
-            text: clean,
-            isSpeaking: false,
-            isListening: false,
-            isUser: lastMsg.role === 'user',
-          };
-        }
-      }
     }
 
     return null;
@@ -884,6 +967,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     ? 'sleeping'
     : companionPreferences.mood || 'happy';
   const quietMode = Boolean(companionPreferences.quietMode);
+  const interactionPaused = Boolean(companionPreferences.interactionPaused);
+  const characterHidden = Boolean(companionPreferences.characterHidden);
+  const autoCaptureTasksEnabled =
+    companionPreferences.autoCaptureTasksEnabled !== false;
   const breakRemindersEnabled =
     companionPreferences.breakRemindersEnabled !== false;
 
@@ -898,6 +985,108 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     prefsRef.current = next;
     onSaveCompanionPreferences(next);
   };
+
+  const handleTogglePauseInteraction = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    const nextPaused = !interactionPaused;
+    if (nextPaused) {
+      browserSpeechInput.stop();
+      voiceManager.stopSpeaking();
+      pixelVoiceCoordinator.setMode('OFF');
+      updatePreferences({
+        interactionPaused: true,
+        quietMode: true,
+      });
+      setSpeechBubble({
+        text: 'Общение с Пикселем приостановлено (микрофон и голос отключены).',
+      });
+    } else {
+      updatePreferences({
+        interactionPaused: false,
+        quietMode: false,
+      });
+      setSpeechBubble({
+        text: 'Я снова на связи, Анна!',
+      });
+    }
+  };
+
+  const handleToggleCharacterHidden = (
+    hide: boolean,
+    e?: React.MouseEvent
+  ) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    updatePreferences({ characterHidden: hide });
+  };
+
+  // Stage 3.5: Reliable Reminder Scheduler (checks on startup for missed reminders and every 20s in active/minimized app)
+  const firedReminderIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (interactionPaused) return;
+
+    const runReminderCheck = async () => {
+      const alerts = checkDueTaskAndDelegationReminders(
+        companionTasks,
+        coordinatorTasks,
+        Date.now()
+      );
+      for (const alert of alerts) {
+        const dedupeKey = alert.taskId
+          ? `${alert.type}_${alert.taskId}`
+          : `${alert.type}_${alert.delegationTaskId}`;
+        if (firedReminderIdsRef.current.has(dedupeKey)) continue;
+        firedReminderIdsRef.current.add(dedupeKey);
+
+        if (alert.taskId && alert.updatedTaskPatch) {
+          const target = companionTasks.find((t) => t.id === alert.taskId);
+          if (target) {
+            await onSaveCompanionTask({
+              ...target,
+              ...alert.updatedTaskPatch,
+            });
+          }
+        }
+
+        setSpeechBubble({
+          text: alert.message.replace(/\*\*/g, ''),
+        });
+
+        // Browser notification when window is minimized / backgrounded
+        if (
+          typeof window !== 'undefined' &&
+          'Notification' in window &&
+          Notification.permission === 'granted' &&
+          document.hidden
+        ) {
+          try {
+            new Notification(alert.title, {
+              body: alert.message.replace(/\*\*/g, ''),
+            });
+          } catch {
+            // ignore
+          }
+        }
+      }
+    };
+
+    const initialTimer = window.setTimeout(() => {
+      void runReminderCheck();
+    }, 2500);
+    const intervalId = window.setInterval(() => {
+      void runReminderCheck();
+    }, 20000);
+
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalId);
+    };
+  }, [companionTasks, coordinatorTasks, interactionPaused, onSaveCompanionTask]);
 
   // Delicate cursor eye tracking (Part 8)
   useEffect(() => {
@@ -1278,10 +1467,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     setPixelSlowWarning(false);
 
     try {
-      const taskResult = await pixelAgentCoordinator.confirmPendingRevision(
+      const taskResult = await pixelAgentCoordinator.confirmPendingRevision({
         draftId,
-        userCompanionMessage
-      );
+        userCompanionMessage,
+      });
 
       if (!taskResult) return;
 
@@ -1313,10 +1502,17 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         ? latestStabilizedInputRef.current.trim()
         : rawText.trim();
 
-    const text = stabilizedCandidate;
-    if (!text || isPixelGenerating) return;
+    const attachedImage = draftImage;
+    const text =
+      stabilizedCandidate ||
+      (attachedImage
+        ? 'Посмотри на прикреплённое изображение и проанализируй его.'
+        : '');
+    if ((!text && !attachedImage) || isPixelGenerating) return;
 
     setChatInput('');
+    setDraftImage(null);
+    setImageError(null);
     latestStabilizedInputRef.current = '';
     voiceManager.stopSpeaking();
     browserSpeechInput.stop();
@@ -1335,6 +1531,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         ? priorMessages[priorMessages.length - 1]
         : null;
 
+    const EffectiveImage =
+      attachedImage || existingLastUser?.imageAttachment || undefined;
+
     const userMsg: CompanionMessage =
       existingLastUser || {
         id: `comp-user-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1342,6 +1541,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         content: text,
         createdAt: formatTimeOnly(now),
         createdAtMs: nowMs,
+        imageAttachment: EffectiveImage,
       };
 
     const historyWithUser = existingLastUser
@@ -1365,15 +1565,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
     // 1.2 Stage 6.3 (2), 6.4 (1) & 6.5 (1, 4): Verbatim read aloud of last specialist response or resume stopped reading
     // Strictly does NOT create a copy of the specialist's message in Pixel's chat (`companionMessages`)
-    const readAloudIntent = pixelAgentCoordinator.parseReadAloudIntent(
-      text,
-      activeSchool
-    );
-    if (readAloudIntent) {
-      updatePreferences({ mood: 'happy' });
-      await pixelAgentCoordinator.executeReadAloud(readAloudIntent, 'text');
-      return;
-    }
+    if (!EffectiveImage) {
+      const readAloudIntent = pixelAgentCoordinator.parseReadAloudIntent(
+        text,
+        activeSchool
+      );
+      if (readAloudIntent) {
+        updatePreferences({ mood: 'happy' });
+        await pixelAgentCoordinator.executeReadAloud(readAloudIntent, 'text');
+        return;
+      }
 
     // 1.25 Stage 6.5 (5): Check if Anna is confirming or cancelling a pending chat deletion
     const pendingDeletionAction =
@@ -1454,14 +1655,14 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     ) {
       if (pendingRevisionAction.action === 'confirm') {
         await handleConfirmPendingRevision(
-          pendingRevisionAction.draft.draftId,
+          pendingRevisionAction.draft.revisionDraftId,
           existingLastUser ? undefined : userMsg
         );
         return;
       }
       if (pendingRevisionAction.action === 'cancel') {
         await pixelAgentCoordinator.cancelPendingRevision(
-          pendingRevisionAction.draft.draftId,
+          pendingRevisionAction.draft.revisionDraftId,
           existingLastUser ? undefined : userMsg
         );
         updatePreferences({ mood: 'curious' });
@@ -1485,7 +1686,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       return;
     }
 
-    // 1.34 Stage 5: Request revision from specialist with confirmation card
+    // 1.34 Stage 1 & 5: Request revision from specialist — execute directly on explicit command
     // («Попроси его доработать...», «Пусть Маркетолог добавит смету»)
     const revisionIntent = pixelAgentCoordinator.parseRevisionIntent(
       text,
@@ -1493,10 +1694,34 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     );
     if (revisionIntent) {
       updatePreferences({ mood: 'thinking' });
-      await pixelAgentCoordinator.prepareRevisionForConfirmation({
-        intent: revisionIntent,
+      const targetMode =
+        revisionIntent.targetMode ||
+        pixelAgentCoordinator.resolveActiveAgentMode();
+      const targetSchool = revisionIntent.targetSchool || activeSchool;
+      const latestTask =
+        pixelAgentCoordinator.getLatestTaskForSpecialist(
+          targetMode,
+          revisionIntent.targetSchool ? targetSchool : undefined
+        ) || pixelAgentCoordinator.getLatestCompletedTask(targetMode);
+
+      await pixelAgentCoordinator.executeDelegation({
+        intent: {
+          isDelegation: true,
+          isSupportedSpecialist: true,
+          targetMode,
+          targetSpecialistNameRu: AGENT_MODES[targetMode].shortTitle,
+          targetSchool,
+          instruction: revisionIntent.revisionPrompt,
+          cleanInstruction: revisionIntent.revisionPrompt,
+          originalText: text,
+          preferredSessionId: latestTask?.sessionId,
+          isFollowUp: true,
+        },
         sourceMode: 'text',
         userCompanionMessage: existingLastUser ? undefined : userMsg,
+        existingTaskId: latestTask?.taskId,
+        isRevisionExecution: true,
+        revisionIteration: (latestTask?.iterationCount || 0) + 1,
       });
       return;
     }
@@ -1541,7 +1766,24 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       return;
     }
 
-    // 1.5 Stage 6.2, 6.3, 6.4 (2) & 6.5 (1): Safe task delegation & follow-up continuation across all AI Specialists
+    // 1.47 Stage 4: Exact time & date in Syzran (Europe/Samara)
+    if (isSyzranTimeQuestion(text)) {
+      const syzranReplyText = buildSyzranTimeResponse();
+      const timeReplyMsg: CompanionMessage = {
+        id: `comp-pixel-time-${nowMs + 1}`,
+        role: 'pixel',
+        content: syzranReplyText,
+        createdAt: formatTimeOnly(new Date(nowMs + 1)),
+        createdAtMs: nowMs + 1,
+        schoolId: activeSchool,
+        usedContextLabels: ['Точное время: Сызрань (Europe/Samara)'],
+      };
+      await onSaveCompanionMessages([...historyWithUser, timeReplyMsg]);
+      updatePreferences({ mood: 'happy' });
+      return;
+    }
+
+    // 1.5 Stage 1: Direct task delegation & follow-up continuation across all 4 AI Specialists
     const clarifiedIntent = pixelAgentCoordinator.consumePendingClarification(
       text,
       activeSchool
@@ -1560,23 +1802,85 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         return;
       }
 
-      // Stage 6.4 (2) & 6.5 (4): NEVER send to specialist without showing school, specialist, clean text, and waiting for «Да, отправляй»
-      // Stage 6.5 (4): Do NOT auto-speak new replies; TTS starts only on explicit request
+      // Stage 1 requirement: On explicit commands («попроси Маркетолога...», «отправь Методисту...»),
+      // dispatch the internal delegation immediately without redundant confirmation or switching Anna's screen.
       updatePreferences({ mood: 'thinking' });
-      await pixelAgentCoordinator.prepareDelegationForConfirmation({
-        intent: delegationIntent,
-        sourceMode: 'text',
-        userCompanionMessage: existingLastUser ? undefined : userMsg,
-      });
+      setIsPixelGenerating(true);
+      setPixelGenerationStage('generating');
+      try {
+        await pixelAgentCoordinator.executeDelegation({
+          intent: delegationIntent,
+          sourceMode: 'text',
+          userCompanionMessage: existingLastUser ? undefined : userMsg,
+        });
+      } finally {
+        setIsPixelGenerating(false);
+        setPixelGenerationStage(null);
+      }
       return;
     }
 
-    // 2. Client-side detection of task & memory proposals (Gemini never modifies IndexedDB directly)
-    const proposedTask =
-      parseTaskProposalFromMessage(text, activeSchool) || undefined;
-    const proposedMemory = !proposedTask
-      ? parseMemoryProposalFromMessage(text, activeSchool) || undefined
+    // 1.6 Stage 3: Voice & Text Task Management Commands («Добавь задачу...», «Что мне нужно сделать сегодня?», «Что самое срочное?», «Перенеси на завтра», «Разбей на шаги», «Составь план на завтра» и др.)
+    const taskCmdResult = parseAndExecuteTaskCommand(
+      text,
+      activeSchool,
+      companionTasks
+    );
+    if (taskCmdResult && taskCmdResult.handled) {
+      if (taskCmdResult.createdTask) {
+        await onSaveCompanionTask(taskCmdResult.createdTask);
+      }
+      if (taskCmdResult.updatedTasks && taskCmdResult.updatedTasks.length > 0) {
+        for (const ut of taskCmdResult.updatedTasks) {
+          await onSaveCompanionTask(ut);
+        }
+      }
+      if (taskCmdResult.openTasksTabWithFilter) {
+        setTaskFilter(taskCmdResult.openTasksTabWithFilter);
+      }
+
+      const cmdReplyMsg: CompanionMessage = {
+        id: `comp-pixel-taskcmd-${nowMs + 1}`,
+        role: 'pixel',
+        content: taskCmdResult.responseText,
+        createdAt: formatTimeOnly(new Date(nowMs + 1)),
+        createdAtMs: nowMs + 1,
+        schoolId: activeSchool,
+        autoCreatedTask: taskCmdResult.createdTask,
+        taskUndoAvailable: Boolean(taskCmdResult.createdTask),
+        usedContextLabels: [
+          'Менеджер задач Анны',
+          `Сызрань: ${getSyzranNow().time24}`,
+        ],
+      };
+      await onSaveCompanionMessages([...historyWithUser, cmdReplyMsg]);
+      updatePreferences({ mood: 'happy' });
+      return;
+    }
+    }
+
+    // 2. Stage 3.1: Automatic task extraction from normal conversation («Завтра нужно написать родителям о переносе занятия»)
+    const autoExtracted =
+      !EffectiveImage && autoCaptureTasksEnabled
+        ? extractAutoTaskFromConversation(
+            text,
+            activeSchool,
+            companionTasks,
+            userMsg.id
+          )
+        : null;
+
+    if (autoExtracted) {
+      await onSaveCompanionTask(autoExtracted.taskRecord);
+    }
+
+    const proposedTask = !autoExtracted
+      ? parseTaskProposalFromMessage(text, activeSchool) || undefined
       : undefined;
+    const proposedMemory =
+      !proposedTask && !autoExtracted
+        ? parseMemoryProposalFromMessage(text, activeSchool) || undefined
+        : undefined;
 
     const activeChatContext = pixelAgentCoordinator.getActiveChatContext();
     const contextBundle = buildSelectivePixelContext(
@@ -1599,6 +1903,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       proposedMemory,
       proposalStatus:
         proposedTask || proposedMemory ? ('pending' as const) : undefined,
+      autoCreatedTask: autoExtracted?.taskRecord,
+      taskUndoAvailable: Boolean(autoExtracted?.taskRecord),
       isStreaming: true,
     };
 
@@ -1618,11 +1924,25 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         content: m.content,
       }));
 
+      const selectedImages = EffectiveImage?.dataUrl
+        ? [
+            {
+              id: EffectiveImage.id,
+              name: EffectiveImage.name,
+              mimeType: EffectiveImage.mimeType || 'image/png',
+              base64Data: EffectiveImage.dataUrl.includes(',')
+                ? EffectiveImage.dataUrl.split(',')[1]
+                : EffectiveImage.dataUrl,
+            },
+          ]
+        : undefined;
+
       const result = await geminiProvider.streamChat({
         schoolId: activeSchool,
         mode: 'pixel',
         sessionId: 'pixel-personal-companion',
         messages: recentChatHistory,
+        selectedImages,
         pixelContext: contextBundle,
         providerSelection: readStoredProviderSelection(),
         signal: abortController.signal,
@@ -1640,11 +1960,15 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         },
       });
 
-      const finalText =
+      const rawFinalText =
         result.text.trim() ||
         (result.aborted
           ? '[Генерация ответа Пикселя остановлена]'
           : 'Анна, я на связи!');
+
+      const finalText = autoExtracted
+        ? `✅ **${autoExtracted.shortConfirmationText}**\n\n${rawFinalText}`
+        : rawFinalText;
 
       if (result.aborted) {
         setLastFailedPixelText(text);
@@ -1676,7 +2000,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       );
       await onSaveCompanionMessages(finalList);
       updatePreferences({
-        mood: proposedTask || proposedMemory ? 'thinking' : 'happy',
+        mood:
+          proposedTask || proposedMemory || autoExtracted
+            ? 'thinking'
+            : 'happy',
       });
       // Semantic emotion reaction based on conversation context
       pixelEmotionManager.analyzeDialogueContext(text, finalText);
@@ -1813,12 +2140,23 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     if (!trimmed) return;
 
     const now = new Date();
+    const evalCriteria = evaluateTaskPriorityMultiCriteria(
+      trimmed,
+      newTaskDesc.trim(),
+      newTaskDueDate
+    );
     const task: CompanionTaskRecord = {
       id: `task-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
       title: trimmed,
       description: newTaskDesc.trim(),
       dueDate: newTaskDueDate,
-      priority: newTaskPriority,
+      priority: newTaskPriority || evalCriteria.priority,
+      urgencyScore: evalCriteria.urgencyScore,
+      importanceScore: evalCriteria.importanceScore,
+      estimatedMinutes: evalCriteria.estimatedMinutes,
+      consequencesIfDelayed: evalCriteria.consequencesIfDelayed,
+      priorityReason: evalCriteria.priorityReason,
+      sourceType: 'manual',
       status: 'new',
       schoolId: activeSchool,
       createdAt: formatDateTimeShort(now),
@@ -1834,7 +2172,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
   const handleCycleTaskStatus = async (task: CompanionTaskRecord) => {
     const nextStatus: CompanionTaskStatus =
-      task.status === 'new'
+      task.status === 'new' || task.status === 'postponed' || task.status === 'waiting_response'
         ? 'in_progress'
         : task.status === 'in_progress'
           ? 'done'
@@ -1905,6 +2243,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
   // Computed task counters & due reminders strictly isolated by active school
   const todayIso = toIsoDateString(new Date());
+  const tomorrowIso = addDaysToIsoDate(todayIso, 1);
+  const weekEndIso = addDaysToIsoDate(todayIso, 7);
   const schoolTasks = useMemo(
     () =>
       companionTasks.filter(
@@ -1926,8 +2266,32 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     if (taskFilter === 'today') {
       return schoolTasks.filter((t) => t.dueDate === todayIso);
     }
+    if (taskFilter === 'tomorrow') {
+      return schoolTasks.filter((t) => t.dueDate === tomorrowIso);
+    }
+    if (taskFilter === 'week') {
+      return schoolTasks.filter(
+        (t) => t.dueDate && t.dueDate >= todayIso && t.dueDate <= weekEndIso
+      );
+    }
+    if (taskFilter === 'urgent') {
+      return schoolTasks.filter(
+        (t) => t.status !== 'done' && t.priority === 'high'
+      );
+    }
+    if (taskFilter === 'overdue') {
+      return schoolTasks.filter(
+        (t) => t.status !== 'done' && t.dueDate && t.dueDate < todayIso
+      );
+    }
+    if (taskFilter === 'waiting_response') {
+      return schoolTasks.filter(
+        (t) =>
+          t.status === 'waiting_response' || Boolean(t.linkedDelegationTaskId)
+      );
+    }
     return schoolTasks;
-  }, [schoolTasks, taskFilter, todayIso]);
+  }, [schoolTasks, taskFilter, todayIso, tomorrowIso, weekEndIso]);
 
   const schoolMemories = useMemo(
     () =>
@@ -1978,21 +2342,20 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
         return (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 md:p-6 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150"
-            onClick={() => setDialogOpen(false)}
+            className={`fixed z-40 bottom-16 sm:bottom-18 ${baseLeftClass} w-[min(900px,calc(100vw-2rem))] lg:w-[min(900px,calc(100vw-340px))] h-[min(750px,calc(100vh-5rem))] min-h-[420px] pointer-events-auto animate-in fade-in slide-in-from-bottom-3 duration-150 select-text`}
           >
             <div
-              className="w-full max-w-[880px] h-[86vh] max-h-[820px] min-h-[560px] rounded-3xl bg-white border border-slate-200/90 shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-150 select-text"
+              className="w-full h-full rounded-3xl bg-white border border-slate-200/95 shadow-2xl flex flex-col overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* 1. UPPER PANEL: Header with School, Specialist, Chats, Voice & Window Controls */}
+              {/* 1. UPPER PANEL: Compact Header (No duplicate school/specialist switchers) */}
               <div className="bg-gradient-to-r from-pink-50/70 via-white to-sky-50/70 border-b border-slate-200/80 shrink-0">
                 <div className="px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
                   {/* Left: Pixel identity */}
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="shrink-0 relative">
                       <PixelCharacter
-                        size={36}
+                        size={32}
                         showAura={false}
                         interactive={false}
                         isSpeaking={isSpeakingUnified}
@@ -2001,8 +2364,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                       />
                     </div>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-display font-bold text-base text-slate-900">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-display font-bold text-base sm:text-lg text-slate-900">
                           Пиксель
                         </span>
                         <span
@@ -2014,85 +2377,31 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                         >
                           {SCHOOLS[currentSchoolId].name}
                         </span>
+                        {interactionPaused && (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold">
+                            Общение на паузе
+                          </span>
+                        )}
                       </div>
-                      <div className="text-[11px] text-slate-500 font-medium truncate">
-                        Помощник управляющей Анны
+                      <div className="text-xs text-slate-500 font-medium truncate">
+                        Рабочий помощник и координатор управляющей Анны · Сызрань
                       </div>
                     </div>
                   </div>
 
-                  {/* Center: School switch & Specialist switch */}
+                  {/* Center/Right: Working Chats Quick Switcher Popover */}
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* School Selector Pills */}
-                    <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-100/90 border border-slate-200/70">
-                      {(['kiberone', 'renderia'] as SchoolId[]).map((sId) => {
-                        const isCurrent = currentSchoolId === sId;
-                        return (
-                          <button
-                            key={sId}
-                            type="button"
-                            onClick={() => {
-                              void pixelAgentCoordinator.switchToWorkingChat({
-                                schoolId: sId,
-                                mode: currentMode,
-                                announceInCompanion: true,
-                              });
-                            }}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                              isCurrent
-                                ? sId === 'renderia'
-                                  ? 'bg-[#84CC16] text-slate-950 shadow-2xs'
-                                  : 'bg-[#FFD700] text-slate-950 shadow-2xs'
-                                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-                            }`}
-                          >
-                            {SCHOOLS[sId].name}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Specialist Segmented Control */}
-                    <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-100/90 border border-slate-200/70 flex-wrap">
-                      {(
-                        ['marketer', 'manager', 'methodist', 'analyst'] as AgentMode[]
-                      ).map((mId) => {
-                        const isCurrent = currentMode === mId;
-                        return (
-                          <button
-                            key={mId}
-                            type="button"
-                            onClick={() => {
-                              void pixelAgentCoordinator.switchToWorkingChat({
-                                schoolId: currentSchoolId,
-                                mode: mId,
-                                announceInCompanion: true,
-                              });
-                            }}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                              isCurrent
-                                ? 'bg-slate-900 text-white shadow-2xs'
-                                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-                            }`}
-                          >
-                            {AGENT_MODES[mId].shortTitle}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Working Chats Quick Switcher Popover Button */}
                     <div className="relative">
                       <button
                         type="button"
                         onClick={() => setIsQuickChatSwitcherOpen((v) => !v)}
                         title="Рабочие чаты специалистов"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-semibold transition-colors cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-semibold transition-colors cursor-pointer"
                       >
                         <FolderOpen className="w-3.5 h-3.5 text-[#00A8B5]" />
-                        <span className="hidden sm:inline">Чаты ({allWorkingChats.length})</span>
+                        <span>Чаты специалистов ({allWorkingChats.length})</span>
                         <ChevronDown
-                          className={`w-3 h-3 text-slate-400 transition-transform ${
+                          className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
                             isQuickChatSwitcherOpen ? 'rotate-180' : ''
                           }`}
                         />
@@ -2100,7 +2409,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
                       {/* Working Chats Dropdown */}
                       {isQuickChatSwitcherOpen && (
-                        <div className="absolute right-0 top-full mt-1.5 w-72 rounded-2xl bg-white border border-slate-200 shadow-xl p-2.5 z-30 space-y-1.5 text-xs">
+                        <div className="absolute right-0 top-full mt-1.5 w-80 rounded-2xl bg-white border border-slate-200 shadow-xl p-2.5 z-30 space-y-1.5 text-xs">
                           <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 pb-1 border-b border-slate-100">
                             <span>Рабочие чаты специалистов</span>
                             <button
@@ -2111,7 +2420,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                               Закрыть
                             </button>
                           </div>
-                          <div className="max-h-52 overflow-y-auto space-y-1 pr-1">
+                          <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
                             {allWorkingChats.length === 0 ? (
                               <div className="text-slate-400 py-2 text-center text-[11px]">
                                 Пока нет открытых чатов
@@ -2191,8 +2500,14 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => setIsVoiceSettingsOpen(true)}
-                      title="Настройки голоса Пикселя"
+                      onClick={() => {
+                        if (onOpenRightPanelVoiceSettings) {
+                          onOpenRightPanelVoiceSettings();
+                        } else {
+                          setIsVoiceSettingsOpen(true);
+                        }
+                      }}
+                      title="Настройки голоса Пикселя в правой панели"
                       aria-label="Настройки голоса"
                       className="p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
                     >
@@ -2201,8 +2516,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => setDialogOpen(false)}
-                      title="Свернуть окно (разговор не прерывается)"
+                      onClick={handleClosePixelDialog}
+                      title="Свернуть окно"
                       aria-label="Свернуть окно"
                       className="p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
                     >
@@ -2211,7 +2526,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => setDialogOpen(false)}
+                      onClick={handleClosePixelDialog}
                       title="Закрыть окно"
                       aria-label="Закрыть окно"
                       className="p-2 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
@@ -2323,6 +2638,32 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                         </div>
                       )}
 
+                      {msg.imageAttachment?.dataUrl && (
+                        <div className="mb-2.5 overflow-hidden rounded-xl border border-slate-200/40 bg-black/10">
+                          <img
+                            src={msg.imageAttachment.dataUrl}
+                            alt={msg.imageAttachment.name || 'Прикреплённое изображение'}
+                            className="max-h-56 w-auto max-w-full object-contain rounded-lg mx-auto"
+                          />
+                          <div
+                            className={`px-2.5 py-1 text-[10px] flex items-center justify-between gap-2 ${
+                              msg.role === 'user'
+                                ? 'text-slate-300 bg-slate-800/80'
+                                : 'text-slate-600 bg-slate-100'
+                            }`}
+                          >
+                            <span className="truncate font-medium">
+                              {msg.imageAttachment.name}
+                            </span>
+                            {msg.imageAttachment.sizeFormatted && (
+                              <span className="shrink-0 font-mono-tabular">
+                                {msg.imageAttachment.sizeFormatted}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       {msg.isStreaming ? (
                         <div className="space-y-2">
                           <div className="rounded-xl p-2 bg-slate-50 border border-slate-200/80 space-y-1.5">
@@ -2392,6 +2733,66 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                             </button>
                           </div>
                         )}
+
+                      {/* Auto-Captured Task Card with 1-Click Undo */}
+                      {msg.autoCreatedTask && (
+                        <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-2">
+                          <div className="rounded-xl p-2.5 bg-emerald-50/70 border border-emerald-200/90 space-y-1">
+                            <div className="text-[11px] font-bold text-slate-900 flex items-center gap-1.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>
+                                Автоматически зафиксирована задача: «{msg.autoCreatedTask.title}»
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-600 flex flex-wrap items-center gap-2">
+                              <span>
+                                Срок: {formatIsoDateRu(msg.autoCreatedTask.dueDate)}
+                              </span>
+                              <span>·</span>
+                              <span>
+                                Приоритет: {TASK_PRIORITY_LABELS[msg.autoCreatedTask.priority]}
+                              </span>
+                              {msg.autoCreatedTask.estimatedMinutes && (
+                                <>
+                                  <span>·</span>
+                                  <span>~{msg.autoCreatedTask.estimatedMinutes} мин</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          {msg.taskUndoAvailable ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await onDeleteCompanionTask(msg.autoCreatedTask!.id);
+                                  const nextMsgs = companionMessages.map((m) =>
+                                    m.id === msg.id
+                                      ? { ...m, taskUndoAvailable: false }
+                                      : m
+                                  );
+                                  await onSaveCompanionMessages(nextMsgs);
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 text-slate-700 text-[11px] font-semibold hover:bg-rose-50 hover:text-rose-700 transition-colors cursor-pointer"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>Отменить создание задачи</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setActiveTab('tasks')}
+                                className="px-2.5 py-1 rounded-xl bg-white border border-slate-200 text-slate-700 text-[11px] font-medium hover:bg-slate-50 cursor-pointer"
+                              >
+                                Открыть в списке дел
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-slate-400">
+                              Создание задачи отменено
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Proposed Task Confirmation Card */}
                       {msg.proposedTask && (
@@ -2762,7 +3163,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                 disabled={isPixelGenerating}
                                 onClick={() =>
                                   void handleConfirmPendingRevision(
-                                    msg.pendingRevisionDraft!.draftId
+                                    msg.pendingRevisionDraft!.revisionDraftId
                                   )
                                 }
                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 text-white text-[11px] font-bold hover:bg-amber-700 disabled:opacity-40 transition-colors cursor-pointer"
@@ -2775,7 +3176,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                 disabled={isPixelGenerating}
                                 onClick={() =>
                                   void pixelAgentCoordinator.cancelPendingRevision(
-                                    msg.pendingRevisionDraft!.draftId
+                                    msg.pendingRevisionDraft!.revisionDraftId
                                   )
                                 }
                                 className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-[11px] font-medium hover:bg-slate-200 disabled:opacity-40 transition-colors cursor-pointer"
@@ -3038,7 +3439,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                     </div>
                                     <MarkdownMessageContent
                                       content={msg.delegatedTask.resultText}
-                                      role="assistant"
+                                      variant="compact"
                                     />
                                   </div>
                                 )}
@@ -3659,11 +4060,84 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   </div>
                 )}
 
+                {/* Image Error Banner */}
+                {imageError && (
+                  <div className="flex items-start justify-between gap-2 px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-950">
+                    <div className="flex items-start gap-1.5 leading-snug">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
+                      <span>{imageError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setImageError(null)}
+                      className="p-0.5 hover:bg-rose-100 rounded text-rose-700 shrink-0 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Attached Image Thumbnail Preview Before Sending */}
+                {draftImage && (
+                  <div className="flex items-center justify-between gap-2.5 p-2 rounded-2xl bg-slate-50 border border-slate-200/90">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {draftImage.dataUrl && (
+                        <img
+                          src={draftImage.dataUrl}
+                          alt={draftImage.name}
+                          className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0 bg-white"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-slate-900 truncate">
+                          {draftImage.name}
+                        </div>
+                        <div className="text-[10px] text-emerald-700 font-medium">
+                          {draftImage.sizeFormatted} · Готово к визуальному анализу
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDraftImage(null)}
+                      title="Удалить прикреплённое изображение"
+                      className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors shrink-0 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Hidden Image File Input */}
+                <input
+                  ref={pixelImageInputRef}
+                  type="file"
+                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                  onChange={handleSelectPixelImage}
+                  className="hidden"
+                />
+
                 {/* Textarea Form */}
                 <form
                   onSubmit={handleSendCompanionMessage}
-                  className="flex items-end gap-2"
+                  className="flex items-end gap-1.5"
                 >
+                  {/* Attach Image Button */}
+                  <button
+                    type="button"
+                    disabled={isPixelGenerating}
+                    onClick={() => pixelImageInputRef.current?.click()}
+                    title="Прикрепить изображение (PNG, JPG, WEBP)"
+                    aria-label="Прикрепить изображение"
+                    className={`p-2.5 rounded-2xl transition-all shrink-0 cursor-pointer ${
+                      draftImage
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : 'bg-slate-100 text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                    } disabled:opacity-40`}
+                  >
+                    <ImageIcon className="w-4 h-4" />
+                  </button>
+
                   <div className="flex-1 min-w-0 relative">
                     <textarea
                       ref={textareaRef}
@@ -3686,7 +4160,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                       placeholder={
                         isPixelGenerating
                           ? `${getGenerationStageLabelRu(pixelGenerationStage)} (${pixelElapsedSec} с)...`
-                          : 'Напишите задачу, вопрос или поручение... (Enter — отправить, Shift+Enter — перенос)'
+                          : draftImage
+                            ? 'Добавьте вопрос к изображению или нажмите Отправить...'
+                            : 'Напишите задачу, вопрос или поручение... (Enter — отправить)'
                       }
                       className="w-full rounded-2xl border border-slate-300 bg-slate-50/80 px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00A8B5] focus:border-transparent resize-none leading-relaxed transition-all max-h-32 min-h-[42px]"
                     />
@@ -3733,7 +4209,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   ) : (
                     <button
                       type="submit"
-                      disabled={!chatInput.trim() || isPixelGenerating}
+                      disabled={(!chatInput.trim() && !draftImage) || isPixelGenerating}
                       className="p-2.5 rounded-2xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 transition-all shrink-0 cursor-pointer shadow-xs hover:scale-102 active:scale-98"
                       aria-label="Отправить сообщение Пикселю"
                     >
@@ -3745,54 +4221,176 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
             </div>
           )}
 
-          {/* TAB 2: ANNA'S TO-DO LIST */}
+          {/* TAB 2: ANNA'S TO-DO LIST & TASK MANAGER */}
           {activeTab === 'tasks' && (
             <div className="flex-1 flex flex-col min-h-0 p-4 sm:p-6 space-y-4 overflow-y-auto bg-[#F9FAFB]/70">
-              <div className="flex items-center justify-between gap-2">
-                <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-200/70 text-[11px] font-semibold">
-                  <button
-                    type="button"
-                    onClick={() => setTaskFilter('all')}
-                    className={`px-2.5 py-1 rounded-lg transition-all ${
-                      taskFilter === 'all'
-                        ? 'bg-white text-slate-900 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Все ({companionTasks.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTaskFilter('today')}
-                    className={`px-2.5 py-1 rounded-lg transition-all ${
-                      taskFilter === 'today'
-                        ? 'bg-white text-slate-900 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    На сегодня (
-                    {
-                      companionTasks.filter((t) => t.dueDate === todayIso)
-                        .length
-                    }
-                    )
-                  </button>
+              {/* Top Filter Bar + New Task Button */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-200/70 text-[11px] font-semibold">
+                  {(
+                    [
+                      { id: 'all', label: `Все (${schoolTasks.length})` },
+                      {
+                        id: 'today',
+                        label: `Сегодня (${schoolTasks.filter((t) => t.dueDate === todayIso).length})`,
+                      },
+                      {
+                        id: 'tomorrow',
+                        label: `Завтра (${schoolTasks.filter((t) => t.dueDate === tomorrowIso).length})`,
+                      },
+                      {
+                        id: 'week',
+                        label: `Неделя (${
+                          schoolTasks.filter(
+                            (t) =>
+                              t.dueDate &&
+                              t.dueDate >= todayIso &&
+                              t.dueDate <= weekEndIso
+                          ).length
+                        })`,
+                      },
+                      {
+                        id: 'urgent',
+                        label: `Срочные (${
+                          schoolTasks.filter(
+                            (t) => t.status !== 'done' && t.priority === 'high'
+                          ).length
+                        })`,
+                      },
+                      {
+                        id: 'overdue',
+                        label: `Просроченные (${
+                          schoolTasks.filter(
+                            (t) =>
+                              t.status !== 'done' &&
+                              t.dueDate &&
+                              t.dueDate < todayIso
+                          ).length
+                        })`,
+                      },
+                      {
+                        id: 'waiting_response',
+                        label: `Ждут ответа (${
+                          schoolTasks.filter(
+                            (t) =>
+                              t.status === 'waiting_response' ||
+                              Boolean(t.linkedDelegationTaskId)
+                          ).length
+                        })`,
+                      },
+                    ] as Array<{ id: TaskFilterMode; label: string }>
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setTaskFilter(tab.id)}
+                      className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                        taskFilter === tab.id
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setShowNewTaskForm((v) => !v)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-semibold hover:bg-slate-800"
-                >
-                  <Plus className="w-3.5 h-3.5 text-[#FFD700]" />
-                  <span>Новая задача</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowNewTaskForm((v) => !v)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-[#FFD700]" />
+                    <span>Новая задача</span>
+                  </button>
+                </div>
               </div>
+
+              {/* Workload Summary & Auto-Capture Toggle */}
+              <div className="rounded-2xl px-3.5 py-2.5 bg-white border border-slate-200/90 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span>
+                    Активных дел: <strong className="text-slate-900">{activeTasksList.length}</strong>
+                  </span>
+                  <span>·</span>
+                  <span>
+                    Оценка нагрузки на сегодня:{' '}
+                    <strong className="text-slate-900">
+                      ~
+                      {schoolTasks
+                        .filter((t) => t.status !== 'done' && t.dueDate === todayIso)
+                        .reduce((acc, t) => acc + (t.estimatedMinutes || 25), 0)}{' '}
+                      мин
+                    </strong>
+                  </span>
+                </div>
+                <label className="inline-flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-700 font-medium">
+                  <input
+                    type="checkbox"
+                    checked={companionPreferences.autoCaptureTasksEnabled !== false}
+                    onChange={(e) =>
+                      updatePreferences({
+                        autoCaptureTasksEnabled: e.target.checked,
+                      })
+                    }
+                    className="rounded border-slate-300 text-slate-900 focus:ring-0"
+                  />
+                  <span>Авто-извлечение задач из разговора</span>
+                </label>
+              </div>
+
+              {/* Pending Schedule Proposal Confirmation Banner */}
+              {schoolTasks
+                .filter((t) => t.pendingScheduleProposal)
+                .map((task) => (
+                  <div
+                    key={`proposal-${task.id}`}
+                    className="rounded-2xl p-3 bg-sky-50/90 border border-sky-200 flex flex-wrap items-center justify-between gap-2 text-xs text-sky-950"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="font-bold">
+                        Предложение по расписанию: «{task.title}»
+                      </div>
+                      <div className="text-[11px] text-sky-800">
+                        Перенести на {formatIsoDateRu(task.pendingScheduleProposal!.proposedDueDate)} —{' '}
+                        {task.pendingScheduleProposal!.reason}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onSaveCompanionTask({
+                            ...task,
+                            dueDate: task.pendingScheduleProposal!.proposedDueDate,
+                            pendingScheduleProposal: undefined,
+                          })
+                        }
+                        className="px-2.5 py-1 rounded-xl bg-slate-900 text-white text-[11px] font-semibold hover:bg-slate-800 cursor-pointer"
+                      >
+                        Подтвердить перенос
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onSaveCompanionTask({
+                            ...task,
+                            pendingScheduleProposal: undefined,
+                          })
+                        }
+                        className="px-2.5 py-1 rounded-xl bg-white border border-sky-200 text-slate-700 text-[11px] font-medium hover:bg-slate-50 cursor-pointer"
+                      >
+                        Оставить как есть
+                      </button>
+                    </div>
+                  </div>
+                ))}
 
               {showNewTaskForm && (
                 <form
                   onSubmit={handleCreateManualTask}
-                  className="rounded-2xl p-3 bg-white border border-slate-200 shadow-xs space-y-2.5 text-xs"
+                  className="rounded-2xl p-3.5 bg-white border border-slate-200 shadow-xs space-y-2.5 text-xs"
                 >
                   <div className="font-bold text-slate-900">
                     Добавить задачу для Анны
@@ -3803,14 +4401,14 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                     value={newTaskTitle}
                     onChange={(e) => setNewTaskTitle(e.target.value)}
                     placeholder="Что нужно сделать?"
-                    className="w-full rounded-xl border border-slate-300 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
                   />
                   <input
                     type="text"
                     value={newTaskDesc}
                     onChange={(e) => setNewTaskDesc(e.target.value)}
                     placeholder="Описание или детали (необязательно)"
-                    className="w-full rounded-xl border border-slate-200 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <div>
@@ -3821,7 +4419,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                         type="date"
                         value={newTaskDueDate}
                         onChange={(e) => setNewTaskDueDate(e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
                       />
                     </div>
                     <div>
@@ -3835,7 +4433,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                             e.target.value as CompanionTaskPriority
                           )
                         }
-                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs bg-white"
+                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs bg-white"
                       >
                         <option value="low">Обычный</option>
                         <option value="medium">Средний</option>
@@ -3862,20 +4460,20 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
               )}
 
               {filteredTasks.length === 0 ? (
-                <div className="rounded-2xl p-5 bg-white border border-dashed border-slate-200 text-center space-y-1.5">
+                <div className="rounded-2xl p-6 bg-white border border-dashed border-slate-200 text-center space-y-1.5">
                   <div className="text-xs font-bold text-slate-800">
                     {taskFilter === 'today'
                       ? 'На сегодня задач нет, Анна!'
-                      : 'Список дел пока пуст'}
+                      : 'В этой выборке пока нет задач'}
                   </div>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
-                    Добавьте задачу кнопкой выше или напишите в диалоге:
-                    «Пиксель, напомни мне завтра проверить презентацию для
-                    RENDERIA».
+                    Добавьте задачу кнопкой выше или скажите в диалоге:
+                    «Пиксель, добавь задачу проверить презентацию завтра» или
+                    «Что самое срочное?».
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   {filteredTasks.map((task) => {
                     const isDone = task.status === 'done';
                     const isOverdue =
@@ -3885,7 +4483,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                     return (
                       <div
                         key={task.id}
-                        className={`rounded-2xl p-3 bg-white border transition-all space-y-2 ${
+                        className={`rounded-2xl p-3.5 bg-white border transition-all space-y-2.5 ${
                           isDone
                             ? 'border-slate-200/60 opacity-70'
                             : isOverdue
@@ -3894,12 +4492,12 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                         }`}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-start gap-2 min-w-0">
+                          <div className="flex items-start gap-2.5 min-w-0">
                             <button
                               type="button"
                               onClick={() => handleCycleTaskStatus(task)}
                               title={`Статус: ${TASK_STATUS_LABELS[task.status]}. Нажмите для переключения`}
-                              className={`mt-0.5 w-4 h-4 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
+                              className={`mt-0.5 w-4 h-4 rounded-md border flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
                                 isDone
                                   ? 'bg-emerald-600 border-emerald-600 text-white'
                                   : task.status === 'in_progress'
@@ -3912,9 +4510,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                 <span className="w-1.5 h-1.5 rounded-full bg-amber-600" />
                               )}
                             </button>
-                            <div className="min-w-0">
+                            <div className="min-w-0 space-y-1">
                               <div
-                                className={`text-xs font-semibold break-words ${
+                                className={`text-xs sm:text-sm font-semibold break-words ${
                                   isDone
                                     ? 'line-through text-slate-400'
                                     : 'text-slate-900'
@@ -3923,8 +4521,14 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                 {task.title}
                               </div>
                               {task.description && (
-                                <div className="text-[11px] text-slate-500 mt-0.5 break-words">
+                                <div className="text-[11px] text-slate-500 break-words">
                                   {task.description}
+                                </div>
+                              )}
+                              {task.priorityReason && !isDone && (
+                                <div className="text-[11px] text-slate-600 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200/60">
+                                  <strong className="text-slate-800">Оценка Пикселя:</strong>{' '}
+                                  {task.priorityReason}
                                 </div>
                               )}
                             </div>
@@ -3934,23 +4538,68 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                             type="button"
                             onClick={() => onDeleteCompanionTask(task.id)}
                             title="Удалить задачу"
-                            className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 shrink-0"
+                            className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 shrink-0 cursor-pointer"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-100 text-[10px]">
+                        {/* Sub-steps checklist if broken down */}
+                        {task.steps && task.steps.length > 0 && (
+                          <div className="pl-6 space-y-1 pt-1">
+                            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                              Шаги выполнения ({task.steps.filter((s) => s.done).length}/
+                              {task.steps.length}):
+                            </div>
+                            {task.steps.map((step) => (
+                              <label
+                                key={step.id}
+                                className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={step.done}
+                                  onChange={() => {
+                                    const nextSteps = (task.steps || []).map(
+                                      (s) =>
+                                        s.id === step.id
+                                          ? { ...s, done: !s.done }
+                                          : s
+                                    );
+                                    void onSaveCompanionTask({
+                                      ...task,
+                                      steps: nextSteps,
+                                    });
+                                  }}
+                                  className="rounded border-slate-300 text-slate-900 focus:ring-0"
+                                />
+                                <span
+                                  className={
+                                    step.done
+                                      ? 'line-through text-slate-400'
+                                      : 'text-slate-800'
+                                  }
+                                >
+                                  {step.title}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-[10px]">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <button
                               type="button"
                               onClick={() => handleCycleTaskStatus(task)}
-                              className={`px-2 py-0.5 rounded-md font-semibold ${
+                              className={`px-2 py-0.5 rounded-md font-semibold cursor-pointer ${
                                 isDone
                                   ? 'bg-emerald-50 text-emerald-800'
                                   : task.status === 'in_progress'
                                     ? 'bg-amber-100 text-amber-900'
-                                    : 'bg-slate-100 text-slate-700'
+                                    : task.status === 'waiting_response'
+                                      ? 'bg-sky-100 text-sky-900'
+                                      : 'bg-slate-100 text-slate-700'
                               }`}
                             >
                               {TASK_STATUS_LABELS[task.status]}
@@ -3965,6 +4614,30 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                             >
                               {TASK_PRIORITY_LABELS[task.priority]}
                             </span>
+
+                            {task.estimatedMinutes && (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono-tabular">
+                                ~{task.estimatedMinutes} мин
+                              </span>
+                            )}
+
+                            {(!task.steps || task.steps.length === 0) && !isDone && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onSaveCompanionTask({
+                                    ...task,
+                                    steps: generateTaskSteps(
+                                      task.title,
+                                      task.description
+                                    ),
+                                  })
+                                }
+                                className="px-2 py-0.5 rounded bg-cyan-50 text-cyan-800 hover:bg-cyan-100 font-semibold cursor-pointer"
+                              >
+                                Разбить на шаги
+                              </button>
+                            )}
 
                             {(isToday || isOverdue) && (
                               <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-semibold">
@@ -4462,97 +5135,179 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
           </div>
         )}
 
-        {/* Pet Wrapper with Dialogue Button & Reopen Last Remark Button */}
-        <div
-          className="relative group pointer-events-auto flex items-center gap-2"
-          onMouseLeave={() => setControlsVisibleByTap(false)}
-        >
-          {/* Action buttons beside Pixel */}
-          <div className="relative z-20 flex items-center gap-1.5">
-            <button
-              type="button"
+        {/* Single Compact Pixel Character OR Unobtrusive Restore Pill when Hidden */}
+        {characterHidden ? (
+          <button
+            type="button"
+            onClick={() => handleToggleCharacterHidden(false)}
+            title="Показать персонажа Пикселя"
+            className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/95 hover:bg-white border border-slate-200/90 shadow-md text-xs font-semibold text-slate-700 hover:text-slate-900 transition-all cursor-pointer"
+          >
+            <Eye className="w-3.5 h-3.5 text-[#00A8B5]" />
+            <span>Пиксель</span>
+            {dueOrOverdueTasks.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-pink-500 text-white text-[10px] font-bold">
+                {dueOrOverdueTasks.length}
+              </span>
+            )}
+          </button>
+        ) : (
+          <div
+            className="relative group pointer-events-auto flex items-center gap-2"
+            onMouseLeave={() => setControlsVisibleByTap(false)}
+          >
+            {/* Floating Hearts on Petting */}
+            {floatingHearts.length > 0 && (
+              <div
+                className="pointer-events-none absolute inset-0 overflow-visible z-30"
+                aria-hidden="true"
+              >
+                {floatingHearts.map((h) => (
+                  <svg
+                    key={h.id}
+                    viewBox="0 0 24 24"
+                    style={{
+                      left: `calc(50% + ${h.offsetX}px - 8px)`,
+                      top: `${h.offsetY}px`,
+                      animationDelay: `${h.delayMs}ms`,
+                      transform: `scale(${h.scale})`,
+                    }}
+                    className="w-4 h-4 absolute pixel-heart-float fill-rose-500 drop-shadow-2xs"
+                  >
+                    <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
+                  </svg>
+                ))}
+              </div>
+            )}
+
+            {/* Single Compact Interactive Pixel Character (40-48px) */}
+            <div
               onClick={(e) => {
                 e.stopPropagation();
-                setSpeechBubble(null);
-                setDialogOpen((v) => !v);
+                triggerPettingReaction();
+                if (dialogOpen) {
+                  handleClosePixelDialog();
+                } else {
+                  setDialogOpen(true);
+                }
               }}
-              title="Поговорить с Пикселем"
-              aria-label="Поговорить с Пикселем"
-              className={`relative w-8 h-8 rounded-full bg-white/95 hover:bg-white border shadow-sm hover:shadow-md flex items-center justify-center transition-all duration-200 cursor-pointer hover:scale-105 active:scale-95 group/btn ${
-                dialogOpen
-                  ? 'border-sky-300 ring-2 ring-sky-100 text-sky-600'
-                  : 'border-pink-200/90 hover:border-sky-300 text-pink-500 hover:text-sky-500'
+              title={
+                interactionPaused
+                  ? 'Пиксель на паузе (нажмите, чтобы открыть диалог)'
+                  : 'Нажмите, чтобы открыть или свернуть диалог с Пикселем'
+              }
+              className={`relative bg-transparent overflow-visible cursor-pointer transition-transform duration-150 hover:scale-105 active:scale-95 ${
+                interactionPaused ? 'opacity-70 grayscale-[35%]' : ''
               }`}
             >
-              <MessageCircleHeart className="w-4 h-4 transition-colors" />
-              {dueOrOverdueTasks.length > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-pink-400 text-white font-mono-tabular font-extrabold text-[9px] flex items-center justify-center border border-white">
+              <div className="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] flex items-center justify-center">
+                <PixelCharacter
+                  size={characterSize}
+                  petTrigger={petTriggerCount}
+                  isSpeaking={isSpeakingUnified && !interactionPaused}
+                  isListening={isListeningUnified && !interactionPaused}
+                  isThinking={isThinkingUnified}
+                  interactive={false}
+                />
+              </div>
+
+              {/* Due tasks badge on character */}
+              {dueOrOverdueTasks.length > 0 && !interactionPaused && (
+                <span className="
+                  absolute -top-1 -right-1 min-w-[15px] h-[15px] px-1 rounded-full
+                  bg-pink-500 text-white font-mono-tabular font-bold text-[9px]
+                  flex items-center justify-center border border-white shadow-2xs
+                ">
                   {dueOrOverdueTasks.length}
                 </span>
               )}
-            </button>
 
-            {/* Reopen Last Bubble Button when bubble was dismissed and dialog is closed */}
-            {!dialogOpen && isCurrentBubbleDismissed && (lastSavedBubble || companionMessages.length > 0) && (
+              {/* Visual Pause State Badge */}
+              {interactionPaused && (
+                <span
+                  title="Общение с Пикселем приостановлено"
+                  className="absolute -bottom-1 -right-1 px-1.5 py-0.2 rounded-full bg-amber-500 text-white font-bold text-[8px] uppercase tracking-wider border border-white shadow-2xs"
+                >
+                  Пауза
+                </span>
+              )}
+            </div>
+
+            {/* Hover Quick-Actions Bar (Stage 2: 1. Open dialog, 2. Pause/Resume, 3. Voice settings, 4. Hide character) */}
+            <div
+              className={`flex items-center gap-1 px-2 py-1 rounded-2xl bg-white/95 backdrop-blur-md border border-slate-200/90 shadow-lg transition-all duration-150 ${
+                controlsVisibleByTap
+                  ? 'opacity-100 translate-x-0 pointer-events-auto'
+                  : 'opacity-0 -translate-x-2 pointer-events-none group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto'
+              }`}
+            >
               <button
                 type="button"
-                onClick={handleReopenLastBubble}
-                title="Показать последнее сообщение Пикселя"
-                aria-label="Показать последнее сообщение"
-                className="w-7 h-7 rounded-full bg-white/95 hover:bg-white border border-slate-200/90 shadow-2xs hover:shadow text-slate-500 hover:text-sky-600 flex items-center justify-center transition-all cursor-pointer hover:scale-105 active:scale-95"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSpeechBubble(null);
+                  setDialogOpen((v) => !v);
+                }}
+                title="1. Открыть диалог с Пикселем"
+                className="p-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <MessageSquare className="w-3.5 h-3.5" />
               </button>
-            )}
-          </div>
 
-          {/* Floating Hearts on Petting */}
-          {floatingHearts.length > 0 && (
-            <div
-              className="pointer-events-none absolute inset-0 overflow-visible z-30"
-              aria-hidden="true"
-            >
-              {floatingHearts.map((h) => (
-                <svg
-                  key={h.id}
-                  viewBox="0 0 24 24"
-                  style={{
-                    left: `calc(50% + ${h.offsetX}px - 8px)`,
-                    top: `${h.offsetY}px`,
-                    animationDelay: `${h.delayMs}ms`,
-                    transform: `scale(${h.scale})`,
-                  }}
-                  className="w-4 h-4 absolute pixel-heart-float fill-rose-500 drop-shadow-2xs"
-                >
-                  <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
-                </svg>
-              ))}
-            </div>
-          )}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleTogglePauseInteraction(e);
+                }}
+                title={
+                  interactionPaused
+                    ? '2. Возобновить общение с Пикселем'
+                    : '2. Приостановить общение с Пикселем'
+                }
+                className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
+                  interactionPaused
+                    ? 'bg-amber-100 text-amber-900 hover:bg-amber-200'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                {interactionPaused ? (
+                  <Play className="w-3.5 h-3.5" />
+                ) : (
+                  <Pause className="w-3.5 h-3.5" />
+                )}
+              </button>
 
-          {/* Interactive Fixed & Pettable Fantasy Creature (No Dragging displacement!) */}
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              triggerPettingReaction();
-              setDialogOpen((v) => !v);
-            }}
-            title="Нажмите, чтобы погладить Пикселя и открыть диалог"
-            className="bg-transparent overflow-visible cursor-pointer transition-transform duration-150 hover:scale-105 active:scale-95"
-          >
-            {/* 3D Glowing Sphere Character */}
-            <div className="w-[54px] h-[54px] sm:w-[64px] sm:h-[64px] lg:w-[74px] lg:h-[74px] flex items-center justify-center">
-              <PixelCharacter
-                size={characterSize}
-                petTrigger={petTriggerCount}
-                isSpeaking={isSpeakingUnified}
-                isListening={isListeningUnified}
-                isThinking={isThinkingUnified}
-                interactive={false}
-              />
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onOpenRightPanelVoiceSettings) {
+                    onOpenRightPanelVoiceSettings();
+                  } else {
+                    setIsVoiceSettingsOpen(true);
+                  }
+                }}
+                title="3. Открыть настройки голоса"
+                className="p-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleToggleCharacterHidden(true);
+                }}
+                title="4. Скрыть персонажа"
+                className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+              >
+                <EyeOff className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       <PixelVoiceSettingsModal

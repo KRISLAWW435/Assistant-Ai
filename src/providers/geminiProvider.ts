@@ -48,12 +48,20 @@ export interface GeminiChatMessageInput {
   content: string;
 }
 
+export interface PreparedApiImageItem {
+  id: string;
+  name: string;
+  mimeType: string;
+  base64Data: string;
+}
+
 export interface GeminiStreamRequestOptions {
   schoolId: SchoolId;
   mode: GeminiEndpointMode;
   sessionId: string;
   messages: GeminiChatMessageInput[];
   selectedDocuments?: PreparedApiDocumentItem[];
+  selectedImages?: PreparedApiImageItem[];
   knowledgeBaseContext?: PreparedKnowledgeContextItem[];
   pixelContext?: PixelRelevantContextBundle;
   externalApiConsentConfirmed?: boolean;
@@ -303,6 +311,7 @@ export const geminiProvider: IGeminiProvider = {
           sessionId: options.sessionId,
           messages: options.messages,
           selectedDocuments: options.selectedDocuments || [],
+          selectedImages: options.selectedImages || [],
           knowledgeBaseContext: options.knowledgeBaseContext || [],
           pixelContext: options.pixelContext,
           externalApiConsentConfirmed: Boolean(

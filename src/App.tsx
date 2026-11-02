@@ -129,7 +129,8 @@ function readInitialRightPanelTab(): RightPanelTab {
       saved === 'materials' ||
       saved === 'preview' ||
       saved === 'search' ||
-      saved === 'context'
+      saved === 'context' ||
+      saved === 'voice'
     ) {
       return saved;
     }
@@ -534,6 +535,65 @@ export default function App() {
           geminiLiveClient.sendTextPrompt(notificationText);
         }
       },
+      onDelegatedTaskSyncToAnnaTasks: async (delegationState) => {
+        const specialistTitle = AGENT_MODES[delegationState.targetMode].shortTitle;
+        const schoolName = SCHOOLS[delegationState.schoolId].name;
+        const existing = companionTasksRef.current.find(
+          (t) => t.linkedDelegationTaskId === delegationState.taskId
+        );
+        const now = new Date();
+        const syzranDate = new Intl.DateTimeFormat('sv-SE', {
+          timeZone: 'Europe/Samara',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(now);
+
+        const mappedStatus: CompanionTaskRecord['status'] =
+          delegationState.status === 'completed'
+            ? 'done'
+            : delegationState.status === 'needs_revision' ||
+                delegationState.status === 'error'
+              ? 'in_progress'
+              : 'waiting_response';
+
+        const summaryText =
+          delegationState.reviewSummary ||
+          delegationState.resultText ||
+          delegationState.specialistReplyPreview;
+
+        const taskRecord: CompanionTaskRecord = existing
+          ? {
+              ...existing,
+              status: mappedStatus,
+              description: summaryText
+                ? `Поручение: ${delegationState.instruction}\nИтог: ${summaryText.slice(0, 260)}`
+                : `Поручение ${specialistTitle} (${schoolName}): ${delegationState.instruction}`,
+              completedAt:
+                mappedStatus === 'done' ? formatDateTimeShort(now) : existing.completedAt,
+              completedAtMs:
+                mappedStatus === 'done' ? now.getTime() : existing.completedAtMs,
+            }
+          : {
+              id: `task-del-${delegationState.taskId}`,
+              title: `Поручение ${specialistTitle} (${schoolName}): ${delegationState.instruction.slice(0, 90)}`,
+              description: `Сессия: ${delegationState.sessionTitle || 'Рабочий чат'}`,
+              dueDate: syzranDate,
+              priority: 'medium',
+              status: mappedStatus,
+              schoolId: delegationState.schoolId,
+              sourceType: 'delegation',
+              linkedDelegationTaskId: delegationState.taskId,
+              linkedSpecialistId: delegationState.specialistId,
+              linkedChatId: delegationState.chatId,
+              estimatedMinutes: 15,
+              priorityReason: `Делегировано специалисту (${specialistTitle}, ${schoolName}) — ожидает ответа или проверки.`,
+              createdAt: formatDateTimeShort(now),
+              createdAtMs: now.getTime(),
+            };
+
+        await handleSaveCompanionTask(taskRecord);
+      },
     });
   }, []);
 
@@ -683,6 +743,17 @@ export default function App() {
     } catch {
       // Ignore storage errors
     }
+  };
+
+  const handleOpenRightPanelVoiceSettings = () => {
+    handleChangeRightPanelTab('voice');
+    setRightPanelCollapsed(false);
+    try {
+      window.localStorage.setItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY, 'false');
+    } catch {
+      // Ignore storage errors
+    }
+    setRightPanelMobileOpen(true);
   };
 
   const handleTogglePixelCollapsed = (nextCollapsed: boolean) => {
@@ -1042,7 +1113,7 @@ export default function App() {
       let dataUrl: string | undefined;
       if (
         DATA_URL_PREVIEW_EXTENSIONS.has(ext) &&
-        file.size <= 5 * 1024 * 1024
+        file.size <= 10 * 1024 * 1024
       ) {
         try {
           dataUrl = await new Promise<string>((resolve, reject) => {
@@ -1066,8 +1137,7 @@ export default function App() {
       if (IMAGE_ONLY_EXTENSIONS.has(ext)) {
         status = 'processed';
         extractedText = '';
-        warning =
-          'Изображение готово к визуальному просмотру в материалах диалога. Распознавание текста (OCR) с изображений не используется.';
+        warning = undefined;
       } else {
         parsedResult = await documentProvider.parseFile(file, (nextStatus) => {
           setChatParsingStatus(nextStatus);
@@ -1079,6 +1149,16 @@ export default function App() {
         pageCount = parsedResult.pageCount;
       }
 
+      const resolvedMimeType =
+        file.type ||
+        (IMAGE_ONLY_EXTENSIONS.has(ext)
+          ? ext === 'png'
+            ? 'image/png'
+            : ext === 'webp'
+              ? 'image/webp'
+              : 'image/jpeg'
+          : undefined);
+
       const attachment: ChatAttachment = {
         id: `att-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
         name: file.name,
@@ -1089,11 +1169,18 @@ export default function App() {
         statusMessage,
         warning,
         pageCount,
-        mimeType: file.type || undefined,
+        mimeType: resolvedMimeType,
         createdAt: formatTimeNow(now),
         createdAtMs: now.getTime(),
         dataUrl,
       };
+
+      // Stage images directly to draft preview without a blocking document-text modal
+      if (IMAGE_ONLY_EXTENSIONS.has(ext) && target === 'draft') {
+        setDraftAttachment(attachment);
+        setSelectedAttachmentId(attachment.id);
+        return;
+      }
 
       setStagedChatFileModal({
         target,
@@ -1372,6 +1459,7 @@ export default function App() {
             mimeType: linkedAttachment.mimeType,
             createdAt: linkedAttachment.createdAt,
             status: linkedAttachment.status,
+            dataUrl: linkedAttachment.dataUrl,
           }
         : undefined,
     };
@@ -1383,9 +1471,35 @@ export default function App() {
       contextOptions.includeKnowledgeBase
     );
 
+    const isLinkedImage = Boolean(
+      linkedAttachment?.dataUrl &&
+        (linkedAttachment.mimeType?.startsWith('image/') ||
+          IMAGE_ONLY_EXTENSIONS.has(linkedAttachment.extension))
+    );
+
+    const selectedImages =
+      isLinkedImage && linkedAttachment?.dataUrl
+        ? [
+            {
+              id: linkedAttachment.id,
+              name: linkedAttachment.name,
+              mimeType:
+                linkedAttachment.mimeType ||
+                (linkedAttachment.extension === 'png'
+                  ? 'image/png'
+                  : linkedAttachment.extension === 'webp'
+                    ? 'image/webp'
+                    : 'image/jpeg'),
+              base64Data: linkedAttachment.dataUrl.includes(',')
+                ? linkedAttachment.dataUrl.split(',')[1]
+                : linkedAttachment.dataUrl,
+            },
+          ]
+        : [];
+
     const { sendableDocuments, skippedNoTextDocuments } =
       documentProvider.prepareSelectedDocumentsForApi({
-        draftAttachment: linkedAttachment,
+        draftAttachment: isLinkedImage ? null : linkedAttachment,
         dialogueAttachments: baseSession.attachments || [],
         selectedDialogueAttachmentIds:
           contextOptions.selectedDialogueAttachmentIds,
@@ -1402,6 +1516,9 @@ export default function App() {
       usedContextSummary.push(
         `База знаний ${schoolCfg.name} (${kbContext.length} разд.)`
       );
+    }
+    for (const img of selectedImages) {
+      usedContextSummary.push(`Изображение: «${img.name}»`);
     }
     for (const doc of sendableDocuments) {
       usedContextSummary.push(`Документ: «${doc.name}»`);
@@ -1554,6 +1671,7 @@ export default function App() {
         sessionId: initialUpdatedSession.id,
         messages: historyForApi,
         selectedDocuments: sendableDocuments,
+        selectedImages,
         knowledgeBaseContext: kbContext,
         externalApiConsentConfirmed:
           contextOptions.externalApiConsentConfirmed,
@@ -2203,12 +2321,8 @@ export default function App() {
           }}
           rightPanelOpen={!rightPanelCollapsed}
           dialogueFilesCount={currentDialogueFilesCount}
-          onOpenLiveVoice={() => {
-            voiceManager.stopAll();
-            setIsLiveVoiceFromWakeWord(false);
-            setIsLiveVoiceOpen(true);
-          }}
-          onOpenVoiceSettings={() => setIsVoiceSettingsOpen(true)}
+          onOpenLiveVoice={handleOpenRightPanelVoiceSettings}
+          onOpenVoiceSettings={handleOpenRightPanelVoiceSettings}
           onOpenVoiceDiagnostics={() => setIsVoiceDiagnosticsOpen(true)}
           isWakeWordListening={
             wakeWordState === 'standby_listening' ||
@@ -2324,7 +2438,7 @@ export default function App() {
                       ? documentProvider.getStatusLabel(chatParsingStatus)
                       : null
                   }
-                  onOpenVoiceSettings={() => setIsVoiceSettingsOpen(true)}
+                  onOpenVoiceSettings={handleOpenRightPanelVoiceSettings}
                 />
               )}
 
@@ -2406,16 +2520,14 @@ export default function App() {
         onChangeProviderSelection={handleChangeProviderSelection}
         onCheckProvidersOnDemand={handleCheckProvidersOnDemand}
         isCheckingProviders={isCheckingProviders}
+        onOpenPixelChat={() => setPixelForceOpenChatTrigger((c) => c + 1)}
       />
 
       {/* 4. PIXEL VOICE WIDGET (STAGE 6.1: PERSISTENT VOICE ASSISTANT) */}
       <PixelVoiceWidget
         onOpenPixelChat={() => setPixelForceOpenChatTrigger((c) => c + 1)}
-        onOpenFullscreenModal={() => {
-          setIsLiveVoiceFromWakeWord(false);
-          setIsLiveVoiceOpen(true);
-        }}
-        onOpenSettings={() => setIsVoiceSettingsOpen(true)}
+        onOpenFullscreenModal={handleOpenRightPanelVoiceSettings}
+        onOpenSettings={handleOpenRightPanelVoiceSettings}
         onOpenDiagnostics={() => setIsVoiceDiagnosticsOpen(true)}
       />
 
@@ -2439,7 +2551,8 @@ export default function App() {
         onSaveCompanionTask={handleSaveCompanionTask}
         onDeleteCompanionTask={handleDeleteCompanionTask}
         onSaveCompanionPreferences={handleSaveCompanionPreferences}
-        onOpenLiveVoice={() => setIsLiveVoiceOpen(true)}
+        onOpenLiveVoice={handleOpenRightPanelVoiceSettings}
+        onOpenRightPanelVoiceSettings={handleOpenRightPanelVoiceSettings}
       />
 
       {/* MODAL 1: Chat File Preview & Manager Confirmation Modal */}

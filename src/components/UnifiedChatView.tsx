@@ -9,6 +9,7 @@ import {
   Eye,
   FileText,
   FolderOpen,
+  Image as ImageIcon,
   Info,
   Loader2,
   MessageSquarePlus,
@@ -220,6 +221,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const modeConfig = AGENT_MODES[activeMode];
@@ -400,6 +402,33 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     await onStageFileForDraft(file);
   };
 
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const isSupportedImage =
+      ['image/png', 'image/jpeg', 'image/webp'].includes(file.type) ||
+      ['png', 'jpg', 'jpeg', 'webp'].includes(ext);
+
+    if (!isSupportedImage) {
+      setAttachmentNotice(
+        'Поддерживаются только изображения форматов PNG, JPG, JPEG и WEBP.'
+      );
+      return;
+    }
+
+    const maxImageBytes = 10 * 1024 * 1024;
+    if (file.size > maxImageBytes) {
+      setAttachmentNotice('Размер изображения превышает допустимый лимит 10 МБ.');
+      return;
+    }
+
+    setAttachmentNotice(null);
+    await onStageFileForDraft(file);
+  };
+
   const handleClearChatClick = () => {
     setDraftPrompt('');
     setSelectedQuickPromptId(null);
@@ -455,6 +484,22 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     const trimmed = draftPrompt.trim();
     if (!trimmed && !draftAttachment) return;
 
+    const isDraftImage = Boolean(
+      draftAttachment?.dataUrl &&
+        (draftAttachment.mimeType?.startsWith('image/') ||
+          ['png', 'jpg', 'jpeg', 'webp'].includes(draftAttachment.extension))
+    );
+
+    if (
+      isDraftImage &&
+      (providerSelection === 'ollama' || providerSelection === 'openrouter')
+    ) {
+      setAttachmentNotice(
+        `Выбранный провайдер (${PROVIDER_LABELS_RU[providerSelection]}) не поддерживает анализ изображений. Пожалуйста, переключите провайдера на «Автовыбор ИИ» или «Google Gemini Free».`
+      );
+      return;
+    }
+
     if (
       hasSelectedDocsWithText &&
       !consentedProviders.includes(primaryProviderForDocs)
@@ -469,7 +514,10 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
     setAttachmentNotice(null);
     onSendMessage(
-      trimmed || `Проанализируй прикреплённый документ: ${draftAttachment?.name}`,
+      trimmed ||
+        (isDraftImage
+          ? `Внимательно проанализируй прикреплённое изображение (${draftAttachment?.name}) и дай подробный разбор.`
+          : `Проанализируй прикреплённый документ: ${draftAttachment?.name}`),
       draftAttachment,
       {
         includeKnowledgeBase,
@@ -883,47 +931,76 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                         </div>
                       )}
 
-                      {(msg.attachmentMeta || msg.attachmentName) && (
-                        <div
-                          className={`flex items-center justify-between gap-3 text-xs pb-2.5 mb-2.5 border-b ${
-                            isUser
-                              ? 'border-slate-700 text-[#F5B800]'
-                              : 'border-slate-100 text-[#00A8B5]'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <FileText className="w-3.5 h-3.5 shrink-0" />
-                            <span className="truncate font-medium">
-                              {msg.attachmentMeta?.name || msg.attachmentName}
-                            </span>
-                            {msg.attachmentMeta && (
-                              <span className="text-[10px] opacity-80 font-mono-tabular shrink-0">
-                                ({formatFileSizeRu(msg.attachmentMeta.sizeBytes)}
-                                )
-                              </span>
-                            )}
-                          </div>
+                      {(msg.attachmentMeta || msg.attachmentName) && (() => {
+                        const matchedAttachment = msg.attachmentMeta
+                          ? dialogueAttachments.find(
+                              (a) => a.id === msg.attachmentMeta!.id
+                            )
+                          : undefined;
+                        const imageDataUrl =
+                          msg.attachmentMeta?.dataUrl ||
+                          matchedAttachment?.dataUrl;
 
-                          {msg.attachmentMeta && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onInspectAttachmentInRightPanel(
-                                  msg.attachmentMeta!.id
-                                )
-                              }
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold shrink-0 transition-colors ${
-                                isUser
-                                  ? 'bg-slate-800 text-white hover:bg-slate-700'
-                                  : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
-                              }`}
-                            >
-                              <Eye className="w-3 h-3" />
-                              <span>Просмотр</span>
-                            </button>
-                          )}
-                        </div>
-                      )}
+                        return (
+                          <div
+                            className={`space-y-2 pb-2.5 mb-2.5 border-b ${
+                              isUser
+                                ? 'border-slate-700 text-[#F5B800]'
+                                : 'border-slate-100 text-[#00A8B5]'
+                            }`}
+                          >
+                            {imageDataUrl && (
+                              <div className="overflow-hidden rounded-xl border border-slate-200/30 bg-black/15">
+                                <img
+                                  src={imageDataUrl}
+                                  alt={
+                                    msg.attachmentMeta?.name ||
+                                    msg.attachmentName ||
+                                    'Прикреплённое изображение'
+                                  }
+                                  className="max-h-72 w-auto max-w-full object-contain rounded-lg mx-auto"
+                                />
+                              </div>
+                            )}
+                            <div className="flex items-center justify-between gap-3 text-xs">
+                              <div className="flex items-center gap-2 min-w-0">
+                                {imageDataUrl ? (
+                                  <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                                ) : (
+                                  <FileText className="w-3.5 h-3.5 shrink-0" />
+                                )}
+                                <span className="truncate font-medium">
+                                  {msg.attachmentMeta?.name || msg.attachmentName}
+                                </span>
+                                {msg.attachmentMeta && (
+                                  <span className="text-[10px] opacity-80 font-mono-tabular shrink-0">
+                                    ({formatFileSizeRu(msg.attachmentMeta.sizeBytes)})
+                                  </span>
+                                )}
+                              </div>
+
+                              {msg.attachmentMeta && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onInspectAttachmentInRightPanel(
+                                      msg.attachmentMeta!.id
+                                    )
+                                  }
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold shrink-0 transition-colors ${
+                                    isUser
+                                      ? 'bg-slate-800 text-white hover:bg-slate-700'
+                                      : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
+                                  }`}
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  <span>Просмотр</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       <div>
                         {msg.isStreaming ? (
@@ -1315,75 +1392,141 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             </div>
           )}
 
-          {/* Pre-send Attachment Preview Card (Name, Format, Size, Status, Warnings, Preview & Remove) */}
-          {draftAttachment && (
-            <div className="rounded-xl bg-slate-50 border border-slate-200/90 p-3 space-y-2 text-xs">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-[#00A8B5] shrink-0">
-                    <FileText className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-slate-900 truncate">
-                        {draftAttachment.name}
-                      </span>
-                      {renderStatusBadge(draftAttachment.status || 'processed')}
+          {/* Pre-send Attachment Preview Card (Image Thumbnail or Document Preview & Remove) */}
+          {draftAttachment && (() => {
+            const isDraftImage = Boolean(
+              draftAttachment.dataUrl &&
+                (draftAttachment.mimeType?.startsWith('image/') ||
+                  ['png', 'jpg', 'jpeg', 'webp'].includes(
+                    draftAttachment.extension
+                  ))
+            );
+            return (
+              <div className="rounded-xl bg-slate-50 border border-slate-200/90 p-3 space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {isDraftImage && draftAttachment.dataUrl ? (
+                      <img
+                        src={draftAttachment.dataUrl}
+                        alt={draftAttachment.name}
+                        className="w-14 h-14 rounded-xl object-cover border border-slate-200 bg-white shrink-0 shadow-2xs"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-[#00A8B5] shrink-0">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-slate-900 truncate">
+                          {draftAttachment.name}
+                        </span>
+                        {isDraftImage ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 text-[10px] font-bold">
+                            <ImageIcon className="w-3 h-3 text-emerald-700" />
+                            <span>Визуальный анализ ИИ</span>
+                          </span>
+                        ) : (
+                          renderStatusBadge(
+                            draftAttachment.status || 'processed'
+                          )
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono-tabular mt-0.5">
+                        <span className="uppercase font-bold text-slate-700">
+                          .{draftAttachment.extension || 'file'}
+                        </span>
+                        <span>·</span>
+                        <span>
+                          {formatFileSizeRu(draftAttachment.sizeBytes)}
+                        </span>
+                        {!isDraftImage && (
+                          <>
+                            <span>·</span>
+                            <span>
+                              Текст: {draftAttachment.extractedText.length} симв.
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono-tabular mt-0.5">
-                      <span className="uppercase font-bold text-slate-700">
-                        .{draftAttachment.extension || 'file'}
-                      </span>
-                      <span>·</span>
-                      <span>{formatFileSizeRu(draftAttachment.sizeBytes)}</span>
-                      <span>·</span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {!isDraftImage && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onInspectAttachmentInRightPanel(draftAttachment.id)
+                        }
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
+                      >
+                        <Eye className="w-3 h-3" />
+                        <span>Проверить текст</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={onClearDraftAttachment}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
+                      aria-label="Убрать прикреплённый файл"
+                      title="Удалить прикреплённое изображение или файл"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {isDraftImage ? (
+                  providerSelection === 'ollama' ||
+                  providerSelection === 'openrouter' ? (
+                    <div className="rounded-lg p-2.5 bg-amber-50 border border-amber-300 text-[11px] text-amber-950 flex flex-wrap items-center justify-between gap-2">
                       <span>
-                        Текст: {draftAttachment.extractedText.length} симв.
+                        Выбранный провайдер (
+                        <strong>{PROVIDER_LABELS_RU[providerSelection]}</strong>
+                        ) не поддерживает анализ изображений. Для отправки
+                        картинки переключите режим на{' '}
+                        <strong>Автовыбор ИИ</strong> или{' '}
+                        <strong>Google Gemini Free</strong>.
                       </span>
+                      {onChangeProviderSelection && (
+                        <button
+                          type="button"
+                          onClick={() => onChangeProviderSelection('auto')}
+                          className="px-2.5 py-1 rounded-lg bg-slate-900 text-white font-semibold text-[11px] hover:bg-slate-800 shrink-0"
+                        >
+                          Включить Автовыбор ИИ
+                        </button>
+                      )}
                     </div>
-                  </div>
-                </div>
+                  ) : (
+                    <div className="rounded-lg p-2 bg-emerald-50/70 border border-emerald-200/80 text-[11px] text-emerald-950">
+                      Изображение будет передано модели как визуальные данные
+                      вместе с вашим вопросом после нажатия «Отправить».
+                    </div>
+                  )
+                ) : (
+                  <>
+                    {draftAttachment.warning && (
+                      <div className="rounded-lg p-2 bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
+                        {draftAttachment.warning}
+                      </div>
+                    )}
 
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onInspectAttachmentInRightPanel(draftAttachment.id)
-                    }
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
-                  >
-                    <Eye className="w-3 h-3" />
-                    <span>Проверить текст</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onClearDraftAttachment}
-                    className="p-1.5 text-slate-400 hover:text-slate-800 rounded-lg hover:bg-slate-200/60"
-                    aria-label="Убрать прикреплённый файл"
-                    title="Убрать файл из черновика"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
+                    {(!draftAttachment.extractedText ||
+                      draftAttachment.extractedText.trim().length === 0) && (
+                      <div className="rounded-lg p-2 bg-slate-100 border border-slate-200 text-[11px] text-slate-700">
+                        Ограничение: в этом файле отсутствует извлечённый
+                        текстовый слой (например, скан без OCR). Он сохранится в
+                        материалах диалога, но его текст не может быть передан в
+                        текстовый запрос.
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
-
-              {draftAttachment.warning && (
-                <div className="rounded-lg p-2 bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
-                  {draftAttachment.warning}
-                </div>
-              )}
-
-              {(!draftAttachment.extractedText ||
-                draftAttachment.extractedText.trim().length === 0) && (
-                <div className="rounded-lg p-2 bg-slate-100 border border-slate-200 text-[11px] text-slate-700">
-                  Ограничение: в этом файле отсутствует извлечённый текстовый
-                  слой (например, скан без OCR или изображение). Он сохранится в
-                  материалах диалога, но его текст не может быть передан в
-                  текстовый запрос Gemini API.
-                </div>
-              )}
-            </div>
-          )}
+            );
+          })()}
 
           {/* Selective Context Controls (Knowledge Base + Explicit Document Selection) */}
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -1834,7 +1977,25 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             />
 
             <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                  onChange={handleImageChange}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  disabled={isParsingFile || isGenerating}
+                  onClick={() => imageInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-900 border border-slate-200/80 disabled:opacity-60 transition-colors cursor-pointer"
+                  title="Прикрепить изображение (PNG, JPG, JPEG, WEBP) для визуального анализа специалистом"
+                >
+                  <ImageIcon className="w-4 h-4 text-emerald-600" />
+                  <span>Изображение</span>
+                </button>
+
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1846,7 +2007,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   type="button"
                   disabled={isParsingFile || isGenerating}
                   onClick={() => fileInputRef.current?.click()}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 border border-slate-200/80 disabled:opacity-60 transition-colors cursor-pointer"
                   title="Прикрепить документ (PDF, DOCX, PPTX, TXT, CSV, MD) к текущему диалогу"
                 >
                   {isParsingFile ? (
@@ -1857,12 +2018,12 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   ) : (
                     <>
                       <Paperclip className="w-4 h-4 text-[#00A8B5]" />
-                      <span>Прикрепить документ</span>
+                      <span>Документ</span>
                     </>
                   )}
                 </button>
 
-                <span className="text-[11px] text-slate-400 hidden sm:inline">
+                <span className="text-[11px] text-slate-400 hidden md:inline">
                   Школа:{' '}
                   <strong className="text-slate-600">{schoolConfig.name}</strong>
                 </span>

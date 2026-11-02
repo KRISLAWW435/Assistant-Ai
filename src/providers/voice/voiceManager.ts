@@ -73,6 +73,7 @@ export class VoiceManager {
 
   private playbackListeners = new Set<(state: MessagePlaybackState) => void>();
   private audioLevelListeners = new Set<(level: number) => void>();
+  private settingsListeners = new Set<(settings: PixelVoiceSettings) => void>();
   private stoppedReadingListeners = new Set<
     (stopped: StoppedReadingSession | null) => void
   >();
@@ -224,16 +225,50 @@ export class VoiceManager {
     return { ...this.currentSettings };
   }
 
+  public onSettingsChange(
+    callback: (settings: PixelVoiceSettings) => void
+  ): () => void {
+    this.settingsListeners.add(callback);
+    callback(this.getSettings());
+    return () => this.settingsListeners.delete(callback);
+  }
+
   public updateSettings(partial: Partial<PixelVoiceSettings>): PixelVoiceSettings {
+    const prev = this.loadStoredSettings();
     this.currentSettings = {
-      ...this.currentSettings,
+      ...prev,
       ...partial,
       // Stage 6.5 (4): Strict on-demand reading only — never auto-speak new messages
       autoSpeakNewReplies: false,
-      selectedTimbreId: 'bright',
+      selectedTimbreId:
+        partial.selectedTimbreId || prev.selectedTimbreId || 'bright',
     };
     this.saveStoredSettings(this.currentSettings);
-    return { ...this.currentSettings };
+    if (typeof partial.volume === 'number') {
+      geminiTtsOutput.setVolume(this.currentSettings.volume);
+    }
+    if (partial.ttsEnabled === false) {
+      this.stopSpeaking(false);
+    }
+    const snap = { ...this.currentSettings };
+    for (const listener of this.settingsListeners) {
+      try {
+        listener(snap);
+      } catch {
+        // ignore listener error
+      }
+    }
+    return snap;
+  }
+
+  public setVolume(volume: number): PixelVoiceSettings {
+    const clamped = Math.max(0, Math.min(1, Number(volume) || 0));
+    geminiTtsOutput.setVolume(clamped);
+    return this.updateSettings({ volume: clamped });
+  }
+
+  public setTtsEnabled(enabled: boolean): PixelVoiceSettings {
+    return this.updateSettings({ ttsEnabled: Boolean(enabled) });
   }
 
   public getPlaybackState(): MessagePlaybackState {
@@ -388,6 +423,17 @@ export class VoiceManager {
     // Always dynamically load fresh settings from storage before playback
     this.currentSettings = this.loadStoredSettings();
     const s = this.currentSettings;
+    if (s.ttsEnabled === false) {
+      this.activeReadingSession = null;
+      this.updatePlaybackState({
+        messageId,
+        status: 'error',
+        provider: s.ttsProviderId === 'browser' ? 'browser' : 'gemini',
+        errorMessage:
+          'Голосовые ответы (TTS) выключены в правой панели настроек Пикселя.',
+      });
+      return;
+    }
     const providerToUse = s.ttsProviderId === 'browser' ? 'browser' : 'gemini';
 
     const selectedTimbre =
@@ -729,10 +775,21 @@ export class VoiceManager {
           ? parsed.selectedGeminiVoice
           : 'Aoede';
 
+        const validTimbres = ['natural', 'bright', 'high'];
+        const timbre = validTimbres.includes(parsed.selectedTimbreId)
+          ? parsed.selectedTimbreId
+          : 'bright';
+
         return {
-          ttsProviderId: 'gemini',
+          ttsEnabled:
+            parsed.ttsEnabled !== undefined ? Boolean(parsed.ttsEnabled) : true,
+          continuousListeningEnabled: Boolean(
+            parsed.continuousListeningEnabled
+          ),
+          ttsProviderId:
+            parsed.ttsProviderId === 'browser' ? 'browser' : 'gemini',
           selectedGeminiVoice: voice,
-          selectedTimbreId: 'bright',
+          selectedTimbreId: timbre,
           selectedLiveVoice:
             typeof parsed.selectedLiveVoice === 'string'
               ? parsed.selectedLiveVoice
@@ -756,7 +813,7 @@ export class VoiceManager {
               : 1.05,
           volume:
             typeof parsed.volume === 'number'
-              ? Math.max(0.1, Math.min(1.0, parsed.volume))
+              ? Math.max(0.0, Math.min(1.0, parsed.volume))
               : 1.0,
           wakeWordEnabled: Boolean(parsed.wakeWordEnabled),
           wakeWordSensitivity:

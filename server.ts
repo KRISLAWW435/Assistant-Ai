@@ -105,6 +105,13 @@ interface IncomingSelectedDocument {
   extractedText: string;
 }
 
+interface IncomingSelectedImage {
+  id: string;
+  name: string;
+  mimeType: string;
+  base64Data: string;
+}
+
 interface IncomingKnowledgeItem {
   categoryKey: string;
   categoryTitle: string;
@@ -159,6 +166,7 @@ interface GeminiChatRequestBody {
   sessionId?: string;
   messages: IncomingChatMessage[];
   selectedDocuments?: IncomingSelectedDocument[];
+  selectedImages?: IncomingSelectedImage[];
   knowledgeBaseContext?: IncomingKnowledgeItem[];
   pixelContext?: IncomingPixelContext;
   externalApiConsentConfirmed?: boolean;
@@ -575,6 +583,9 @@ function getGenAIClient(): GoogleGenAI {
     apiKey,
     httpOptions: {
       timeout: GEMINI_ATTEMPT_TIMEOUT_MS,
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
       retryOptions: {
         attempts: 1,
       },
@@ -768,11 +779,11 @@ const ROLE_INSTRUCTIONS: Record<AssistantEndpointMode, string> = {
      • [Сообщение от Пикселя] — поручения или уточняющие вопросы, отправленные вами в чат специалиста;
      • [Ответ специалиста] — реальные ответы ИИ-специалиста (Маркетолога, Менеджера, Методиста, Аналитика).
    - Когда Анна задаёт вопросы по содержанию ответа специалиста или обсуждает его с вами — опирайтесь на историю текущего рабочего диалога, разбирайте ответ по существу и предлагайте следующие шаги.
-   - Когда Анна просит вас отправить сообщение, задать уточняющий вопрос или попросить специалиста доработать ответ («Спроси Маркетолога...», «Попроси его доработать...», «Уточни у Менеджера...») — перед КАЖДОЙ отправкой специалисту вы всегда уточняете школу (KIBERONE или RENDERIA), специалиста и чистый деловой текст поручения без системных меток, показываете его Анне и ждёте явного подтверждения: «Да, отправляй». Без подтверждения ничего не отправляется. Если фраза Анны не закончена или смысл неясен — сначала переспросите.
+   - При явной команде Анны («попроси Маркетолога...», «отправь Методисту...», «поручи Аналитику...», «напиши Менеджеру...») координатор Пикселя сразу отправляет внутреннее поручение в нужный чат специалиста без лишнего предварительного подтверждения и без переключения экрана Анны, а затем приносит и анализирует результат в диалоге Пикселя.
    - Когда Анна просит озвучить ответ («Прочитай ответ», «Прочитай всё, что написал Маркетолог»), вы зачитываете полный последний ответ специалиста дословно через единую систему TTS Пикселя без сокращений и без генерации пересказа.
-10. ЕДИНОЕ УПРАВЛЕНИЕ РАБОЧИМИ ЧАТАМИ И ЧЕСТНОЕ ПОВЕДЕНИЕ (Этап 6.5):
+10. ЕДИНОЕ УПРАВЛЕНИЕ РАБОЧИМИ ЧАТАМИ, ЗАДАЧАМИ И ЧЕСТНОЕ ПОВЕДЕНИЕ:
    - Чаты строго разделены по школам (KIBERONE и RENDERIA) и по специалистам (Маркетолог, Менеджер, Методист, Аналитик). Категорически запрещено смешивать историю одного чата с другим.
-   - Вы умеете находить, открывать и переключать рабочие чаты, отправлять поручения специалистам (после подтверждения Анны), зачитывать их ответы вслух и удалять рабочие чаты (после явного подтверждения Анны).
+   - Вы являетесь полноценным менеджером задач Анны: помогаете фиксировать задачи из разговора, оценивать приоритеты, планировать день и неделю, разбивать сложные задачи на шаги и отслеживать поручения специалистам.
    - ЧЕСТНОСТЬ О ВОЗМОЖНОСТЯХ: Если Анна просит выполнить действие, которого пока нет в системе (например: напрямую опубликовать пост во ВКонтакте/Telegram, разослать внешние письма или сообщения в WhatsApp/SMS, позвонить клиенту, внести изменения во внешнюю CRM/Google Таблицу или провести оплату), вы ОБЯЗАНЫ честно сказать, что пока не умеете делать это самостоятельно, и кратко объяснить почему. Пример честного ответа: «Анна, я пока не умею самостоятельно выполнять это действие. Я ещё учусь управлять рабочими процессами, но мы сможем добавить такую возможность».
    - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО имитировать выполнение нереализованных внешних действий, сообщать о ложном успехе или придумывать несуществующие функции.
 11. СТРОГИЙ ЯЗЫКОВОЙ РЕЖИМ (ИСКЛЮЧИТЕЛЬНО РУССКИЙ ЯЗЫК):
@@ -787,8 +798,21 @@ export function buildSystemInstruction(body: GeminiChatRequestBody): string {
   const otherSchoolName =
     body.schoolId === 'kiberone' ? 'RENDERIA' : 'KIBERONE';
 
+  const now = new Date();
+  const syzranTimeStr = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Samara',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(now);
+
   const sections: string[] = [
     roleInstruction,
+    `ЛОКАЛЬНОЕ ВРЕМЯ УПРАВЛЯЮЩЕЙ АННЫ (г. Сызрань, Самарская область, часовой пояс Europe/Samara, UTC+4): сейчас ${syzranTimeStr}. Всегда ориентируйтесь именно на это время и дату для дедлайнов, расписания, напоминаний и ответов на вопросы о времени.`,
     `АКТИВНАЯ ШКОЛА В ЭТОМ ЗАПРОСЕ: ${schoolProfile.name} (${schoolProfile.tagline}).
 Описание: ${schoolProfile.description}
 СТРОГОЕ ПРАВИЛО ИЗОЛЯЦИИ ШКОЛ: Вы работаете исключительно в контексте школы ${schoolProfile.name}. Категорически запрещено смешивать программы, расписание, цены или документы со второй школой (${otherSchoolName}).`,
@@ -850,6 +874,30 @@ export function buildSystemInstruction(body: GeminiChatRequestBody): string {
       .join('\n\n');
     sections.push(
       `ВЫБРАННЫЕ УПРАВЛЯЮЩЕЙ ДОКУМЕНТЫ ДЛЯ АНАЛИЗА В ЭТОМ ЗАПРОСЕ:\n${formattedDocs}`
+    );
+  }
+
+  // Visual Image Analysis Context when images are attached
+  const images = (body.selectedImages || []).filter(
+    (img) => img && typeof img.base64Data === 'string' && img.base64Data.length > 0
+  );
+  if (images.length > 0) {
+    const imageNames = images.map((img, i) => `${i + 1}. «${img.name}» (${img.mimeType})`).join(', ');
+    sections.push(
+      `ПРИКРЕПЛЁННЫЕ ИЗОБРАЖЕНИЯ ДЛЯ ВИЗУАЛЬНОГО АНАЛИЗА (${images.length} шт.: ${imageNames}):
+- Пользователь прикрепил к сообщению реальное изображение (передано в мультимодальных данных запроса).
+- Внимательно изучите всё визуальное содержимое изображения: текст на картинке, композицию, таблицы, графики, скриншоты интерфейса, рекламные макеты, методические схемы или фотографии.
+- Отвечайте строго в рамках своей роли (${
+        body.mode === 'marketer'
+          ? 'ИИ-Маркетолог: оцените оффер, визуал, читаемость, призыв к действию и соответствие позиционированию школы'
+          : body.mode === 'manager'
+            ? 'ИИ-Менеджер: разберите скриншот переписки, прайс, расписание или вопрос клиента и предложите точный скрипт ответа'
+            : body.mode === 'methodist'
+              ? 'ИИ-Методист: проанализируйте учебный материал, задание, проект ученика или программу на изображении'
+              : body.mode === 'analyst'
+                ? 'ИИ-Аналитик: извлеките цифры, показатели, таблицы и графики с изображения и проведите точный разбор без домыслов'
+                : 'Пиксель: внимательно рассмотрите изображение, подробно и живо ответьте на вопрос Анны по его содержанию'
+      }) и в контексте школы ${schoolProfile.name}.`
     );
   }
 
@@ -1115,22 +1163,26 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
 }
 
 const GEMINI_MODEL_CASCADE: string[] = [
+  'gemini-3.8-flash',
   'gemini-3-flash-preview',
   'gemini-flash-lite-latest',
-  'gemini-3.8-flash',
   GEMINI_QUOTA_FALLBACK_MODEL,
 ];
 
-let lastHealthyGeminiModel: string = 'gemini-3-flash-preview';
+let lastHealthyGeminiModel: string = 'gemini-3.8-flash';
 
 /**
  * Provider 1: Google Gemini Free execution with fast multi-model cascade on 503/429/404
  */
 async function executeGeminiGeneration(params: {
   systemInstruction: string;
-  messages: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+  messages: Array<{
+    role: 'user' | 'model';
+    parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }>;
+  }>;
   signal: AbortSignal;
   simulateError?: string;
+  hasImages?: boolean;
 }): Promise<{ text: string; model: string }> {
   if (params.simulateError === 'force_error' || params.simulateError === 'force_gemini_error') {
     throw new Error('SIMULATED_GEMINI_ERROR');
@@ -1138,9 +1190,14 @@ async function executeGeminiGeneration(params: {
 
   const ai = getGenAIClient();
 
-  // Order candidate models starting with the most recently healthy model
+  // Order candidate models starting with vision-capable models when images are present
+  const visionPriorityModels = params.hasImages
+    ? ['gemini-3-flash-preview', 'gemini-3.8-flash']
+    : [lastHealthyGeminiModel];
+
   const candidateModels = Array.from(
     new Set([
+      ...visionPriorityModels,
       lastHealthyGeminiModel,
       ...GEMINI_MODEL_CASCADE,
       GEMINI_MODEL,
@@ -1436,8 +1493,8 @@ export async function startServer(
   const customDistPath = options.distPath;
   const app = express();
 
-  // Strict payload size limit to protect the server
-  app.use(express.json({ limit: '2mb' }));
+  // Strict payload size limit to protect the server while allowing base64 image attachments
+  app.use(express.json({ limit: '15mb' }));
 
   initializeDefaultConnectionProfiles();
 
@@ -2039,6 +2096,31 @@ export async function startServer(
       }
     }
 
+    const validImages = (body.selectedImages || [])
+      .filter(
+        (img) =>
+          img &&
+          typeof img.base64Data === 'string' &&
+          img.base64Data.trim().length > 0 &&
+          typeof img.mimeType === 'string' &&
+          img.mimeType.startsWith('image/')
+      )
+      .slice(0, 4);
+    const hasImages = validImages.length > 0;
+
+    if (
+      hasImages &&
+      (requestedSelection === 'ollama' || requestedSelection === 'openrouter')
+    ) {
+      res.status(400).json({
+        error: {
+          code: 'IMAGE_UNSUPPORTED_BY_PROVIDER',
+          message: `Выбранный провайдер (${PROVIDER_LABELS_RU[requestedSelection]}) не поддерживает визуальный анализ изображений. Пожалуйста, выберите «Автовыбор ИИ» или «Google Gemini Free» для отправки изображений.`,
+        },
+      });
+      return;
+    }
+
     const normalizedRawMessages = body.messages
       .filter(
         (m) =>
@@ -2048,7 +2130,17 @@ export async function startServer(
       )
       .slice(-MAX_MESSAGES_IN_CONTEXT);
 
-    const trimmedGeminiMessages = normalizedRawMessages.map((m) => ({
+    if (normalizedRawMessages.length === 0 && hasImages) {
+      normalizedRawMessages.push({
+        role: 'user',
+        content: 'Пожалуйста, внимательно проанализируй прикреплённое изображение.',
+      });
+    }
+
+    const trimmedGeminiMessages: Array<{
+      role: 'user' | 'model';
+      parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }>;
+    }> = normalizedRawMessages.map((m) => ({
       role: m.role === 'user' ? ('user' as const) : ('model' as const),
       parts: [{ text: m.content.trim().slice(0, MAX_SINGLE_MESSAGE_CHARS) }],
     }));
@@ -2061,6 +2153,36 @@ export async function startServer(
         },
       });
       return;
+    }
+
+    if (hasImages) {
+      let targetIdx = -1;
+      for (let i = trimmedGeminiMessages.length - 1; i >= 0; i--) {
+        if (trimmedGeminiMessages[i].role === 'user') {
+          targetIdx = i;
+          break;
+        }
+      }
+      if (targetIdx === -1) {
+        trimmedGeminiMessages.push({
+          role: 'user',
+          parts: [
+            { text: 'Пожалуйста, внимательно проанализируй прикреплённое изображение.' },
+          ],
+        });
+        targetIdx = trimmedGeminiMessages.length - 1;
+      }
+      for (const img of validImages) {
+        const cleanBase64 = img.base64Data.includes(',')
+          ? img.base64Data.split(',')[1].trim()
+          : img.base64Data.trim();
+        trimmedGeminiMessages[targetIdx].parts.push({
+          inlineData: {
+            mimeType: img.mimeType,
+            data: cleanBase64,
+          },
+        });
+      }
     }
 
     const systemInstruction = buildSystemInstruction(body);
@@ -2077,7 +2199,9 @@ export async function startServer(
     ];
 
     let candidateProviders: AIProviderId[];
-    if (requestedSelection !== 'auto') {
+    if (hasImages) {
+      candidateProviders = ['gemini'];
+    } else if (requestedSelection !== 'auto') {
       // Put requested provider first, followed by the remaining configured providers in failover order
       candidateProviders = [
         requestedSelection,
@@ -2275,6 +2399,7 @@ export async function startServer(
               messages: trimmedGeminiMessages,
               signal: abortController.signal,
               simulateError: body.simulateError,
+              hasImages,
             });
           } else if (providerId === 'openrouter') {
             attemptResult = await executeOpenRouterFreeGeneration({
