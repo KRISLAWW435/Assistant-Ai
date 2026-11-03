@@ -312,6 +312,9 @@ export interface ImageProviderDescriptor {
   shortLabel: string;
   isFreeTierOnly: true;
   configured: boolean;
+  configuredAccountId?: string;
+  maskedApiToken?: string;
+  hasSavedToken?: boolean;
   status: ImageProviderAvailabilityStatus;
   statusLabelRu: string;
   lastCheckedAtIso?: string;

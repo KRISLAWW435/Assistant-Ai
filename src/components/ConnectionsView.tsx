@@ -51,6 +51,8 @@ import {
   AIConnectionStatus,
   AIProviderId,
   FailoverSequenceSettings,
+  ImageProviderId,
+  ImageProvidersRegistryState,
   NavSection,
   OllamaLocalInfo,
   SchoolId,
@@ -65,6 +67,7 @@ import {
   maskApiKey,
   RECOMMENDED_OLLAMA_MODELS,
 } from '../providers/aiConnectionManager';
+import { geminiProvider } from '../providers/geminiProvider';
 import { ConnectionTestResult } from '../types/electronBridge';
 import { SCHOOLS } from '../config/schoolsAndModes';
 import {
@@ -99,6 +102,9 @@ interface ConnectionsViewProps {
   activeSchool: SchoolId;
   onNavigate: (section: NavSection) => void;
   onRefreshProviders?: () => Promise<void>;
+  imageProvidersState?: ImageProvidersRegistryState | null;
+  isCheckingImageProviders?: boolean;
+  onCheckImageProviders?: (providerId?: ImageProviderId) => Promise<void>;
 }
 
 type ConnectionsSubTab =
@@ -188,6 +194,9 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   activeSchool,
   onNavigate,
   onRefreshProviders,
+  imageProvidersState,
+  isCheckingImageProviders,
+  onCheckImageProviders,
 }) => {
   const [activeTab, setActiveTab] = useState<ConnectionsSubTab>('providers');
 
@@ -205,6 +214,17 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     apiUrl: 'http://127.0.0.1:11434',
     models: [],
   });
+
+  // Cloudflare Workers AI (Image Generation) State
+  const [localImageProvidersState, setLocalImageProvidersState] =
+    useState<ImageProvidersRegistryState | null>(null);
+  const [cfAccountId, setCfAccountId] = useState('');
+  const [cfRawToken, setCfRawToken] = useState('');
+  const [cfMaskedToken, setCfMaskedToken] = useState('Не настроен');
+  const [cfHasSavedToken, setCfHasSavedToken] = useState(false);
+  const [showCfToken, setShowCfToken] = useState(false);
+  const [isSavingCf, setIsSavingCf] = useState(false);
+  const [isCheckingCf, setIsCheckingCf] = useState(false);
 
   // UI States
   const [isLoading, setIsLoading] = useState(true);
@@ -688,27 +708,62 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   const loadAllData = async () => {
     setIsLoading(true);
     try {
-      const [loadedProfiles, loadedSpecialists, loadedFailover, loadedOllama] =
-        await Promise.all([
-          aiConnectionManager.listProfiles().catch(() => []),
-          aiConnectionManager
-            .getSpecialistModels()
-            .catch(() => getDefaultSpecialistAssignments()),
-          aiConnectionManager
-            .getFailoverSettings()
-            .catch(() => getDefaultFailoverSettings()),
-          aiConnectionManager.getOllamaStatus().catch(() => ({
-            installed: false,
-            running: false,
-            apiUrl: 'http://127.0.0.1:11434',
-            models: [],
-          })),
-        ]);
+      const [
+        loadedProfiles,
+        loadedSpecialists,
+        loadedFailover,
+        loadedOllama,
+        loadedCfConfig,
+        loadedImgState,
+      ] = await Promise.all([
+        aiConnectionManager.listProfiles().catch(() => []),
+        aiConnectionManager
+          .getSpecialistModels()
+          .catch(() => getDefaultSpecialistAssignments()),
+        aiConnectionManager
+          .getFailoverSettings()
+          .catch(() => getDefaultFailoverSettings()),
+        aiConnectionManager.getOllamaStatus().catch(() => ({
+          installed: false,
+          running: false,
+          apiUrl: 'http://127.0.0.1:11434',
+          models: [],
+        })),
+        aiConnectionManager.getCloudflareImageConfig().catch(() => ({
+          configured: false,
+          accountId: '',
+          maskedApiToken: 'Не настроен',
+          hasSavedToken: false,
+        })),
+        geminiProvider.getDesignImageProviders().catch(() => null),
+      ]);
 
       setProfiles(loadedProfiles);
       setSpecialists(loadedSpecialists);
       setFailover(loadedFailover);
       setOllamaInfo(loadedOllama);
+      if (loadedImgState) {
+        setLocalImageProvidersState(loadedImgState);
+      }
+
+      const cfFromRegistry = loadedImgState?.providers.find(
+        (p) => p.id === 'cloudflare'
+      );
+      setCfAccountId(
+        loadedCfConfig.accountId || cfFromRegistry?.configuredAccountId || ''
+      );
+      setCfMaskedToken(
+        loadedCfConfig.maskedApiToken &&
+          loadedCfConfig.maskedApiToken !== 'Не настроен'
+          ? loadedCfConfig.maskedApiToken
+          : cfFromRegistry?.maskedApiToken || 'Не настроен'
+      );
+      setCfHasSavedToken(
+        Boolean(
+          loadedCfConfig.hasSavedToken || cfFromRegistry?.hasSavedToken
+        )
+      );
+      setCfRawToken('');
     } catch {
       setBannerNotice({
         type: 'error',
@@ -722,6 +777,118 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   useEffect(() => {
     loadAllData();
   }, []);
+
+  const effectiveImageProvidersState =
+    imageProvidersState ?? localImageProvidersState;
+  const cloudflareProvider = useMemo(
+    () =>
+      effectiveImageProvidersState?.providers.find(
+        (p) => p.id === 'cloudflare'
+      ) || null,
+    [effectiveImageProvidersState]
+  );
+
+  const handleCheckCloudflareConnection = async () => {
+    if (isCheckingCf || isCheckingImageProviders) return;
+    setIsCheckingCf(true);
+    setBannerNotice(null);
+    try {
+      const checked =
+        await geminiProvider.checkDesignImageProviders('cloudflare');
+      setLocalImageProvidersState(checked);
+      if (onCheckImageProviders) {
+        await onCheckImageProviders('cloudflare');
+      }
+      const cf = checked.providers.find((p) => p.id === 'cloudflare');
+      if (cf?.status === 'available') {
+        setBannerNotice({
+          type: 'success',
+          text: 'Соединение с Cloudflare Workers AI успешно проверено: генератор доступен.',
+        });
+      } else {
+        setBannerNotice({
+          type: 'error',
+          text:
+            cf?.quota.lastError ||
+            cf?.statusLabelRu ||
+            'Не удалось подтвердить подключение к Cloudflare Workers AI.',
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setBannerNotice({
+        type: 'error',
+        text: `Ошибка проверки Cloudflare Workers AI: ${msg}`,
+      });
+    } finally {
+      setIsCheckingCf(false);
+    }
+  };
+
+  const handleSaveCloudflareConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBannerNotice(null);
+
+    if (!isElectron) {
+      setBannerNotice({
+        type: 'info',
+        text: 'Настройка ключей доступна в настольном приложении Electron (через защищённый Vault и safeStorage). В браузерном Preview сохранение секретов отключено.',
+      });
+      return;
+    }
+
+    const cleanAccountId = cfAccountId.trim();
+    const cleanToken = cfRawToken.trim();
+
+    if (!cleanAccountId || cleanAccountId.length < 10) {
+      setBannerNotice({
+        type: 'error',
+        text: 'Введите корректный Account ID Cloudflare.',
+      });
+      return;
+    }
+
+    if (!cfHasSavedToken && (!cleanToken || cleanToken.length < 10)) {
+      setBannerNotice({
+        type: 'error',
+        text: 'Введите API Token Cloudflare для первичной настройки подключения.',
+      });
+      return;
+    }
+
+    setIsSavingCf(true);
+    try {
+      const saved = await aiConnectionManager.saveCloudflareImageConfig({
+        accountId: cleanAccountId,
+        rawApiToken: cleanToken || undefined,
+      });
+      setCfAccountId(saved.accountId);
+      setCfMaskedToken(saved.maskedApiToken);
+      setCfHasSavedToken(saved.hasSavedToken);
+      setCfRawToken('');
+      setShowCfToken(false);
+
+      const checked =
+        await geminiProvider.checkDesignImageProviders('cloudflare');
+      setLocalImageProvidersState(checked);
+      if (onCheckImageProviders) {
+        await onCheckImageProviders('cloudflare');
+      }
+
+      setBannerNotice({
+        type: 'success',
+        text: 'Подключение Cloudflare Workers AI сохранено в защищённом хранилище Electron Vault и проверено.',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setBannerNotice({
+        type: 'error',
+        text: msg,
+      });
+    } finally {
+      setIsSavingCf(false);
+    }
+  };
 
   // Filter profiles by provider
   const geminiProfiles = useMemo(
@@ -1219,7 +1386,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               }`}
             >
               <Cpu className="w-4 h-4" />
-              <span>Провайдеры и ключи</span>
+              <span>Подключения и генерация</span>
               <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600">
                 {profiles.length}
               </span>
@@ -1680,6 +1847,336 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     >
                       Открыть центр настройки Ollama
                     </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION D: ПОДКЛЮЧЕНИЯ И ГЕНЕРАЦИЯ — CLOUDFLARE WORKERS AI (IMAGE GENERATION) */}
+              <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-sm space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <span className="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center font-bold text-lg border border-orange-200">
+                      <Palette className="w-5 h-5" />
+                    </span>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h2 className="text-base sm:text-lg font-bold text-slate-900">
+                          Подключения и генерация — Cloudflare Workers AI
+                        </h2>
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-orange-50 text-orange-700 border border-orange-200">
+                          Генерация изображений («Дизайнер»)
+                        </span>
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          100% Free Tier
+                        </span>
+                        {(() => {
+                          const st =
+                            cloudflareProvider?.status || 'not_configured';
+                          if (isCheckingCf || isCheckingImageProviders) {
+                            return renderStatusBadge('testing');
+                          }
+                          if (st === 'available') {
+                            return renderStatusBadge('connected');
+                          }
+                          if (st === 'quota_exceeded') {
+                            return renderStatusBadge('quota_exceeded');
+                          }
+                          if (st === 'error') {
+                            return renderStatusBadge('error');
+                          }
+                          return renderStatusBadge('not_configured');
+                        })()}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Управление ключами Account ID и API Token, проверка
+                        доступности бесплатных моделей FLUX и контроль дневного
+                        лимита Neurons.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleCheckCloudflareConnection}
+                    disabled={isCheckingCf || isCheckingImageProviders}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-white text-slate-800 hover:bg-slate-100 border border-slate-200 transition shadow-sm self-start sm:self-auto disabled:opacity-50 cursor-pointer"
+                  >
+                    {isCheckingCf || isCheckingImageProviders ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
+                    ) : (
+                      <RefreshCw className="w-3.5 h-3.5 text-orange-600" />
+                    )}
+                    <span>Проверить соединение</span>
+                  </button>
+                </div>
+
+                {/* Browser Preview Notice when not in Electron */}
+                {!isElectron && (
+                  <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+                    <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="leading-relaxed">
+                      <strong>Режим браузерного Preview:</strong> настройка и
+                      безопасное сохранение ключей Cloudflare Workers AI (через
+                      защищённый <code>Electron Vault</code> и{' '}
+                      <code>safeStorage</code>) доступны в настольном
+                      приложении. В браузере секретные токены не сохраняются в{' '}
+                      <code>localStorage</code> или <code>IndexedDB</code>. Вы
+                      можете проверить текущий серверный статус подключения и
+                      доступные модели ниже.
+                    </div>
+                  </div>
+                )}
+
+                {/* Account ID & API Token Form */}
+                <form
+                  onSubmit={handleSaveCloudflareConfig}
+                  className="p-4 rounded-xl bg-slate-50/80 border border-slate-200 space-y-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-800">
+                      Параметры авторизации Cloudflare Workers AI
+                    </span>
+                    <div className="flex items-center gap-2 text-xs text-slate-600 flex-wrap">
+                      <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">
+                        Токен: {cfMaskedToken}
+                      </span>
+                      {cloudflareProvider?.lastCheckedAtIso && (
+                        <span className="text-slate-400">
+                          Проверен:{' '}
+                          {new Date(
+                            cloudflareProvider.lastCheckedAtIso
+                          ).toLocaleTimeString('ru-RU', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label
+                        htmlFor="cf-account-id-input"
+                        className="text-xs font-semibold text-slate-700 block"
+                      >
+                        Cloudflare Account ID
+                      </label>
+                      <input
+                        id="cf-account-id-input"
+                        type="text"
+                        value={cfAccountId}
+                        onChange={(e) => setCfAccountId(e.target.value)}
+                        disabled={!isElectron || isSavingCf}
+                        placeholder="Например: 1a2b3c4d5e6f7g8h9i0j..."
+                        autoComplete="off"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 disabled:bg-slate-100 disabled:text-slate-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label
+                        htmlFor="cf-api-token-input"
+                        className="text-xs font-semibold text-slate-700 block"
+                      >
+                        Cloudflare API Token{' '}
+                        {cfHasSavedToken && (
+                          <span className="text-emerald-700 font-normal">
+                            (сохранён: {cfMaskedToken})
+                          </span>
+                        )}
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          id="cf-api-token-input"
+                          type={showCfToken ? 'text' : 'password'}
+                          value={cfRawToken}
+                          onChange={(e) => setCfRawToken(e.target.value)}
+                          disabled={!isElectron || isSavingCf}
+                          placeholder={
+                            cfHasSavedToken
+                              ? 'Введите новый токен только для замены текущего...'
+                              : 'Введите API Token с правами Workers AI...'
+                          }
+                          autoComplete="new-password"
+                          className="w-full rounded-xl border border-slate-200 bg-white pl-3 pr-9 py-2 text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 disabled:bg-slate-100 disabled:text-slate-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowCfToken((v) => !v)}
+                          disabled={!isElectron}
+                          className="absolute right-2.5 p-1 text-slate-400 hover:text-slate-700 disabled:opacity-40"
+                          title={
+                            showCfToken
+                              ? 'Скрыть вводимый токен'
+                              : 'Показать вводимый токен'
+                          }
+                        >
+                          {showCfToken ? (
+                            <EyeOff className="w-4 h-4" />
+                          ) : (
+                            <Eye className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {cloudflareProvider?.quota.lastError && (
+                    <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <span>{cloudflareProvider.quota.lastError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    <span className="text-[11px] text-slate-500">
+                      Существующий токен никогда не раскрывается в интерфейсе.
+                      Чтобы заменить токен, введите новое значение и нажмите
+                      «Сохранить подключение».
+                    </span>
+                    <button
+                      type="submit"
+                      disabled={!isElectron || isSavingCf}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 transition shadow-sm cursor-pointer"
+                    >
+                      {isSavingCf ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="w-3.5 h-3.5 text-teal-300" />
+                      )}
+                      <span>
+                        {cfHasSavedToken
+                          ? 'Обновить подключение'
+                          : 'Сохранить подключение'}
+                      </span>
+                    </button>
+                  </div>
+                </form>
+
+                {/* Free Quota & Estimated Neurons Usage Telemetry */}
+                <div className="p-4 rounded-xl bg-slate-50/70 border border-slate-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Бесплатная квота и ориентировочный расход (Workers Free)
+                    </h3>
+                    <span className="text-[11px] font-semibold text-teal-700 bg-teal-50 px-2.5 py-0.5 rounded-md border border-teal-200">
+                      {cloudflareProvider?.quota.dailyLimitLabel ||
+                        '10 000 Neurons / сутки (бесплатный тариф Workers Free)'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div className="p-3 rounded-lg bg-white border border-slate-200/80">
+                      <span className="text-[11px] text-slate-500 block">
+                        Запросов за текущие сутки (UTC):
+                      </span>
+                      <span className="text-sm font-bold text-slate-900 font-mono-tabular">
+                        {cloudflareProvider?.quota.requestsTodayCount ?? 0}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white border border-slate-200/80">
+                      <span className="text-[11px] text-slate-500 block">
+                        Ориентировочный расход сегодня:
+                      </span>
+                      <span className="text-sm font-bold text-slate-900 font-mono-tabular">
+                        ~
+                        {cloudflareProvider?.quota.estimatedNeuronsUsedToday ??
+                          0}{' '}
+                        / 10 000 Neurons
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white border border-slate-200/80">
+                      <span className="text-[11px] text-slate-500 block">
+                        Расписание сброса и точный остаток:
+                      </span>
+                      <span className="text-xs font-semibold text-slate-800 block">
+                        Сброс:{' '}
+                        {cloudflareProvider?.quota.resetScheduleLabel ||
+                          'Ежедневно в 00:00 UTC'}
+                      </span>
+                      <span className="text-[11px] text-amber-800">
+                        Точный остаток: неизвестен (API не возвращает остаток в
+                        заголовках)
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Available Free Image Models, Capabilities & Limitations */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                    Доступные модели генерации изображений, их возможности и
+                    ограничения
+                  </h3>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {(cloudflareProvider?.models || []).map((model) => (
+                      <div
+                        key={model.id}
+                        className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 flex flex-col justify-between gap-3 text-xs"
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <h4 className="font-bold text-sm text-slate-900">
+                                {model.label}
+                              </h4>
+                              <code className="text-[11px] text-purple-800 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200 inline-block mt-1">
+                                {model.id}
+                              </code>
+                            </div>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                                model.status === 'available'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : model.status === 'quota_exceeded'
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                              }`}
+                            >
+                              {model.status === 'available'
+                                ? 'Доступна'
+                                : model.status === 'quota_exceeded'
+                                  ? 'Квота исчерпана'
+                                  : 'Требуется настройка'}
+                            </span>
+                          </div>
+
+                          <p className="text-slate-600 leading-relaxed">
+                            {model.descriptionRu}
+                          </p>
+
+                          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                            <span className="px-2 py-0.5 rounded bg-white border border-slate-200 text-[10px] font-semibold text-slate-700">
+                              Разрешение: {model.maxResolutionLabel}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-white border border-slate-200 text-[10px] font-semibold text-slate-700">
+                              Референсы:{' '}
+                              {model.supportsReferenceImage ? 'Да' : 'Нет'}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-white border border-slate-200 text-[10px] font-semibold text-slate-700">
+                              Правки по области:{' '}
+                              {model.supportsImageEditing ? 'Да' : 'Нет'}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-orange-50 border border-orange-200 text-[10px] font-semibold text-orange-800">
+                              ~{model.estimatedNeuronsPerRun} Neurons / запрос
+                            </span>
+                          </div>
+
+                          <div className="pt-1 space-y-1">
+                            <span className="text-[11px] font-semibold text-slate-700 block">
+                              Ограничения и особенности API:
+                            </span>
+                            <ul className="list-disc list-inside space-y-0.5 text-[11px] text-slate-600">
+                              {model.limitationsRu.map((lim, idx) => (
+                                <li key={idx}>{lim}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>

@@ -543,6 +543,98 @@ function registerIpcHandlers(): void {
     };
   });
 
+  ipcMain.handle(
+    'aiConnections:getCloudflareImageConfig',
+    async (): Promise<{
+      configured: boolean;
+      accountId: string;
+      maskedApiToken: string;
+      hasSavedToken: boolean;
+    }> => {
+      const vault = readVault();
+      let accountId = '';
+      let apiToken = '';
+      if (vault.cloudflareImageCredentialsEncryptedBase64) {
+        const rawCf = decryptSecret(
+          vault.cloudflareImageCredentialsEncryptedBase64
+        );
+        const sepIdx = rawCf.indexOf(':');
+        if (sepIdx > 0) {
+          accountId = rawCf.slice(0, sepIdx).trim();
+          apiToken = rawCf.slice(sepIdx + 1).trim();
+        }
+      }
+      if (!accountId && process.env.CLOUDFLARE_ACCOUNT_ID) {
+        accountId = process.env.CLOUDFLARE_ACCOUNT_ID.trim();
+      }
+      if (!apiToken && process.env.CLOUDFLARE_API_TOKEN) {
+        apiToken = process.env.CLOUDFLARE_API_TOKEN.trim();
+      }
+      const hasSavedToken = apiToken.length >= 10;
+      const configured = accountId.length >= 10 && hasSavedToken;
+      return {
+        configured,
+        accountId,
+        maskedApiToken: hasSavedToken ? maskApiKey(apiToken) : 'Не настроен',
+        hasSavedToken,
+      };
+    }
+  );
+
+  ipcMain.handle(
+    'aiConnections:saveCloudflareImageConfig',
+    async (
+      _event,
+      input: { accountId: string; rawApiToken?: string }
+    ): Promise<{
+      configured: boolean;
+      accountId: string;
+      maskedApiToken: string;
+      hasSavedToken: boolean;
+    }> => {
+      const vault = readVault();
+      let existingAccountId = '';
+      let existingApiToken = '';
+      if (vault.cloudflareImageCredentialsEncryptedBase64) {
+        const rawCf = decryptSecret(
+          vault.cloudflareImageCredentialsEncryptedBase64
+        );
+        const sepIdx = rawCf.indexOf(':');
+        if (sepIdx > 0) {
+          existingAccountId = rawCf.slice(0, sepIdx).trim();
+          existingApiToken = rawCf.slice(sepIdx + 1).trim();
+        }
+      }
+
+      const cleanAccountId = (input?.accountId || existingAccountId || '').trim();
+      const incomingToken = (input?.rawApiToken || '').trim();
+      const cleanApiToken =
+        incomingToken ||
+        existingApiToken ||
+        (process.env.CLOUDFLARE_API_TOKEN || '').trim();
+
+      if (!cleanAccountId || cleanAccountId.length < 10) {
+        throw new Error('Укажите корректный Account ID Cloudflare.');
+      }
+      if (!cleanApiToken || cleanApiToken.length < 10) {
+        throw new Error('Введите API Token Cloudflare для сохранения подключения.');
+      }
+
+      vault.cloudflareImageCredentialsEncryptedBase64 = encryptSecret(
+        `${cleanAccountId}:${cleanApiToken}`
+      );
+      writeVault(vault);
+      syncVaultKeysToServer();
+
+      return {
+        configured: true,
+        accountId: cleanAccountId,
+        maskedApiToken: maskApiKey(cleanApiToken),
+        hasSavedToken: true,
+      };
+    }
+  );
+
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
       await shell.openExternal(url);

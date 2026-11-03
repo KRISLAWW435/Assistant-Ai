@@ -2033,76 +2033,34 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   {/* SUBMODE 2: Regional / Point AI Editing of Selected Area */}
                   {designEditorSubMode === 'regional_ai' && (
                     <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-3 space-y-2.5 text-xs">
-                      <div className="flex flex-wrap items-center justify-between gap-1.5">
-                        <div className="font-bold text-purple-950 flex items-center gap-1.5">
-                          <Crop className="w-3.5 h-3.5 text-purple-700" />
-                          <span>Выделите область фонового изображения</span>
-                        </div>
-                        {onCheckImageProviders && (
-                          <button
-                            type="button"
-                            disabled={isCheckingImageProviders}
-                            onClick={() =>
-                              void onCheckImageProviders('cloudflare')
-                            }
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-purple-200 bg-white hover:bg-purple-100 text-[10px] font-semibold text-purple-900 disabled:opacity-50 cursor-pointer"
-                          >
-                            {isCheckingImageProviders ? (
-                              <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                            ) : (
-                              <RotateCcw className="w-2.5 h-2.5" />
-                            )}
-                            <span>Проверить API</span>
-                          </button>
-                        )}
+                      <div className="font-bold text-purple-950 flex items-center gap-1.5">
+                        <Crop className="w-3.5 h-3.5 text-purple-700" />
+                        <span>Выделите область фонового изображения</span>
                       </div>
                       <p className="text-[11px] text-slate-600 leading-snug">
                         Настройте рамку области и напишите, что именно изменить
                         на фоне. Текстовые слои останутся отдельными, а
                         результат сначала откроется в предпросмотре.
                       </p>
-                      <div className="rounded-lg bg-white/90 border border-purple-200/80 px-2.5 py-1.5 text-[10px] text-slate-700 space-y-1">
-                        <div>
-                          <strong>Бесплатная модель правок:</strong>{' '}
-                          <code>@cf/black-forest-labs/flux-2-klein-9b</code>{' '}
-                          (Cloudflare Workers AI Free, ~160 Neurons / запрос).
-                        </div>
-                        {(() => {
-                          const cfProv =
-                            imageProvidersState?.providers.find(
-                              (p) => p.id === 'cloudflare'
-                            ) || null;
-                          if (!cfProv) return null;
+                      {(() => {
+                        const cfProv =
+                          imageProvidersState?.providers.find(
+                            (p) => p.id === 'cloudflare'
+                          ) || null;
+                        const isConnected = Boolean(
+                          cfProv?.configured &&
+                            cfProv?.status !== 'not_configured'
+                        );
+                        if (!isConnected) {
                           return (
-                            <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-600">
-                              <span
-                                className={`font-bold ${
-                                  cfProv.status === 'available'
-                                    ? 'text-emerald-700'
-                                    : cfProv.status === 'quota_exceeded'
-                                      ? 'text-red-700'
-                                      : 'text-amber-700'
-                                }`}
-                              >
-                                {cfProv.status === 'available'
-                                  ? '● Доступна'
-                                  : cfProv.status === 'quota_exceeded'
-                                    ? '● Бесплатная квота исчерпана'
-                                    : '● Не настроена'}
-                              </span>
-                              <span>·</span>
-                              <span>
-                                Запросов сегодня:{' '}
-                                <strong>
-                                  {cfProv.quota.requestsTodayCount}
-                                </strong>{' '}
-                                (~{cfProv.quota.estimatedNeuronsUsedToday}{' '}
-                                Neurons из 10 000)
-                              </span>
+                            <div className="rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-[11px] text-amber-900">
+                              Генератор изображений не подключён. Обратитесь к
+                              администратору
                             </div>
                           );
-                        })()}
-                      </div>
+                        }
+                        return null;
+                      })()}
 
                       <div className="grid grid-cols-2 gap-2">
                         <div>

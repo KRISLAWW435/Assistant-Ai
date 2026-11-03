@@ -3,12 +3,15 @@ import {
   AIConnectionStatus,
   AIProviderId,
   FailoverSequenceSettings,
+  ImageProvidersRegistryState,
   OllamaLocalInfo,
   SpecialistModelAssignments,
   SpecialistRoleKey,
 } from '../types/assistant';
 import {
+  CloudflareImageConnectionConfig,
   ConnectionTestResult,
+  SaveCloudflareImageConfigInput,
   SaveProfileInput,
 } from '../types/electronBridge';
 
@@ -302,6 +305,49 @@ class AIConnectionManager {
     return (await res.json()) as OllamaLocalInfo;
   }
 
+  async getCloudflareImageConfig(): Promise<CloudflareImageConnectionConfig> {
+    if (
+      this.isElectronEnvironment() &&
+      window.electronAPI?.aiConnections?.getCloudflareImageConfig
+    ) {
+      return window.electronAPI.aiConnections.getCloudflareImageConfig();
+    }
+    const res = await fetch('/api/design/providers', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      return {
+        configured: false,
+        accountId: '',
+        maskedApiToken: 'Не настроен',
+        hasSavedToken: false,
+      };
+    }
+    const state = (await res.json()) as ImageProvidersRegistryState;
+    const cf = state.providers.find((p) => p.id === 'cloudflare');
+    return {
+      configured: Boolean(cf?.configured),
+      accountId: cf?.configuredAccountId || '',
+      maskedApiToken: cf?.maskedApiToken || 'Не настроен',
+      hasSavedToken: Boolean(cf?.hasSavedToken),
+    };
+  }
+
+  async saveCloudflareImageConfig(
+    input: SaveCloudflareImageConfigInput
+  ): Promise<CloudflareImageConnectionConfig> {
+    if (
+      this.isElectronEnvironment() &&
+      window.electronAPI?.aiConnections?.saveCloudflareImageConfig
+    ) {
+      return window.electronAPI.aiConnections.saveCloudflareImageConfig(input);
+    }
+    throw new Error(
+      'Настройка и безопасное сохранение ключей доступны в настольном приложении (Electron Vault и safeStorage).'
+    );
+  }
+
   openOllamaOfficialWebsite(): void {
     const url = 'https://ollama.com/download/windows';
     if (
@@ -316,3 +362,4 @@ class AIConnectionManager {
 }
 
 export const aiConnectionManager = new AIConnectionManager();
+

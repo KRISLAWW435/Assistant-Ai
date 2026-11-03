@@ -2490,16 +2490,10 @@ export default function App() {
         ? existingArtifact.versions.length + 1
         : 1;
 
-      const modelShortName = genResult.modelUsed.includes('flux-2-klein')
-        ? 'FLUX.2 Klein 9B'
-        : genResult.modelUsed.includes('flux-1-schnell')
-          ? 'FLUX.1 Schnell'
-          : genResult.modelUsed;
-
       const newVersion: DesignVersionItem = {
         id: `ver-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
         versionNumber: nextVersionNum,
-        label: `Вариант ${nextVersionNum} (${genResult.aspectRatio}, ${modelShortName})`,
+        label: `Вариант ${nextVersionNum} (${genResult.aspectRatio})`,
         promptUsed: params.concept?.imageGenerationPrompt || params.prompt,
         providerId: genResult.providerId,
         modelUsed: genResult.modelUsed,
@@ -2548,11 +2542,7 @@ export default function App() {
         id: msgId,
         sessionId: baseSession.id,
         role: 'assistant',
-        content: `🎨 **Готов визуальный макет «${updatedArtifact.title}» (${newVersion.label})**\n\n- **Бесплатный провайдер:** \`Cloudflare Workers AI (Free Tier)\`\n- **Модель:** \`${genResult.modelUsed}\`\n- **Формат:** \`${genResult.aspectRatio}\`${
-          genResult.estimatedNeuronsUsed
-            ? ` · **Оценка расхода за запрос:** \`~${genResult.estimatedNeuronsUsed} Neurons\``
-            : ''
-        }\n- **Разделение слоёв:** чистая визуальная основа + ${newVersion.layers.length} редактируемых слоя (Заголовок, Оффер, CTA, Бейдж школы).\n\nОткройте макет в правой панели «Просмотр», чтобы отредактировать текст на плашках, выполнить точечное AI-редактирование выбранной области или скачать готовый PNG.`,
+        content: `🎨 **Готов визуальный макет «${updatedArtifact.title}» (${newVersion.label})**\n\n- **Формат:** \`${genResult.aspectRatio}\`\n- **Разделение слоёв:** чистая визуальная основа + ${newVersion.layers.length} редактируемых слоя (Заголовок, Оффер, CTA, Бейдж школы).\n\nОткройте макет в правой панели «Просмотр», чтобы отредактировать текст на плашках, выполнить точечное AI-редактирование выбранной области или скачать готовый PNG.`,
         createdAt: timeStr,
         createdAtMs: nowMs,
         schoolId: params.schoolId,
@@ -3461,6 +3451,9 @@ export default function App() {
                   activeSchool={activeSchool}
                   onNavigate={handleSelectSection}
                   onRefreshProviders={handleCheckProvidersOnDemand}
+                  imageProvidersState={imageProvidersState}
+                  isCheckingImageProviders={isCheckingImageProviders}
+                  onCheckImageProviders={handleCheckImageProvidersOnDemand}
                 />
               )}
             </>

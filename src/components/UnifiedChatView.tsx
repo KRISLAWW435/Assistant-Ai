@@ -203,39 +203,40 @@ const DESIGN_ASPECT_RATIOS: Array<{ id: DesignAspectRatio; label: string }> = [
   { id: '4:3', label: '4:3 (Презентация)' },
 ];
 
-const FREE_DESIGN_IMAGE_MODELS: Array<{
-  id: FreeDesignImageModelId;
-  providerId: ImageProviderId;
+type DesignerModelSelection = 'auto' | FreeDesignImageModelId;
+
+const DESIGNER_MODEL_OPTIONS: Array<{
+  id: DesignerModelSelection;
   label: string;
-  shortLabel: string;
-  estimatedNeurons: number;
-  supportsReferenceImage: boolean;
-  supportsRegionalEdit: boolean;
-  constraintsNoteRu: string;
 }> = [
+  { id: 'auto', label: 'Автовыбор' },
   {
     id: '@cf/black-forest-labs/flux-1-schnell',
-    providerId: 'cloudflare',
-    label: 'FLUX.1 Schnell (Быстрая, ~55 Neurons)',
-    shortLabel: 'FLUX.1 Schnell',
-    estimatedNeurons: 55,
-    supportsReferenceImage: false,
-    supportsRegionalEdit: false,
-    constraintsNoteRu:
-      'До 1024×1024 (4 шага, JSON). Только генерация с нуля по тексту (без входных референсов и региональных правок).',
+    label: 'Быстрая генерация (FLUX.1)',
   },
   {
     id: '@cf/black-forest-labs/flux-2-klein-9b',
-    providerId: 'cloudflare',
-    label: 'FLUX.2 Klein 9B (Детальная + Референсы, ~160 Neurons)',
-    shortLabel: 'FLUX.2 Klein 9B',
-    estimatedNeurons: 160,
-    supportsReferenceImage: true,
-    supportsRegionalEdit: true,
-    constraintsNoteRu:
-      'До 1024×1024 (multipart/form-data). Поддерживает генерацию по тексту, референс-изображения (до 4 шт., 512×512) и точечные AI-правки.',
+    label: 'Детальная + референсы (FLUX.2)',
   },
 ];
+
+function resolveDesignerModelId(
+  selection: DesignerModelSelection,
+  hasReferenceImage: boolean
+): FreeDesignImageModelId {
+  if (selection === 'auto') {
+    return hasReferenceImage
+      ? '@cf/black-forest-labs/flux-2-klein-9b'
+      : '@cf/black-forest-labs/flux-1-schnell';
+  }
+  if (
+    hasReferenceImage &&
+    selection === '@cf/black-forest-labs/flux-1-schnell'
+  ) {
+    return '@cf/black-forest-labs/flux-2-klein-9b';
+  }
+  return selection;
+}
 
 const DESIGN_TEMPLATE_PRESETS: Array<{
   id: DesignTemplatePresetId;
@@ -308,15 +309,13 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
 
-  // Designer Composer Toolbar State (Stage 2: Free Image API Provider & Model Selection)
+  // Designer Composer Toolbar State
   const [designAspectRatio, setDesignAspectRatio] =
     useState<DesignAspectRatio>('3:4');
   const [designQualityMode] = useState<DesignQualityMode>('standard');
-  const [designProviderId, setDesignProviderId] =
-    useState<ImageProviderId>('cloudflare');
-  const [designModelId, setDesignModelId] = useState<FreeDesignImageModelId>(
-    '@cf/black-forest-labs/flux-1-schnell'
-  );
+  const [designProviderId] = useState<ImageProviderId>('cloudflare');
+  const [designModelId, setDesignModelId] =
+    useState<DesignerModelSelection>('auto');
   const [designTemplatePreset, setDesignTemplatePreset] =
     useState<DesignTemplatePresetId>('promo_banner');
 
@@ -1548,12 +1547,13 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                                 disabled={isGeneratingDesignImage}
                                                 onClick={(e) => {
                                                   e.stopPropagation();
-                                                  const effectiveModelId: FreeDesignImageModelId =
-                                                    draftAttachment?.dataUrl &&
-                                                    designModelId ===
-                                                      '@cf/black-forest-labs/flux-1-schnell'
-                                                      ? '@cf/black-forest-labs/flux-2-klein-9b'
-                                                      : designModelId;
+                                                  const effectiveModelId =
+                                                    resolveDesignerModelId(
+                                                      designModelId,
+                                                      Boolean(
+                                                        draftAttachment?.dataUrl
+                                                      )
+                                                    );
                                                   void onGenerateDesignArtifact({
                                                     sessionId:
                                                       currentSession?.id,
@@ -1735,14 +1735,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                 <Layers className="w-4 h-4 text-purple-400" />
                                 <span className="font-bold">{art.title}</span>
                                 <span className="px-2 py-0.5 rounded bg-purple-900/70 text-purple-200 text-[10px] font-mono-tabular">
-                                  {displayVer.aspectRatio} ·{' '}
-                                  {displayVer.modelUsed.includes('flux-2-klein')
-                                    ? 'FLUX.2 Klein 9B'
-                                    : displayVer.modelUsed.includes(
-                                          'flux-1-schnell'
-                                        )
-                                      ? 'FLUX.1 Schnell'
-                                      : displayVer.modelUsed}
+                                  {displayVer.aspectRatio}
                                 </span>
                                 {art.pendingVersion && (
                                   <span className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] font-bold">
@@ -2777,7 +2770,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             </div>
           )}
 
-          {/* Designer Mode Visual Parameters & Free Image API Toolbar */}
+          {/* Designer Mode User Controls Toolbar */}
           {activeMode === 'designer' &&
             (() => {
               const activeProviderDesc =
@@ -2786,13 +2779,12 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 ) ||
                 imageProvidersState?.providers[0] ||
                 null;
-              const selectedModelMeta =
-                FREE_DESIGN_IMAGE_MODELS.find(
-                  (m) => m.id === designModelId
-                ) || FREE_DESIGN_IMAGE_MODELS[0];
+              const isGeneratorConnected = Boolean(
+                activeProviderDesc?.configured &&
+                  activeProviderDesc?.status !== 'not_configured'
+              );
               const providerStatus =
                 activeProviderDesc?.status || 'not_configured';
-              const quota = activeProviderDesc?.quota;
               const hasReferenceDraft = Boolean(
                 draftAttachment?.dataUrl &&
                   draftAttachment.dataUrl.startsWith('data:image/')
@@ -2800,14 +2792,8 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
               return (
                 <div className="rounded-2xl border border-purple-200/90 bg-purple-50/50 p-2.5 space-y-2 text-xs">
-                  {/* Top Row: School, Template, Aspect Ratio, Free Provider & Model */}
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-bold text-purple-950 flex items-center gap-1">
-                        <Palette className="w-3.5 h-3.5 text-purple-700" />
-                        <span>Бесплатный генератор:</span>
-                      </span>
-
                       {/* School Selector */}
                       <div className="inline-flex rounded-lg bg-white border border-purple-200 p-0.5">
                         {(['kiberone', 'renderia'] as SchoolId[]).map((sch) => (
@@ -2827,40 +2813,6 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                           </button>
                         ))}
                       </div>
-
-                      {/* Free Image API Provider Selector */}
-                      <select
-                        aria-label="Бесплатный провайдер генерации изображений"
-                        value={designProviderId}
-                        onChange={(e) =>
-                          setDesignProviderId(
-                            e.target.value as ImageProviderId
-                          )
-                        }
-                        className="rounded-lg border border-purple-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-purple-600"
-                      >
-                        <option value="cloudflare">
-                          API: Cloudflare Workers AI (Free)
-                        </option>
-                      </select>
-
-                      {/* Free Image Model Selector */}
-                      <select
-                        aria-label="Бесплатная AI-модель генерации"
-                        value={designModelId}
-                        onChange={(e) =>
-                          setDesignModelId(
-                            e.target.value as FreeDesignImageModelId
-                          )
-                        }
-                        className="rounded-lg border border-purple-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-purple-600"
-                      >
-                        {FREE_DESIGN_IMAGE_MODELS.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            Модель: {m.label}
-                          </option>
-                        ))}
-                      </select>
 
                       {/* Template Preset Selector */}
                       <select
@@ -2886,7 +2838,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
                       {/* Aspect Ratio Selector */}
                       <select
-                        aria-label="Соотношение сторон"
+                        aria-label="Формат макета"
                         value={designAspectRatio}
                         onChange={(e) =>
                           setDesignAspectRatio(
@@ -2901,193 +2853,89 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                           </option>
                         ))}
                       </select>
-                    </div>
 
-                    <div className="flex items-center gap-1.5">
-                      {onCheckImageProviders && (
-                        <button
-                          type="button"
-                          disabled={isCheckingImageProviders}
-                          onClick={() =>
-                            void onCheckImageProviders(designProviderId)
-                          }
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border border-purple-200 bg-white hover:bg-purple-100/70 text-purple-900 text-[11px] font-semibold disabled:opacity-50 transition-colors cursor-pointer"
-                          title="Проверить доступность бесплатного API и статус квоты"
-                        >
-                          {isCheckingImageProviders ? (
-                            <Loader2 className="w-3 h-3 animate-spin text-purple-700" />
-                          ) : (
-                            <RotateCcw className="w-3 h-3 text-purple-700" />
-                          )}
-                          <span>Проверить API</span>
-                        </button>
-                      )}
-
-                      {onGenerateDesignArtifact && (
-                        <button
-                          type="button"
-                          disabled={
-                            isGeneratingDesignImage ||
-                            isGenerating ||
-                            !draftPrompt.trim() ||
-                            providerStatus === 'quota_exceeded'
-                          }
-                          onClick={() => {
-                            if (!draftPrompt.trim()) return;
-                            const effectiveModelId: FreeDesignImageModelId =
-                              hasReferenceDraft &&
-                              designModelId ===
-                                '@cf/black-forest-labs/flux-1-schnell'
-                                ? '@cf/black-forest-labs/flux-2-klein-9b'
-                                : designModelId;
-                            if (effectiveModelId !== designModelId) {
-                              setDesignModelId(effectiveModelId);
-                            }
-                            void onGenerateDesignArtifact({
-                              sessionId: currentSession?.id,
-                              schoolId: activeSchool,
-                              title: draftPrompt.slice(0, 42),
-                              prompt: draftPrompt,
-                              aspectRatio: designAspectRatio,
-                              qualityMode: designQualityMode,
-                              templatePreset: designTemplatePreset,
-                              providerId: designProviderId,
-                              modelId: effectiveModelId,
-                              referenceImageDataUrl: draftAttachment?.dataUrl,
-                            });
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-purple-700 hover:bg-purple-800 text-white text-[11px] font-semibold disabled:opacity-40 transition-colors shadow-2xs cursor-pointer"
-                          title="Сразу сгенерировать визуальную основу и редактируемые слои через выбранную бесплатную модель"
-                        >
-                          {isGeneratingDesignImage ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>Генерация...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Wand2 className="w-3.5 h-3.5" />
-                              <span>Сгенерировать макет сразу</span>
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Second Row: Live Availability Status, Free Quota Telemetry & Model Constraints */}
-                  <div className="rounded-xl bg-white/90 border border-purple-200/80 px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-700">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {/* Provider & Model Availability Badge */}
-                      <span
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] ${
-                          providerStatus === 'available'
-                            ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                            : providerStatus === 'quota_exceeded'
-                              ? 'bg-red-100 text-red-900 border border-red-300'
-                              : providerStatus === 'error'
-                                ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                                : 'bg-slate-100 text-slate-700 border border-slate-300'
-                        }`}
-                      >
-                        {providerStatus === 'available'
-                          ? '● API и модель доступны'
-                          : providerStatus === 'quota_exceeded'
-                            ? '● Бесплатная квота исчерпана'
-                            : providerStatus === 'error'
-                              ? '● Ошибка доступа к API'
-                              : '● Требуется настройка ключей'}
-                      </span>
-
-                      <span className="text-slate-400">·</span>
-                      <span>
-                        <strong>Модель:</strong>{' '}
-                        <code className="text-[10px] bg-purple-50 text-purple-900 px-1 py-0.5 rounded border border-purple-200">
-                          {selectedModelMeta.id}
-                        </code>
-                      </span>
-
-                      <span className="text-slate-400">·</span>
-                      <span>
-                        <strong>Ограничения:</strong>{' '}
-                        {selectedModelMeta.constraintsNoteRu}
-                      </span>
-                    </div>
-
-                    {/* Free Quota Telemetry */}
-                    <div className="flex flex-wrap items-center gap-2 text-[10px] font-medium text-slate-600">
-                      <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
-                        Квота:{' '}
-                        <strong>
-                          {quota?.dailyLimitLabel ||
-                            '10 000 Neurons / сутки (00:00 UTC)'}
-                        </strong>
-                      </span>
-                      <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
-                        Запросов сегодня:{' '}
-                        <strong>{quota?.requestsTodayCount ?? 0}</strong> ·
-                        Оценка расхода:{' '}
-                        <strong>
-                          ~{quota?.estimatedNeuronsUsedToday ?? 0} Neurons
-                        </strong>
-                      </span>
-                      <span
-                        className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-900"
-                        title={
-                          quota?.remainingQuotaLabelRu ||
-                          'Cloudflare REST API не возвращает точный остаток Neurons в заголовках ответа'
+                      {/* Model Selector with Auto-select */}
+                      <select
+                        aria-label="Модель генерации"
+                        value={designModelId}
+                        onChange={(e) =>
+                          setDesignModelId(
+                            e.target.value as DesignerModelSelection
+                          )
                         }
+                        className="rounded-lg border border-purple-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-purple-600"
                       >
-                        Точный остаток:{' '}
-                        <strong>
-                          {quota?.remainingQuotaStatus === 'unknown' || !quota
-                            ? 'неизвестен'
-                            : 'известен'}
-                        </strong>
-                      </span>
+                        {DESIGNER_MODEL_OPTIONS.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            Модель: {m.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
+
+                    {onGenerateDesignArtifact && (
+                      <button
+                        type="button"
+                        disabled={
+                          isGeneratingDesignImage ||
+                          isGenerating ||
+                          !draftPrompt.trim() ||
+                          !isGeneratorConnected ||
+                          providerStatus === 'quota_exceeded'
+                        }
+                        onClick={() => {
+                          if (!draftPrompt.trim()) return;
+                          const effectiveModelId = resolveDesignerModelId(
+                            designModelId,
+                            hasReferenceDraft
+                          );
+                          void onGenerateDesignArtifact({
+                            sessionId: currentSession?.id,
+                            schoolId: activeSchool,
+                            title: draftPrompt.slice(0, 42),
+                            prompt: draftPrompt,
+                            aspectRatio: designAspectRatio,
+                            qualityMode: designQualityMode,
+                            templatePreset: designTemplatePreset,
+                            providerId: designProviderId,
+                            modelId: effectiveModelId,
+                            referenceImageDataUrl: draftAttachment?.dataUrl,
+                          });
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-purple-700 hover:bg-purple-800 text-white text-[11px] font-semibold disabled:opacity-40 transition-colors shadow-2xs cursor-pointer"
+                      >
+                        {isGeneratingDesignImage ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Генерация...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 className="w-3.5 h-3.5" />
+                            <span>Сгенерировать макет</span>
+                          </>
+                        )}
+                      </button>
+                    )}
                   </div>
 
-                  {/* Reference image compatibility notice for FLUX.1 Schnell */}
-                  {hasReferenceDraft &&
-                    !selectedModelMeta.supportsReferenceImage && (
-                      <div className="rounded-xl bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-[11px] text-amber-900 flex items-center justify-between gap-2">
-                        <span>
-                          К сообщению прикреплён референс, но модель{' '}
-                          <strong>FLUX.1 Schnell</strong> поддерживает только
-                          генерацию по тексту. При запуске генерации будет
-                          автоматически использована бесплатная модель{' '}
-                          <strong>FLUX.2 Klein 9B</strong>.
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setDesignModelId(
-                              '@cf/black-forest-labs/flux-2-klein-9b'
-                            )
-                          }
-                          className="px-2 py-0.5 rounded-lg bg-amber-200/80 hover:bg-amber-300 text-amber-950 font-bold text-[10px] shrink-0 cursor-pointer"
-                        >
-                          Переключить на FLUX.2 Klein 9B
-                        </button>
-                      </div>
-                    )}
+                  {!isGeneratorConnected && (
+                    <div className="rounded-xl bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-[11px] text-amber-900 flex items-center gap-2">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+                      <span>
+                        Генератор изображений не подключён. Обратитесь к
+                        администратору
+                      </span>
+                    </div>
+                  )}
 
-                  {/* Status / Error / Quota Exhausted Alert (Strictly Free, No Billing Prompts) */}
-                  {providerStatus !== 'available' &&
-                    (activeProviderDesc?.quota.lastError ||
-                      activeProviderDesc?.statusLabelRu) && (
-                      <div
-                        className={`rounded-xl px-2.5 py-1.5 text-[11px] flex items-start gap-2 ${
-                          providerStatus === 'quota_exceeded'
-                            ? 'bg-red-50 border border-red-200 text-red-900'
-                            : 'bg-amber-50 border border-amber-200 text-amber-900'
-                        }`}
-                      >
-                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  {isGeneratorConnected &&
+                    providerStatus === 'quota_exceeded' && (
+                      <div className="rounded-xl bg-red-50 border border-red-200 px-2.5 py-1.5 text-[11px] text-red-900 flex items-center gap-2">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-red-600" />
                         <span>
-                          {activeProviderDesc.quota.lastError ||
-                            activeProviderDesc.statusLabelRu}
+                          Дневной лимит генерации изображений исчерпан. Повторите
+                          попытку после 00:00 UTC.
                         </span>
                       </div>
                     )}

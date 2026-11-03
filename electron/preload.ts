@@ -6,7 +6,9 @@ import type {
   SpecialistModelAssignments,
 } from '../src/types/assistant';
 import type {
+  CloudflareImageConnectionConfig,
   ConnectionTestResult,
+  SaveCloudflareImageConfigInput,
   SaveProfileInput,
 } from '../src/types/electronBridge';
 
@@ -37,6 +39,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('aiConnections:saveFailoverSettings', settings),
     getOllamaStatus: (): Promise<OllamaLocalInfo> =>
       ipcRenderer.invoke('aiConnections:getOllamaStatus'),
+    getCloudflareImageConfig: (): Promise<CloudflareImageConnectionConfig> =>
+      ipcRenderer.invoke('aiConnections:getCloudflareImageConfig'),
+    saveCloudflareImageConfig: (
+      input: SaveCloudflareImageConfigInput
+    ): Promise<CloudflareImageConnectionConfig> =>
+      ipcRenderer.invoke('aiConnections:saveCloudflareImageConfig', input),
     openExternalUrl: (url: string): Promise<void> =>
       ipcRenderer.invoke('shell:openExternal', url),
   },

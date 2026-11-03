@@ -106,9 +106,16 @@ function detectImageMimeFromBase64(base64: string, fallback = 'image/png'): stri
   return fallback;
 }
 
+function maskSecretToken(token: string): string {
+  const trimmed = (token || '').trim();
+  if (!trimmed) return 'Не настроен';
+  if (trimmed.length <= 8) return '••••••••';
+  return `${trimmed.slice(0, 4)}••••${trimmed.slice(-4)}`;
+}
+
 const STATUS_LABELS_RU: Record<ImageProviderAvailabilityStatus, string> = {
   available: 'Доступен (Бесплатный тариф)',
-  not_configured: 'Не настроен (требуются CLOUDFLARE_ACCOUNT_ID и CLOUDFLARE_API_TOKEN)',
+  not_configured: 'Не настроен (требуются Account ID и API Token)',
   quota_exceeded: 'Бесплатная квота исчерпана (ожидание сброса в 00:00 UTC)',
   error: 'Ошибка подключения к API',
 };
@@ -254,12 +261,17 @@ export class CloudflareWorkersAiImageAdapter
 
   public getDescriptor(): ImageProviderDescriptor {
     const status = this.resolveCurrentStatus();
+    const { accountId, apiToken } = this.resolveCredentials();
+    const hasSavedToken = apiToken.length >= 10;
     return {
       id: this.id,
       label: this.label,
       shortLabel: this.shortLabel,
       isFreeTierOnly: true,
       configured: this.isConfigured(),
+      configuredAccountId: accountId || '',
+      maskedApiToken: hasSavedToken ? maskSecretToken(apiToken) : 'Не настроен',
+      hasSavedToken,
       status,
       statusLabelRu: STATUS_LABELS_RU[status],
       lastCheckedAtIso: this.lastCheckedAtIso,
@@ -275,7 +287,7 @@ export class CloudflareWorkersAiImageAdapter
     if (!this.isConfigured()) {
       this.lastVerifiedStatus = 'not_configured';
       this.lastError =
-        'На сервере не заданы CLOUDFLARE_ACCOUNT_ID и CLOUDFLARE_API_TOKEN.';
+        'Не заданы Account ID и API Token для Cloudflare Workers AI.';
       return this.getDescriptor();
     }
 
@@ -336,7 +348,7 @@ export class CloudflareWorkersAiImageAdapter
 
     if (!this.isConfigured()) {
       throw new ImageGenerationError(
-        'Бесплатный генератор Cloudflare Workers AI не настроен на сервере (отсутствуют CLOUDFLARE_ACCOUNT_ID и CLOUDFLARE_API_TOKEN). Платные сервисы отключены.',
+        'Генератор изображений не подключён. Обратитесь к администратору.',
         400,
         'NOT_CONFIGURED'
       );

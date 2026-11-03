@@ -25,6 +25,18 @@ export interface ConnectionTestResult {
   latencyMs?: number;
 }
 
+export interface CloudflareImageConnectionConfig {
+  configured: boolean;
+  accountId: string;
+  maskedApiToken: string;
+  hasSavedToken: boolean;
+}
+
+export interface SaveCloudflareImageConfigInput {
+  accountId: string;
+  rawApiToken?: string;
+}
+
 export interface ElectronAIConnectionsBridge {
   isElectron: boolean;
   safeStorageAvailable: boolean;
@@ -37,6 +49,10 @@ export interface ElectronAIConnectionsBridge {
   getFailoverSettings(): Promise<FailoverSequenceSettings>;
   saveFailoverSettings(settings: FailoverSequenceSettings): Promise<FailoverSequenceSettings>;
   getOllamaStatus(): Promise<OllamaLocalInfo>;
+  getCloudflareImageConfig?(): Promise<CloudflareImageConnectionConfig>;
+  saveCloudflareImageConfig?(
+    input: SaveCloudflareImageConfigInput
+  ): Promise<CloudflareImageConnectionConfig>;
   downloadOllamaModel?(modelName: string): Promise<{ success: boolean; message: string }>;
   deleteOllamaModel?(modelName: string): Promise<{ success: boolean }>;
   openExternalUrl(url: string): Promise<void>;
