@@ -281,6 +281,49 @@ export function buildSyzranReminderIso(
   return new Date(utcMs).toISOString();
 }
 
+const RUSSIAN_MONTHS: Record<number, { name: string; genitive: string }> = {
+  1: { name: 'январь', genitive: 'января' },
+  2: { name: 'февраль', genitive: 'февраля' },
+  3: { name: 'март', genitive: 'марта' },
+  4: { name: 'апрель', genitive: 'апреля' },
+  5: { name: 'май', genitive: 'мая' },
+  6: { name: 'июнь', genitive: 'июня' },
+  7: { name: 'июль', genitive: 'июля' },
+  8: { name: 'август', genitive: 'августа' },
+  9: { name: 'сентябрь', genitive: 'сентября' },
+  10: { name: 'октябрь', genitive: 'октября' },
+  11: { name: 'ноябрь', genitive: 'ноября' },
+  12: { name: 'декабрь', genitive: 'декабря' },
+};
+
+function parseRussianMonthNumber(monthStr: string): number | null {
+  const m = monthStr.trim().toLowerCase();
+  if (m.startsWith('янв')) return 1;
+  if (m.startsWith('фев')) return 2;
+  if (m.startsWith('мар')) return 3;
+  if (m.startsWith('апр')) return 4;
+  if (m.startsWith('ма')) return 5;
+  if (m.startsWith('июн')) return 6;
+  if (m.startsWith('июл')) return 7;
+  if (m.startsWith('авг')) return 8;
+  if (m.startsWith('сен')) return 9;
+  if (m.startsWith('окт')) return 10;
+  if (m.startsWith('ноя')) return 11;
+  if (m.startsWith('дек')) return 12;
+  return null;
+}
+
+interface ExtractedDateCandidate {
+  isoDate: string;
+  labelRu: string;
+  nameRu?: string;
+  explicitYear?: number;
+  isPastWithoutYear?: boolean;
+  isInvalidDay?: boolean;
+  invalidReason?: string;
+  isVagueWeek?: boolean;
+}
+
 export function parseRelativeDateAndTimeFromRuText(
   text: string,
   todayIso: string = toSyzranIsoDate()
@@ -296,7 +339,7 @@ export function parseRelativeDateAndTimeFromRuText(
   let dueTime: string | undefined;
   let isTimeAmbiguous = false;
   const timeMatch = lower.match(
-    /(?:^|\s|[.,!?;:])(?:в|к)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(час(?:а|ов)?|ч(?=\s|$|[.,!?;:])|утра|дня|вечера|ночи)?(?=\s|$|[.,!?;:])/i
+    /(?:^|[^а-яёa-z0-9])(?:в|к)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(час(?:а|ов)?|ч(?=$|[^а-яёa-z0-9])|утра|дня|вечера|ночи)?(?=$|[^а-яёa-z0-9])/i
   );
   if (timeMatch) {
     let hour = parseInt(timeMatch[1], 10);
@@ -315,9 +358,25 @@ export function parseRelativeDateAndTimeFromRuText(
     }
   }
 
-  // Detect ambiguous date combinations like "в среду или четверг", "завтра или послезавтра", "на днях", "через пару дней"
+  // 1. Explicit unknown date markers («на неизвестную дату», «не знаю когда», «на какую-то дату»)
   if (
-    /(?:на\s+днях|через\s+пару\s+дней|через\s+несколько\s+дней|в\s+ближайшее\s+время|скоро|в\s+первой\s+половине\s+недели|в\s+конце\s+недели|(?:завтра|сегодня|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+или\s+(?:завтра|послезавтра|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье))/i.test(
+    /(?:^|[^а-яёa-z0-9])(?:на\s+)?(?:неизвестн[а-яё0-9]*\s+дат[а-яё0-9]*|непонятн[а-яё0-9]*\s+дат[а-яё0-9]*|какую-то\s+дат[а-яё0-9]*|какой-то\s+день|не\s+знаю\s+какого\s+числа|не\s+знаю\s+когда)(?=$|[^а-яёa-z0-9])/i.test(
+      lower
+    )
+  ) {
+    return {
+      dueDate: '',
+      dueTime,
+      dateLabelRu: 'дата требует уточнения',
+      isDateAmbiguous: true,
+      ambiguityPromptRu:
+        'Дата указана как неизвестная. Уточните, пожалуйста, конкретный день и время для задачи.',
+    };
+  }
+
+  // 2. Explicit ambiguous combinations with «или» and vague timeframes
+  if (
+    /(?:^|[^а-яёa-z0-9])(?:на\s+днях|через\s+пару\s+дней|через\s+несколько\s+дней|в\s+ближайшее\s+время|скоро|в\s+первой\s+половине\s+недели|в\s+конце\s+недели|(?:завтра|сегодня|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+или\s+(?:завтра|послезавтра|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье))(?=$|[^а-яёa-z0-9])/i.test(
       lower
     )
   ) {
@@ -331,150 +390,323 @@ export function parseRelativeDateAndTimeFromRuText(
     };
   }
 
-  // Dateless markers («когда-нибудь», «без срока», «при случае»)
-  if (/(когда-нибудь|без\s+срока|не\s+к\s+спеху|на\s+будущее|в\s+долгий\s+ящик)/i.test(lower)) {
+  // 3. Dateless markers («когда-нибудь», «без срока», «при случае»)
+  if (
+    /(?:^|[^а-яёa-z0-9])(?:когда-нибудь|без\s+срока|не\s+к\s+спеху|на\s+будущее|в\s+долгий\s+ящик)(?=$|[^а-яёa-z0-9])/i.test(
+      lower
+    )
+  ) {
     return { dueDate: '', dueTime, dateLabelRu: 'без жёсткого срока' };
   }
 
-  if (lower.includes('послезавтра')) {
-    const dueDate = addDaysToIsoDate(todayIso, 2);
-    return {
-      dueDate,
-      dueTime,
-      dateLabelRu: 'на послезавтра',
-      isDateAmbiguous: isTimeAmbiguous,
-      ambiguityPromptRu: isTimeAmbiguous
-        ? `Я поставила время ${dueTime} (день). Если имелось в виду утро, уточните, пожалуйста.`
-        : undefined,
-    };
+  const [yStr, mStr, dStr] = todayIso.split('-');
+  const currentYear = parseInt(yStr, 10);
+  const currentDow = new Date(
+    Date.UTC(parseInt(yStr, 10), parseInt(mStr, 10) - 1, parseInt(dStr, 10), 12, 0, 0)
+  ).getUTCDay();
+
+  const candidates: ExtractedDateCandidate[] = [];
+
+  // 4. Textual dates with Russian month names («4 ноября», «15 декабря», «1 мая», «4 ноября 2027 года»)
+  const textualMonthRegex =
+    /(?:^|[^а-яёa-z0-9])(?:(?:на|к|до|в|во)\s+)?(\d{1,2})(?:-(?:е|го|ое|ье|ья|м))?\s+(январ[яеью]?|феврал[яеью]?|март[аеу]?|апрел[яеью]?|ма[яеюйо]|июн[яеью]?|июл[яеью]?|август[аеу]?|сентябр[яеью]?|октябр[яеью]?|ноябр[яеью]?|декабр[яеью]?)(?:\s+(20\d{2})(?:\s*года|\s*г\.?|\s*г)?|\s+(?:года|г\.?|г))?(?=$|[^а-яёa-z0-9])/gi;
+
+  let monthMatch: RegExpExecArray | null;
+  while ((monthMatch = textualMonthRegex.exec(lower)) !== null) {
+    const dayNum = parseInt(monthMatch[1], 10);
+    const monthNum = parseRussianMonthNumber(monthMatch[2]);
+    if (!monthNum) continue;
+    const explicitYear = monthMatch[3] ? parseInt(monthMatch[3], 10) : undefined;
+    const targetYear = explicitYear || currentYear;
+    const maxDays = new Date(targetYear, monthNum, 0).getDate();
+    const monthInfo = RUSSIAN_MONTHS[monthNum];
+    const monthGenitive = monthInfo?.genitive || monthMatch[2];
+
+    if (dayNum < 1 || dayNum > maxDays) {
+      candidates.push({
+        isoDate: '',
+        labelRu: `${dayNum} ${monthGenitive}`,
+        nameRu: `${dayNum} ${monthGenitive}`,
+        isInvalidDay: true,
+        invalidReason: `Дата указана некорректно: в месяце ${monthInfo?.name || monthMatch[2]} не может быть ${dayNum} дней (максимум ${maxDays}). Уточните, пожалуйста, правильную дату.`,
+      });
+      continue;
+    }
+
+    const iso = `${targetYear}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+    const label = explicitYear
+      ? `на ${dayNum} ${monthGenitive} ${explicitYear} г.`
+      : `на ${dayNum} ${monthGenitive}`;
+
+    if (!explicitYear && iso < todayIso) {
+      candidates.push({
+        isoDate: iso,
+        labelRu: label,
+        nameRu: `${dayNum} ${monthGenitive}`,
+        isPastWithoutYear: true,
+        invalidReason: `${dayNum} ${monthGenitive} текущего года (${currentYear} г.) уже прошло. Уточните, пожалуйста, имелась ли в виду эта дата в следующем году или другой день.`,
+      });
+    } else {
+      candidates.push({
+        isoDate: iso,
+        labelRu: label,
+        nameRu: label.replace(/^на\s+/, ''),
+        explicitYear,
+      });
+    }
   }
 
-  if (lower.includes('завтра')) {
-    const dueDate = addDaysToIsoDate(todayIso, 1);
-    return {
-      dueDate,
-      dueTime,
-      dateLabelRu: 'на завтра',
-      isDateAmbiguous: isTimeAmbiguous,
-      ambiguityPromptRu: isTimeAmbiguous
-        ? `Я поставила время ${dueTime} (день). Если имелось в виду утро, уточните, пожалуйста.`
-        : undefined,
-    };
+  // 5. Numeric dates (DD.MM.YYYY, DD.MM) with Cyrillic boundaries
+  const numericDateRegex =
+    /(?:^|[^а-яёa-z0-9])(?:(?:на|к|до|в|во)\s+)?(\d{1,2})\.(\d{1,2})(?:\.(20\d{2}))?(?=$|[^а-яёa-z0-9])/gi;
+
+  let numMatch: RegExpExecArray | null;
+  while ((numMatch = numericDateRegex.exec(lower)) !== null) {
+    const dayNum = parseInt(numMatch[1], 10);
+    const monthNum = parseInt(numMatch[2], 10);
+    const explicitYear = numMatch[3] ? parseInt(numMatch[3], 10) : undefined;
+    const targetYear = explicitYear || currentYear;
+    if (monthNum < 1 || monthNum > 12) continue;
+    const maxDays = new Date(targetYear, monthNum, 0).getDate();
+    if (dayNum < 1 || dayNum > maxDays) {
+      candidates.push({
+        isoDate: '',
+        labelRu: `${dayNum}.${monthNum}`,
+        nameRu: `${dayNum}.${monthNum}`,
+        isInvalidDay: true,
+        invalidReason: `Дата указана некорректно: ${dayNum}.${monthNum}. Уточните, пожалуйста, правильную дату.`,
+      });
+      continue;
+    }
+    const iso = `${targetYear}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+    const label = `на ${formatSyzranIsoDateRu(iso)}`;
+    if (!explicitYear && iso < todayIso) {
+      candidates.push({
+        isoDate: iso,
+        labelRu: label,
+        nameRu: `${dayNum}.${String(monthNum).padStart(2, '0')}`,
+        isPastWithoutYear: true,
+        invalidReason: `${dayNum}.${String(monthNum).padStart(2, '0')} текущего года уже прошло. Уточните, пожалуйста, имелся ли в виду следующий год или другой день.`,
+      });
+    } else {
+      candidates.push({
+        isoDate: iso,
+        labelRu: label,
+        nameRu: label.replace(/^на\s+/, ''),
+        explicitYear,
+      });
+    }
   }
 
-  if (lower.includes('сегодня') || lower.includes('до вечера') || lower.includes('до обеда')) {
+  // 6. Explicit ISO match (YYYY-MM-DD)
+  const explicitIsoMatch = lower.match(/(?:^|[^а-яёa-z0-9])(20\d{2}-\d{2}-\d{2})(?=$|[^а-яёa-z0-9])/);
+  if (explicitIsoMatch) {
+    const iso = explicitIsoMatch[1];
+    candidates.push({
+      isoDate: iso,
+      labelRu: `на ${formatSyzranIsoDateRu(iso)}`,
+      nameRu: iso,
+    });
+  }
+
+  // 7. Relative day keywords
+  if (/(?:^|[^а-яёa-z0-9])(?:на\s+)?послезавтра(?=$|[^а-яёa-z0-9])/i.test(lower)) {
+    const iso = addDaysToIsoDate(todayIso, 2);
+    candidates.push({
+      isoDate: iso,
+      labelRu: 'на послезавтра',
+      nameRu: 'послезавтра',
+    });
+  }
+
+  if (/(?:^|[^а-яёa-z0-9])(?:на\s+)?(?<!после)завтра(?=$|[^а-яёa-z0-9])/i.test(lower)) {
+    const iso = addDaysToIsoDate(todayIso, 1);
+    candidates.push({
+      isoDate: iso,
+      labelRu: 'на завтра',
+      nameRu: 'завтра',
+    });
+  }
+
+  if (/(?:^|[^а-яёa-z0-9])(?:(?:на|до)\s+)?(?:сегодня|до\s+вечера|до\s+обеда)(?=$|[^а-яёa-z0-9])/i.test(lower)) {
     if (!dueTime && lower.includes('до обеда')) dueTime = '13:00';
     if (!dueTime && lower.includes('до вечера')) dueTime = '18:00';
-    return { dueDate: todayIso, dueTime, dateLabelRu: 'на сегодня' };
+    candidates.push({
+      isoDate: todayIso,
+      labelRu: 'на сегодня',
+      nameRu: 'сегодня',
+    });
   }
 
-  const inDaysMatch = lower.match(/через\s+(\d{1,2})\s+дн/);
+  const inDaysMatch = lower.match(/(?:^|[^а-яёa-z0-9])через\s+(\d{1,2})\s+дн[а-яё]*(?=$|[^а-яёa-z0-9])/i);
   if (inDaysMatch) {
     const days = parseInt(inDaysMatch[1], 10);
-    const dueDate = addDaysToIsoDate(todayIso, days);
-    return { dueDate, dueTime, dateLabelRu: `на ${formatSyzranIsoDateRu(dueDate)}` };
+    const iso = addDaysToIsoDate(todayIso, days);
+    candidates.push({
+      isoDate: iso,
+      labelRu: `на ${formatSyzranIsoDateRu(iso)}`,
+      nameRu: `через ${days} дн.`,
+    });
   }
 
-  // Day of week detection (supports "в среду", "на среду", "к среде", "до среды", etc.)
-  const weekdays: Array<{ pattern: RegExp; targetDow: number; label: string }> = [
+  // 8. Days of the week with Cyrillic boundaries
+  const weekdays: Array<{ pattern: RegExp; targetDow: number; label: string; nameRu: string }> = [
     {
-      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:понедельник|понедельника|понедельнику)(?=\s|$|[.,!?;:])/i,
+      pattern: /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:понедельник|понедельника|понедельнику)(?=$|[^а-яёa-z0-9])/i,
       targetDow: 1,
       label: 'на понедельник',
+      nameRu: 'понедельник',
     },
     {
-      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:вторник|вторника|вторнику)(?=\s|$|[.,!?;:])/i,
+      pattern: /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:вторник|вторника|вторнику)(?=$|[^а-яёa-z0-9])/i,
       targetDow: 2,
       label: 'на вторник',
+      nameRu: 'вторник',
     },
     {
-      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:среду|среды|среде|среда)(?=\s|$|[.,!?;:])/i,
+      pattern: /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:среду|среды|среде|среда)(?=$|[^а-яёa-z0-9])/i,
       targetDow: 3,
       label: 'на среду',
+      nameRu: 'на среду',
     },
     {
-      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:четверг|четверга|четвергу)(?=\s|$|[.,!?;:])/i,
+      pattern: /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:четверг|четверга|четвергу)(?=$|[^а-яёa-z0-9])/i,
       targetDow: 4,
       label: 'на четверг',
+      nameRu: 'четверг',
     },
     {
-      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:пятницу|пятницы|пятнице|пятница)(?=\s|$|[.,!?;:])/i,
+      pattern: /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:пятницу|пятницы|пятнице|пятница)(?=$|[^а-яёa-z0-9])/i,
       targetDow: 5,
       label: 'на пятницу',
+      nameRu: 'пятницу',
     },
     {
-      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:субботу|субботы|субботе|суббота)(?=\s|$|[.,!?;:])/i,
+      pattern: /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:субботу|субботы|субботе|суббота)(?=$|[^а-яёa-z0-9])/i,
       targetDow: 6,
       label: 'на субботу',
+      nameRu: 'субботу',
     },
     {
-      pattern: /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:воскресенье|воскресенья|воскресенью)(?=\s|$|[.,!?;:])/i,
+      pattern: /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:воскресенье|воскресенья|воскресенью)(?=$|[^а-яёa-z0-9])/i,
       targetDow: 0,
       label: 'на воскресенье',
+      nameRu: 'воскресенье',
     },
   ];
-
-  const [y, m, d] = todayIso.split('-').map(Number);
-  const currentDow = new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).getUTCDay();
 
   for (const wd of weekdays) {
     if (wd.pattern.test(lower)) {
       let delta = (wd.targetDow - currentDow + 7) % 7;
       if (delta === 0) delta = 7;
-      const dueDate = addDaysToIsoDate(todayIso, delta);
-      return {
-        dueDate,
-        dueTime,
-        dateLabelRu: `${wd.label} (${formatSyzranIsoDateRu(dueDate)})`,
-        isDateAmbiguous: isTimeAmbiguous,
-        ambiguityPromptRu: isTimeAmbiguous
-          ? `Я поставила время ${dueTime}. Если вы имели в виду другое время, уточните его.`
-          : undefined,
-      };
+      const targetIso = addDaysToIsoDate(todayIso, delta);
+      candidates.push({
+        isoDate: targetIso,
+        labelRu: `${wd.label} (${formatSyzranIsoDateRu(targetIso)})`,
+        nameRu: wd.nameRu,
+      });
     }
   }
 
-  if (lower.includes('на следующей неделе') || lower.includes('через неделю')) {
-    const dueDate = addDaysToIsoDate(todayIso, 7);
+  // 9. Vague week indicator
+  if (/(?:^|[^а-яёa-z0-9])(?:на\s+следующей\s+неделе|через\s+неделю)(?=$|[^а-яёa-z0-9])/i.test(lower)) {
+    const targetIso = addDaysToIsoDate(todayIso, 7);
+    candidates.push({
+      isoDate: targetIso,
+      labelRu: `на ${formatSyzranIsoDateRu(targetIso)}`,
+      nameRu: 'на следующей неделе',
+      isVagueWeek: true,
+    });
+  }
+
+  // Check 1: Invalid day in month (e.g. «На 35 ноября»)
+  const invalidCandidate = candidates.find((c) => c.isInvalidDay);
+  if (invalidCandidate) {
     return {
-      dueDate,
+      dueDate: '',
       dueTime,
-      dateLabelRu: `на ${formatSyzranIsoDateRu(dueDate)}`,
+      dateLabelRu: 'дата требует уточнения',
       isDateAmbiguous: true,
       ambiguityPromptRu:
-        'Вы указали «на следующей неделе» без конкретного дня недели — я предварительно поставила дату через 7 дней. Уточните, пожалуйста, на какой именно день недели назначить задачу.',
+        invalidCandidate.invalidReason ||
+        'Дата указана некорректно. Уточните, пожалуйста, правильную дату.',
     };
   }
 
-  // Explicit DD.MM.YYYY or DD.MM
-  const ruDateMatch = lower.match(/\b(\d{1,2})\.(\d{1,2})(?:\.(20\d{2}))?\b/);
-  if (ruDateMatch) {
-    const dayNum = parseInt(ruDateMatch[1], 10);
-    const monthNum = parseInt(ruDateMatch[2], 10);
-    const yearNum = ruDateMatch[3] ? parseInt(ruDateMatch[3], 10) : y;
-    if (monthNum >= 1 && monthNum <= 12 && dayNum >= 1 && dayNum <= 31) {
-      const dueDate = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
-      return { dueDate, dueTime, dateLabelRu: `на ${formatSyzranIsoDateRu(dueDate)}` };
-    }
-  }
-
-  const explicitIsoMatch = lower.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
-  if (explicitIsoMatch) {
-    const dueDate = explicitIsoMatch[1];
-    return { dueDate, dueTime, dateLabelRu: `на ${formatSyzranIsoDateRu(dueDate)}` };
-  }
-
-  if (dueTime) {
-    // Time specified without date -> default to today (or tomorrow if time already passed in Syzran)
-    const syzranNow = getSyzranNow();
-    const [hh, mm] = dueTime.split(':').map(Number);
-    const isPastToday =
-      hh * 60 + mm <= syzranNow.hour * 60 + syzranNow.minute && syzranNow.isoDate === todayIso;
-    const dueDate = isPastToday ? addDaysToIsoDate(todayIso, 1) : todayIso;
+  // Check 2: Date without year that has already passed in Europe/Samara (e.g. «Запланируй на 1 мая»)
+  const pastCandidate = candidates.find((c) => c.isPastWithoutYear);
+  if (pastCandidate) {
     return {
-      dueDate,
+      dueDate: '',
       dueTime,
-      dateLabelRu: isPastToday ? `на завтра (${formatSyzranIsoDateRu(dueDate)})` : `на сегодня (${formatSyzranIsoDateRu(dueDate)})`,
+      dateLabelRu: 'дата требует уточнения',
+      isDateAmbiguous: true,
+      ambiguityPromptRu:
+        pastCandidate.invalidReason ||
+        'Указанная дата текущего года уже прошла. Уточните, пожалуйста, имелся ли в виду следующий год или другой день.',
+    };
+  }
+
+  // Check 3: Multiple non-matching dates in the same request (e.g. «На сегодня, на среду»)
+  const validCandidates = candidates.filter((c) => Boolean(c.isoDate));
+  const uniqueIsoDates = Array.from(new Set(validCandidates.map((c) => c.isoDate)));
+  if (uniqueIsoDates.length > 1) {
+    const names = Array.from(new Set(validCandidates.map((c) => c.nameRu || c.labelRu)));
+    return {
+      dueDate: '',
+      dueTime,
+      dateLabelRu: 'дата требует уточнения',
+      isDateAmbiguous: true,
+      ambiguityPromptRu: `В запросе указано несколько разных дат: ${names.join(' и ')}. Уточните, пожалуйста, на какую именно дату поставить задачу.`,
+    };
+  }
+
+  // Check 4: Exactly one unique date matched
+  if (uniqueIsoDates.length === 1) {
+    const candidate = validCandidates[0];
+    if (candidate.isVagueWeek) {
+      return {
+        dueDate: candidate.isoDate,
+        dueTime,
+        dateLabelRu: candidate.labelRu,
+        isDateAmbiguous: true,
+        ambiguityPromptRu:
+          'Вы указали «на следующей неделе» без конкретного дня недели — я предварительно поставила дату через 7 дней. Уточните, пожалуйста, на какой именно день недели назначить задачу.',
+      };
+    }
+    return {
+      dueDate: candidate.isoDate,
+      dueTime,
+      dateLabelRu: candidate.labelRu,
+      isDateAmbiguous: isTimeAmbiguous,
+      ambiguityPromptRu: isTimeAmbiguous
+        ? `Я поставила время ${dueTime} (день). Если имелось в виду утро, уточните, пожалуйста.`
+        : undefined,
+    };
+  }
+
+  // Check 5: Time specified without any recognized date -> DO NOT silently default to todayIso!
+  if (dueTime) {
+    return {
+      dueDate: '',
+      dueTime,
+      dateLabelRu: 'дата требует уточнения',
+      isDateAmbiguous: true,
+      ambiguityPromptRu: `Указано время ${dueTime}, но не указана дата. Уточните, пожалуйста, на какой день запланировать задачу (на сегодня, завтра или конкретную дату).`,
+    };
+  }
+
+  // Check 6: Unrecognized date attempt with date-related preposition
+  if (
+    /(?:^|[^а-яёa-z0-9])(?:на|к|до)\s+(?:число|дату|срок)(?=$|[^а-яёa-z0-9])/i.test(lower)
+  ) {
+    return {
+      dueDate: '',
+      dueTime,
+      dateLabelRu: 'дата требует уточнения',
+      isDateAmbiguous: true,
+      ambiguityPromptRu:
+        'Дата задачи не распознана. Уточните, пожалуйста, число и месяц для задачи.',
     };
   }
 
@@ -490,14 +722,24 @@ export function cleanExtractedTaskTitle(raw: string): string {
       /^(?:пожалуйста\s*,?\s*)?(?:добавь|создай|запиши|поставь|зафиксируй|внеси|запланируй)\s*(?:,\s*пожалуйста\s*,?|\s+пожалуйста\s*,?)?\s*(?:мне\s+)?(?:в\s+список\s+дел\s+|в\s+задачи\s+|задач[уи]\s+|дело\s*)?[:—-]?\s*/i,
       ''
     )
+    // Remove textual dates with Russian months anywhere in the text
+    .replace(
+      /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?\d{1,2}(?:-(?:е|го|ое|ье|ья|м))?\s+(?:январ[яеью]?|феврал[яеью]?|март[аеу]?|апрел[яеью]?|ма[яеюйо]|июн[яеью]?|июл[яеью]?|август[аеу]?|сентябр[яеью]?|октябр[яеью]?|ноябр[яеью]?|декабр[яеью]?)(?:\s+\d{4}(?:\s*года|\s*г\.?|\s*г)?)?(?=$|[^а-яёa-z0-9])/gi,
+      ' '
+    )
+    // Remove numeric dates: "04.11.2026", "04.11", "2026-11-04"
+    .replace(
+      /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:\d{1,2}\.\d{1,2}(?:\.\d{2,4})?|\d{4}-\d{2}-\d{2})(?=$|[^а-яёa-z0-9])/gi,
+      ' '
+    )
     // Remove weekday/relative date tokens anywhere in the text
     .replace(
-      /(?:^|\s|[.,!?;:])(?:(?:в|во|на|к|до)\s+)?(?:понедельник|понедельника|понедельнику|вторник|вторника|вторнику|среду|среды|среде|среда|четверг|четверга|четвергу|пятницу|пятницы|пятнице|пятница|субботу|субботы|субботе|суббота|воскресенье|воскресенья|воскресенью|сегодня|завтра|послезавтра|когда-нибудь|на\s+следующей\s+неделе|через\s+\d{1,2}\s+дн[а-яё]*|на\s+днях|через\s+пару\s+дней|через\s+несколько\s+дней|до\s+вечера|до\s+обеда)(?=\s|$|[.,!?;:])/gi,
+      /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:понедельник|понедельника|понедельнику|вторник|вторника|вторнику|среду|среды|среде|среда|четверг|четверга|четвергу|пятницу|пятницы|пятнице|пятница|субботу|субботы|субботе|суббота|воскресенье|воскресенья|воскресенью|сегодня|завтра|послезавтра|когда-нибудь|на\s+следующей\s+неделе|через\s+\d{1,2}\s+дн[а-яё]*|на\s+днях|через\s+пару\s+дней|через\s+несколько\s+дней|до\s+вечера|до\s+обеда|неизвестн\w*\s+дат\w*)(?=$|[^а-яёa-z0-9])/gi,
       ' '
     )
     // Remove time tokens like "в 15:00", "к 15:00", "в 15 часов"
     .replace(
-      /(?:^|\s|[.,!?;:])(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?\s*(?:час(?:а|ов)?|ч(?=\s|$|[.,!?;:])|утра|дня|вечера|ночи)?(?=\s|$|[.,!?;:])/gi,
+      /(?:^|[^а-яёa-z0-9])(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?\s*(?:час(?:а|ов)?|ч(?=$|[^а-яёa-z0-9])|утра|дня|вечера|ночи)?(?=$|[^а-яёa-z0-9])/gi,
       ' '
     )
     // Remove leftover leading "задачу / дело" if date stood before it
@@ -1314,9 +1556,9 @@ export function parseAndExecuteTaskCommand(
     };
   }
 
-  // 10. «Перенеси это на завтра» / «Перенеси задачу ... на завтра / на среду в 16:00»
+  // 10. «Перенеси это на завтра» / «Перенеси задачу ... на завтра / на среду в 16:00 / на 4 ноября»
   const rescheduleMatch = trimmed.match(
-    /^(?:пиксель\s*,?\s*)?перенеси\s+(?:задач[уи]\s+|дело\s+)?(.+?)\s+на\s+((?:сегодня|завтра|послезавтра|следующую\s+неделю|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|\d{1,2}\.\d{1,2}(?:\.\d{4})?)(?:\s+(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?)?)$/i
+    /^(?:пиксель\s*,?\s*)?перенеси\s+(?:задач[уи]\s+|дело\s+)?(.+?)\s+на\s+((?:сегодня|завтра|послезавтра|следующую\s+неделю|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|\d{1,2}\.\d{1,2}(?:\.\d{4})?|\d{1,2}\s+(?:январ[яеью]?|феврал[яеью]?|март[аеу]?|апрел[яеью]?|ма[яеюйо]|июн[яеью]?|июл[яеью]?|август[аеу]?|сентябр[яеью]?|октябр[яеью]?|ноябр[яеью]?|декабр[яеью]?)(?:\s+\d{4}(?:\s*года)?)?)(?:\s+(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?)?)$/i
   );
   if (rescheduleMatch) {
     const taskQuery = rescheduleMatch[1].trim();
@@ -1541,7 +1783,21 @@ export function parseAndExecuteTaskCommand(
       reminderLabelRu = `через ${hrs} ч. (в ${fireSnap.timeHHMM} по Сызрани)`;
     } else {
       const parsed = parseRelativeDateAndTimeFromRuText(body, todayIso);
-      const datePart = parsed.dueDate || todayIso;
+      if (parsed.isDateAmbiguous && parsed.ambiguityPromptRu) {
+        return {
+          handled: true,
+          responseText: `⚠️ **Уточните дату напоминания:** ${parsed.ambiguityPromptRu}`,
+          spokenSummary: `Пожалуйста, уточните дату напоминания.`,
+        };
+      }
+      if (!parsed.dueDate) {
+        return {
+          handled: true,
+          responseText: `⚠️ Не удалось определить дату для напоминания. Уточните, пожалуйста, день и время (например: «напомни завтра в 10:00» или «напомни 15 декабря в 15:00»).`,
+          spokenSummary: `Уточните, пожалуйста, день и время для напоминания.`,
+        };
+      }
+      const datePart = parsed.dueDate;
       const timePart = parsed.dueTime || '10:00';
       // Syzran is UTC+4
       const [y, m, d] = datePart.split('-').map(Number);
@@ -1565,6 +1821,10 @@ export function parseAndExecuteTaskCommand(
     const cleanedQuery = body
       .replace(/через\s+(?:\d+\s*)?(?:секунд[уы]?|сек|минут[уы]?|мин|час(?:а|ов)?|ч)(?=\s|$|[.,!?;:])/gi, '')
       .replace(/(?:каждый\s+день|ежедневно|по\s+будням|каждую\s+неделю|еженедельно)/gi, '')
+      .replace(
+        /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?\d{1,2}(?:-(?:е|го|ое|ье|ья|м))?\s+(?:январ[яеью]?|феврал[яеью]?|март[аеу]?|апрел[яеью]?|ма[яеюйо]|июн[яеью]?|июл[яеью]?|август[аеу]?|сентябр[яеью]?|октябр[яеью]?|ноябр[яеью]?|декабр[яеью]?)(?:\s+\d{4}(?:\s*года|\s*г\.?|\s*г)?)?(?=$|[^а-яёa-z0-9])/gi,
+        ' '
+      )
       .replace(/(?:сегодня|завтра|послезавтра)?\s*(?:в|к)\s*\d{1,2}(?::\d{2})?\s*(?:утра|дня|вечера)?/gi, '')
       .replace(/^(?:об\s+этом|о\s+том\s+чтобы|о\s+том\s+что|про\s+то\s+чтобы|что\s+нужно|про|о)\s*/i, '')
       .trim();

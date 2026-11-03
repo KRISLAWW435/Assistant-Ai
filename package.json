@@ -18,7 +18,8 @@
     "electron:dev": "npm run build:electron && electron dist-electron/main.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-electron release server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:dates": "tsx scripts/test-date-parser.ts"
   },
   "dependencies": {
     "@google/genai": "^2.32.0",
