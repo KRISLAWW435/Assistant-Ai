@@ -505,6 +505,33 @@ export interface PixelPendingChatDeletion {
   createdAtMs: number;
 }
 
+export type PersonalTaskDraftStep =
+  | 'clarifying_date'
+  | 'clarifying_priority'
+  | 'clarifying_reminder'
+  | 'ready_for_confirmation';
+
+export interface PixelPendingPersonalTaskDraft {
+  draftId: string;
+  title: string;
+  description: string;
+  schoolId: SchoolId | 'both';
+  dueDate?: string; // YYYY-MM-DD
+  dueTime?: string; // HH:mm in Europe/Samara
+  hasExplicitDate: boolean;
+  hasExplicitDueTime: boolean;
+  priority?: CompanionTaskPriority;
+  hasExplicitPriority: boolean;
+  wantsReminder?: boolean;
+  reminderDate?: string;
+  reminderTime?: string;
+  reminderAt?: string; // ISO string in Europe/Samara
+  hasExplicitReminder: boolean;
+  step: PersonalTaskDraftStep;
+  status: 'drafting' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
+  createdAtMs: number;
+}
+
 export interface CompanionMessage {
   id: string;
   role: 'user' | 'pixel';
@@ -522,6 +549,7 @@ export interface CompanionMessage {
   pendingDelegationDraft?: PixelPendingDelegationDraft;
   pendingRevisionDraft?: PixelPendingRevisionDraft;
   pendingChatDeletion?: PixelPendingChatDeletion;
+  pendingPersonalTaskDraft?: PixelPendingPersonalTaskDraft;
   deletableChatsList?: PixelChatNavigationItem[];
   chatDisambiguationList?: PixelChatNavigationItem[];
   delegatedTask?: PixelDelegatedTaskState;

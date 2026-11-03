@@ -2,6 +2,8 @@ import {
   parseRelativeDateAndTimeFromRuText,
   cleanExtractedTaskTitle,
   parseAndExecuteTaskCommand,
+  initPersonalTaskDraft,
+  processPersonalTaskDraftInput,
 } from '../src/utils/pixelTaskManagerEngine';
 import { getSyzranNow } from '../src/utils/syzranTime';
 
@@ -152,25 +154,131 @@ for (const tc of testCases) {
   console.log('');
 }
 
-// Тест интеграции сквозной команды создания задачи
-console.log('--- ТЕСТ СКВОЗНОЙ КОМАНДЫ ПИКСЕЛЯ ---');
-const cmd1 = parseAndExecuteTaskCommand('Пиксель, добавь задачу на 4 ноября подготовить отчёт по школам', 'kiberone', []);
-console.log('Команда: «Пиксель, добавь задачу на 4 ноября подготовить отчёт по школам»');
-console.log(`- Создана задача: «${cmd1?.createdTask?.title}»`);
-console.log(`- Дата: ${cmd1?.createdTask?.dueDate}`);
-console.log(`- Школа: ${cmd1?.createdTask?.schoolId}`);
-if (cmd1?.createdTask?.dueDate === '2026-11-04' && cmd1?.createdTask?.title === 'Подготовить отчёт по школам') {
-  console.log('✅ Сквозная команда на 4 ноября отработала корректно!\n');
+// Тест сквозной команды Пикселя и диалога создания задач
+console.log('--- ТЕСТ СКВОЗНОЙ КОМАНДЫ И ДИАЛОГА СОЗДАНИЯ ЗАДАЧ ---');
+const cmd1 = parseAndExecuteTaskCommand(
+  'Пиксель, добавь задачу на 4 ноября в 15:00 подготовить отчёт по школам',
+  'kiberone',
+  []
+);
+console.log('Команда: «Пиксель, добавь задачу на 4 ноября в 15:00 подготовить отчёт по школам»');
+console.log(`- Создана ли задача сразу в БД: ${cmd1?.createdTask ? 'ДА (ОШИБКА)' : 'НЕТ (ВЕРНО: ожидает уточнения и подтверждения)'}`);
+console.log(`- Черновик: «${cmd1?.personalTaskDraft?.title}»`);
+console.log(`- Дата выполнения (dueDate): ${cmd1?.personalTaskDraft?.dueDate}`);
+console.log(`- Время выполнения (dueTime): ${cmd1?.personalTaskDraft?.dueTime}`);
+console.log(`- Школа (schoolId): ${cmd1?.personalTaskDraft?.schoolId}`);
+console.log(`- Шаг диалога: ${cmd1?.personalTaskDraft?.step}`);
+
+if (
+  !cmd1?.createdTask &&
+  cmd1?.personalTaskDraft?.dueDate === '2026-11-04' &&
+  cmd1?.personalTaskDraft?.dueTime === '15:00' &&
+  cmd1?.personalTaskDraft?.title === 'Подготовить отчёт по школам' &&
+  cmd1?.personalTaskDraft?.step === 'clarifying_priority'
+) {
+  console.log('✅ Задача переведена в черновик, dueDate и dueTime заполнены, Пиксель запросил приоритет без несогласованного сохранения в базе!\n');
 } else {
-  console.error('❌ Ошибка в сквозной команде:', cmd1);
+  console.error('❌ Ошибка в инициализации черновика задачи:', cmd1);
   allPassed = false;
 }
 
+// Тест шага 2: уточнение приоритета
+console.log('Шаг 2: Анна отвечает на вопрос о приоритете («Обычный»)...');
+const step2 = processPersonalTaskDraftInput(cmd1!.personalTaskDraft!, 'Обычный', todayIso);
+console.log(`- Приоритет в черновике: ${step2.draft.priority}`);
+console.log(`- Следующий шаг: ${step2.draft.step}`);
+console.log(`- Вопрос Пикселя: ${step2.responseRu}`);
+
+if (step2.draft.priority === 'low' && step2.draft.step === 'clarifying_reminder') {
+  console.log('✅ Приоритет «обычный» сохранён, Пиксель запросил дату и время напоминания!\n');
+} else {
+  console.error('❌ Ошибка на шаге уточнения приоритета:', step2);
+  allPassed = false;
+}
+
+// Тест шага 3: указание времени напоминания отдельно от времени выполнения
+console.log('Шаг 3: Анна задаёт напоминание («Напомни 4 ноября в 14:00»)...');
+const step3 = processPersonalTaskDraftInput(step2.draft, 'Напомни 4 ноября в 14:00', todayIso);
+console.log(`- Время выполнения события (dueTime): ${step3.draft.dueTime}`);
+console.log(`- Дата напоминания (reminderDate): ${step3.draft.reminderDate}`);
+console.log(`- Время напоминания (reminderTime): ${step3.draft.reminderTime}`);
+console.log(`- reminderAt ISO: ${step3.draft.reminderAt}`);
+console.log(`- Следующий шаг: ${step3.draft.step}`);
+
+if (
+  step3.draft.dueTime === '15:00' &&
+  step3.draft.reminderTime === '14:00' &&
+  step3.draft.reminderDate === '2026-11-04' &&
+  step3.draft.step === 'ready_for_confirmation' &&
+  step3.responseRu.includes('Подтверждение создания задачи')
+) {
+  console.log('✅ Время выполнения (15:00) и время напоминания (14:00) сохранены отдельно! Показана итоговая карточка.\n');
+} else {
+  console.error('❌ Ошибка на шаге настройки напоминания:', step3);
+  allPassed = false;
+}
+
+// Тест шага 4: подтверждение создания задачи Анной («Да, создавай»)
+console.log('Шаг 4: Анна подтверждает создание («Создавай»)...');
+const step4 = processPersonalTaskDraftInput(step3.draft, 'Создавай', todayIso);
+console.log(`- Статус действия: ${step4.action}`);
+console.log(`- Созданная задача title: ${step4.readyTask?.title}`);
+console.log(`- Созданная задача dueDate: ${step4.readyTask?.dueDate}`);
+console.log(`- Созданная задача dueTime: ${step4.readyTask?.dueTime}`);
+console.log(`- Созданная задача priority: ${step4.readyTask?.priority}`);
+console.log(`- Созданная задача reminderAt: ${step4.readyTask?.reminderAt}`);
+console.log(`- Уведомление о доставке напоминания: ${step4.responseRu.includes('Напоминание установлено')}`);
+
+if (
+  step4.action === 'confirmed' &&
+  step4.readyTask?.title === 'Подготовить отчёт по школам' &&
+  step4.readyTask?.dueDate === '2026-11-04' &&
+  step4.readyTask?.dueTime === '15:00' &&
+  step4.readyTask?.priority === 'low' &&
+  step4.readyTask?.reminderAt &&
+  step4.responseRu.includes('Напоминание установлено')
+) {
+  console.log('✅ Задача подтверждена и подготовлена к сохранению в IndexedDB со всеми 7 полями!\n');
+} else {
+  console.error('❌ Ошибка при подтверждении задачи:', step4);
+  allPassed = false;
+}
+
+// Тест: если пользователь сразу назвал все параметры, повторные вопросы не задаются
+console.log('Тест: полное первичное указание («Добавь срочную задачу провести вебинар на 4 ноября в 18:00 без напоминания»)...');
+const fullCmd = initPersonalTaskDraft(
+  'Добавь срочную задачу провести вебинар на 4 ноября в 18:00 без напоминания',
+  'renderia',
+  todayIso
+);
+console.log(`- Шаг: ${fullCmd.draft.step}`);
+console.log(`- Приоритет: ${fullCmd.draft.priority}`);
+console.log(`- dueTime: ${fullCmd.draft.dueTime}`);
+console.log(`- wantsReminder: ${fullCmd.draft.wantsReminder}`);
+
+if (
+  fullCmd.draft.step === 'ready_for_confirmation' &&
+  fullCmd.draft.priority === 'high' &&
+  fullCmd.draft.dueTime === '18:00' &&
+  fullCmd.draft.wantsReminder === false
+) {
+  console.log('✅ Известные поля повторно не запрашиваются — сразу показана карточка подтверждения!\n');
+} else {
+  console.error('❌ Ошибка при первичном заполнении всех полей:', fullCmd);
+  allPassed = false;
+}
+
+// Тест противоречивых дат
 const cmd2 = parseAndExecuteTaskCommand('Пиксель, добавь задачу на сегодня, на среду обновить прайс', 'kiberone', []);
 console.log('Команда: «Пиксель, добавь задачу на сегодня, на среду обновить прайс»');
-console.log(`- ambiguityBlock в ответе:`, cmd2?.responseText.includes('Уточните дату/время'));
-if (cmd2?.responseText.includes('Уточните дату/время') && !cmd2?.createdTask?.dueDate) {
-  console.log('✅ Противоречивые даты вызвали запрос уточнения у Анны без автоподстановки!\n');
+console.log(`- Шаг черновика: ${cmd2?.personalTaskDraft?.step}`);
+console.log(`- ambiguityPrompt в ответе:`, cmd2?.responseText.includes('разных дат') || cmd2?.responseText.includes('Уточните'));
+if (
+  (cmd2?.responseText.includes('разных дат') || cmd2?.responseText.includes('Уточните')) &&
+  !cmd2?.createdTask?.dueDate &&
+  cmd2?.personalTaskDraft?.step === 'clarifying_date'
+) {
+  console.log('✅ Противоречивые даты вызвали запрос уточнения даты у Анны без автоподстановки!\n');
 } else {
   console.error('❌ Ошибка при противоречивых датах:', cmd2);
   allPassed = false;
@@ -179,5 +287,5 @@ if (cmd2?.responseText.includes('Уточните дату/время') && !cmd2
 if (!allPassed) {
   process.exit(1);
 } else {
-  console.log('🎉 Все тесты успешно пройдены!');
+  console.log('🎉 Все тесты парсера и сценария создания задач успешно пройдены!');
 }

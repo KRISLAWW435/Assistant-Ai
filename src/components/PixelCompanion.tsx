@@ -55,6 +55,7 @@ import {
   NavSection,
   PixelDelegatedTaskState,
   PixelPendingRevisionDraft,
+  PixelPendingPersonalTaskDraft,
   ProposedCompanionMemoryDraft,
   ProposedCompanionTaskDraft,
   SchoolId,
@@ -84,8 +85,11 @@ import {
   checkDueTaskAndDelegationReminders,
   evaluateTaskPriorityMultiCriteria,
   extractAutoTaskFromConversation,
+  formatPersonalTaskConfirmationCard,
   generateTaskSteps,
+  initPersonalTaskDraft,
   parseAndExecuteTaskCommand,
+  processPersonalTaskDraftInput,
 } from '../utils/pixelTaskManagerEngine';
 import {
   geminiProvider,
@@ -455,9 +459,18 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   );
   const pixelAbortRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
+
+  // Personal task multi-turn draft state (sequential clarification & draft confirmation)
+  const [pendingPersonalTaskDraft, setPendingPersonalTaskDraft] =
+    useState<PixelPendingPersonalTaskDraft | null>(null);
+  const pendingPersonalTaskDraftRef =
+    useRef<PixelPendingPersonalTaskDraft | null>(null);
+  useEffect(() => {
+    pendingPersonalTaskDraftRef.current = pendingPersonalTaskDraft;
+  }, [pendingPersonalTaskDraft]);
 
   const handleSelectPixelImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1739,6 +1752,113 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       }
     }
 
+    // 1.28 Personal Task Multi-Turn Draft: Check if Anna is clarifying or confirming a pending task draft
+    if (pendingPersonalTaskDraftRef.current) {
+      const activeDraft = pendingPersonalTaskDraftRef.current;
+      const todayIso = toSyzranIsoDate();
+      const draftResult = processPersonalTaskDraftInput(
+        activeDraft,
+        text,
+        todayIso
+      );
+
+      if (draftResult.action === 'confirmed' && draftResult.readyTask) {
+        setPendingPersonalTaskDraft(null);
+        pendingPersonalTaskDraftRef.current = null;
+        try {
+          await onSaveCompanionTask(draftResult.readyTask);
+          if (
+            draftResult.readyTask.reminderAt &&
+            typeof window !== 'undefined' &&
+            'Notification' in window &&
+            Notification.permission === 'default'
+          ) {
+            Notification.requestPermission().catch(() => {});
+          }
+          setHighlightedTaskId(draftResult.readyTask.id);
+          const taskDue = draftResult.readyTask.dueDate;
+          const nowIso = toSyzranIsoDate();
+          const tmrIso = addDaysToIsoDate(nowIso, 1);
+          const wkEndIso = addDaysToIsoDate(nowIso, 7);
+          if (taskDue === nowIso) setTaskFilter('today');
+          else if (taskDue === tmrIso) setTaskFilter('tomorrow');
+          else if (taskDue && taskDue > tmrIso && taskDue <= wkEndIso) setTaskFilter('week');
+          else setTaskFilter('all');
+        } catch (saveErr) {
+          const errDetail =
+            saveErr instanceof Error
+              ? saveErr.message
+              : 'Не удалось сохранить задачу в IndexedDB.';
+          const failReplyMsg: CompanionMessage = {
+            id: `comp-pixel-taskerr-${nowMs + 1}`,
+            role: 'pixel',
+            content: `❌ **Не удалось сохранить задачу в хранилище:** ${errDetail}\n\nЗадача не была создана. Пожалуйста, проверьте доступность хранилища браузера и повторите попытку.`,
+            createdAt: formatTimeOnly(new Date(nowMs + 1)),
+            createdAtMs: nowMs + 1,
+            schoolId: activeSchool,
+            isError: true,
+          };
+          await onSaveCompanionMessages([...historyWithUser, failReplyMsg]);
+          updatePreferences({ mood: 'thinking' });
+          return;
+        }
+
+        const confirmReplyMsg: CompanionMessage = {
+          id: `comp-pixel-taskconfirm-${nowMs + 1}`,
+          role: 'pixel',
+          content: draftResult.responseRu,
+          createdAt: formatTimeOnly(new Date(nowMs + 1)),
+          createdAtMs: nowMs + 1,
+          schoolId: activeSchool,
+          autoCreatedTask: draftResult.readyTask,
+          taskUndoAvailable: true,
+          usedContextLabels: [
+            'Менеджер задач Анны',
+            `Сызрань: ${getSyzranNow().time24}`,
+          ],
+        };
+        await onSaveCompanionMessages([...historyWithUser, confirmReplyMsg]);
+        updatePreferences({ mood: 'happy' });
+        return;
+      }
+
+      if (draftResult.action === 'cancelled') {
+        setPendingPersonalTaskDraft(null);
+        pendingPersonalTaskDraftRef.current = null;
+        const cancelReplyMsg: CompanionMessage = {
+          id: `comp-pixel-taskcancel-${nowMs + 1}`,
+          role: 'pixel',
+          content: draftResult.responseRu,
+          createdAt: formatTimeOnly(new Date(nowMs + 1)),
+          createdAtMs: nowMs + 1,
+          schoolId: activeSchool,
+        };
+        await onSaveCompanionMessages([...historyWithUser, cancelReplyMsg]);
+        updatePreferences({ mood: 'curious' });
+        return;
+      }
+
+      // Step in progress: update draft state and reply with next sequential question or confirmation card
+      setPendingPersonalTaskDraft(draftResult.draft);
+      pendingPersonalTaskDraftRef.current = draftResult.draft;
+      const updateReplyMsg: CompanionMessage = {
+        id: `comp-pixel-taskdraft-${nowMs + 1}`,
+        role: 'pixel',
+        content: draftResult.responseRu,
+        createdAt: formatTimeOnly(new Date(nowMs + 1)),
+        createdAtMs: nowMs + 1,
+        schoolId: activeSchool,
+        pendingPersonalTaskDraft: draftResult.draft,
+        usedContextLabels: [
+          'Менеджер задач Анны (черновик)',
+          `Сызрань: ${getSyzranNow().time24}`,
+        ],
+      };
+      await onSaveCompanionMessages([...historyWithUser, updateReplyMsg]);
+      updatePreferences({ mood: 'thinking' });
+      return;
+    }
+
     // 1.3 Stage 6.4 (2): Check if Anna is confirming («Да, отправляй»), cancelling, or adjusting a pending delegation draft
     const pendingDraftAction =
       pixelAgentCoordinator.parsePendingDraftAction(text);
@@ -2001,6 +2121,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       if (taskCmdResult.createdTask) {
         setHighlightedTaskId(taskCmdResult.createdTask.id);
       }
+      if (taskCmdResult.personalTaskDraft) {
+        setPendingPersonalTaskDraft(taskCmdResult.personalTaskDraft);
+        pendingPersonalTaskDraftRef.current = taskCmdResult.personalTaskDraft;
+      }
 
       const cmdReplyMsg: CompanionMessage = {
         id: `comp-pixel-taskcmd-${nowMs + 1}`,
@@ -2010,6 +2134,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         createdAtMs: nowMs + 1,
         schoolId: activeSchool,
         autoCreatedTask: taskCmdResult.createdTask,
+        pendingPersonalTaskDraft: taskCmdResult.personalTaskDraft,
         taskUndoAvailable: Boolean(taskCmdResult.createdTask),
         usedContextLabels: [
           'Менеджер задач Анны',
@@ -3513,6 +3638,111 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                           ) : (
                             <div className="text-[11px] text-slate-400">
                               Отправка доработки отменена
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Interactive Personal Task Clarification & Confirmation Card */}
+                      {msg.pendingPersonalTaskDraft && (
+                        <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-2">
+                          {msg.pendingPersonalTaskDraft.status === 'confirmed' ? (
+                            <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                              <span>Задача подтверждена и сохранена в списке дел</span>
+                            </div>
+                          ) : msg.pendingPersonalTaskDraft.status === 'cancelled' ? (
+                            <div className="text-[11px] text-slate-400">
+                              Создание задачи отменено
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {/* Quick action buttons depending on draft step */}
+                              {msg.pendingPersonalTaskDraft.step === 'clarifying_priority' && (
+                                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                  <span className="text-[10px] text-slate-500 font-medium">
+                                    Выберите приоритет:
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Обычный')}
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-semibold hover:bg-emerald-100 transition-colors cursor-pointer"
+                                  >
+                                    🟢 Обычный
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Средний')}
+                                    className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
+                                  >
+                                    🟡 Средний
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Высокий')}
+                                    className="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-800 border border-rose-200 text-[11px] font-semibold hover:bg-rose-100 transition-colors cursor-pointer"
+                                  >
+                                    🔴 Высокий
+                                  </button>
+                                </div>
+                              )}
+
+                              {msg.pendingPersonalTaskDraft.step === 'clarifying_reminder' && (
+                                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                  <span className="text-[10px] text-slate-500 font-medium">
+                                    Варианты напоминания:
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Без напоминания')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    Без напоминания
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Напомни за 1 час')}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+                                  >
+                                    За 1 час
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Напомни за 30 минут')}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+                                  >
+                                    За 30 минут
+                                  </button>
+                                </div>
+                              )}
+
+                              {msg.pendingPersonalTaskDraft.step === 'ready_for_confirmation' && (
+                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Да, создавай')}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-bold hover:bg-slate-800 disabled:opacity-40 transition-colors cursor-pointer"
+                                  >
+                                    <Check className="w-3.5 h-3.5 text-[#FFD700]" />
+                                    <span>Создать задачу</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Отмена')}
+                                    className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-[11px] font-medium hover:bg-slate-200 disabled:opacity-40 transition-colors cursor-pointer"
+                                  >
+                                    Отменить
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>

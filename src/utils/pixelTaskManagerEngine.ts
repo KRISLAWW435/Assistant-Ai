@@ -5,6 +5,8 @@ import {
   CompanionTaskStep,
   CompanionTaskStatus,
   PixelDelegatedTaskState,
+  PixelPendingPersonalTaskDraft,
+  PersonalTaskDraftStep,
   SchoolId,
 } from '../types/assistant';
 import {
@@ -34,6 +36,7 @@ export interface TaskCommandExecutionResult {
   responseText: string;
   spokenSummary?: string;
   createdTask?: CompanionTaskRecord;
+  personalTaskDraft?: PixelPendingPersonalTaskDraft;
   updatedTasks?: CompanionTaskRecord[];
   openTasksTabWithFilter?:
     | 'all'
@@ -338,19 +341,44 @@ export function parseRelativeDateAndTimeFromRuText(
 
   let dueTime: string | undefined;
   let isTimeAmbiguous = false;
-  const timeMatch = lower.match(
-    /(?:^|[^а-яёa-z0-9])(?:в|к)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(час(?:а|ов)?|ч(?=$|[^а-яёa-z0-9])|утра|дня|вечера|ночи)?(?=$|[^а-яёa-z0-9])/i
+  const timeWithColonMatch = lower.match(
+    /(?:^|[^а-яёa-z0-9])(?:(?:в|во|к|на|до)\s+)?(\d{1,2}):(\d{2})(?:\s*(час(?:а|ов)?|ч(?=$|[^а-яёa-z0-9])|утра|дня|вечера|ночи))?(?=$|[^а-яёa-z0-9])/i
   );
-  if (timeMatch) {
-    let hour = parseInt(timeMatch[1], 10);
-    const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-    const period = (timeMatch[3] || '').toLowerCase();
-    const hasExplicitMinutes = Boolean(timeMatch[2]);
+  const timeWithDotMatch = lower.match(
+    /(?:^|[^а-яёa-z0-9])(?:в|во|к|на|до)\s+(\d{1,2})\.(\d{2})(?:\s*(час(?:а|ов)?|ч(?=$|[^а-яёa-z0-9])|утра|дня|вечера|ночи))?(?=$|[^а-яёa-z0-9])/i
+  );
+  const timeWordMatch = lower.match(
+    /(?:^|[^а-яёa-z0-9])(?:в|во|к|на|до)\s*(\d{1,2})\s*(час(?:а|ов)?|ч(?=$|[^а-яёa-z0-9])|утра|дня|вечера|ночи)(?=$|[^а-яёa-z0-9])/i
+  );
+
+  if (timeWithColonMatch) {
+    let hour = parseInt(timeWithColonMatch[1], 10);
+    const minute = parseInt(timeWithColonMatch[2], 10);
+    const period = (timeWithColonMatch[3] || '').toLowerCase();
     if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
       if ((period === 'дня' || period === 'вечера') && hour < 12) {
         hour += 12;
-      } else if (!period && !hasExplicitMinutes && hour >= 1 && hour <= 6) {
-        // e.g. "в 3 часа" in a business context usually means 15:00, but flag as worth confirming
+      }
+      dueTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    }
+  } else if (timeWithDotMatch) {
+    let hour = parseInt(timeWithDotMatch[1], 10);
+    const minute = parseInt(timeWithDotMatch[2], 10);
+    const period = (timeWithDotMatch[3] || '').toLowerCase();
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      if ((period === 'дня' || period === 'вечера') && hour < 12) {
+        hour += 12;
+      }
+      dueTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    }
+  } else if (timeWordMatch) {
+    let hour = parseInt(timeWordMatch[1], 10);
+    const minute = 0;
+    const period = (timeWordMatch[2] || '').toLowerCase();
+    if (hour >= 0 && hour <= 23) {
+      if ((period === 'дня' || period === 'вечера') && hour < 12) {
+        hour += 12;
+      } else if (!period.startsWith('утр') && hour >= 1 && hour <= 6) {
         hour += 12;
         isTimeAmbiguous = true;
       }
@@ -737,9 +765,27 @@ export function cleanExtractedTaskTitle(raw: string): string {
       /(?:^|[^а-яёa-z0-9])(?:(?:в|во|на|к|до)\s+)?(?:понедельник|понедельника|понедельнику|вторник|вторника|вторнику|среду|среды|среде|среда|четверг|четверга|четвергу|пятницу|пятницы|пятнице|пятница|субботу|субботы|субботе|суббота|воскресенье|воскресенья|воскресенью|сегодня|завтра|послезавтра|когда-нибудь|на\s+следующей\s+неделе|через\s+\d{1,2}\s+дн[а-яё]*|на\s+днях|через\s+пару\s+дней|через\s+несколько\s+дней|до\s+вечера|до\s+обеда|неизвестн\w*\s+дат\w*)(?=$|[^а-яёa-z0-9])/gi,
       ' '
     )
-    // Remove time tokens like "в 15:00", "к 15:00", "в 15 часов"
+    // Remove time tokens like "в 15:00", "на 15:00", "15:00", "в 15 часов"
     .replace(
-      /(?:^|[^а-яёa-z0-9])(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?\s*(?:час(?:а|ов)?|ч(?=$|[^а-яёa-z0-9])|утра|дня|вечера|ночи)?(?=$|[^а-яёa-z0-9])/gi,
+      /(?:^|[^а-яёa-z0-9])(?:(?:в|во|к|на|до)\s+)?\d{1,2}:\d{2}(?:\s*(?:час(?:а|ов)?|ч|утра|дня|вечера|ночи))?(?=$|[^а-яёa-z0-9])/gi,
+      ' '
+    )
+    .replace(
+      /(?:^|[^а-яёa-z0-9])(?:в|во|к|на|до)\s*\d{1,2}(?:\.\d{2})?\s*(?:час(?:а|ов)?|ч(?=$|[^а-яёa-z0-9])|утра|дня|вечера|ночи)?(?=$|[^а-яёa-z0-9])/gi,
+      ' '
+    )
+    // Remove priority tokens from title if present
+    .replace(
+      /(?:^|[^а-яёa-z0-9])(?:с\s+)?(?:высоким|средним|обычным|низким)\s+приоритетом(?=$|[^а-яёa-z0-9])/gi,
+      ' '
+    )
+    .replace(
+      /(?:^|[^а-яёa-z0-9])(?:приоритет\s*(?:обычный|средний|высокий|низкий))(?=$|[^а-яёa-z0-9])/gi,
+      ' '
+    )
+    // Remove reminder clauses from title if present
+    .replace(
+      /(?:^|[^а-яёa-z0-9])(?:напомни(?:ть)?\s+.*|без\s+напоминания|с\s+напоминанием\s+.*)(?=$|[^а-яёa-z0-9])/gi,
       ' '
     )
     // Remove leftover leading "задачу / дело" if date stood before it
@@ -1162,6 +1208,679 @@ export function buildFallbackTaskFromUserRequest(
 }
 
 /**
+ * Subtracts minutes from a given date and time in Syzran timezone (Europe/Samara, UTC+4).
+ */
+export function subtractTimeFromSyzranDateTime(
+  dateIso: string,
+  timeHHMM: string,
+  minutesToSubtract: number
+): { dateIso: string; timeHHMM: string } {
+  const [y, m, d] = dateIso.split('-').map(Number);
+  const [hh, mm] = timeHHMM.split(':').map(Number);
+  // Europe/Samara is UTC+4
+  const eventUtcMs = Date.UTC(y, m - 1, d, hh - 4, mm, 0);
+  const reminderUtcMs = eventUtcMs - minutesToSubtract * 60 * 1000;
+  const remSnap = getSyzranNow(new Date(reminderUtcMs));
+  return { dateIso: remSnap.isoDate, timeHHMM: remSnap.timeHHMM };
+}
+
+/**
+ * Extracts explicit task priority from Russian text.
+ * Strictly avoids guessing or auto-assigning high priority without explicit grounds.
+ */
+export function parseExplicitPriorityFromRuText(text: string): {
+  priority?: CompanionTaskPriority;
+  hasExplicitPriority: boolean;
+} {
+  const lower = text.toLowerCase();
+  // High priority markers
+  if (
+    /(?:^|[^а-яёa-z0-9])(?:высок(?:ий|ая|ое|ую|ом|им)|срочн(?:о|ый|ая|ое|ую|ом|им)|критич(?:но|ный|ная|ное|ную)|как\s+можно\s+быстрее|горит|максимальн(?:ый|ая|ое|ую))(?=$|[^а-яёa-z0-9])/i.test(
+      lower
+    )
+  ) {
+    return { priority: 'high', hasExplicitPriority: true };
+  }
+  // Medium priority markers
+  if (
+    /(?:^|[^а-яёa-z0-9])(?:средн(?:ий|яя|ее|юю|ей|им|ем)|умеренн(?:ый|ая|ое|ую)|нормальн(?:ый|ая|ое|ую))(?=$|[^а-яёa-z0-9])/i.test(
+      lower
+    )
+  ) {
+    return { priority: 'medium', hasExplicitPriority: true };
+  }
+  // Low/Ordinary priority markers
+  if (
+    /(?:^|[^а-яёa-z0-9])(?:обычн(?:ый|ая|ое|ую|ом|им)|низк(?:ий|ая|ое|ую|ом|им)|несрочн(?:о|ый|ая|ое|ую)|не\s+к\s+спеху|спокойн(?:о|ый|ая|ое|ую)|минимальн(?:ый|ая|ое|ую)|стандартн(?:ый|ая|ое|ую))(?=$|[^а-яёa-z0-9])/i.test(
+      lower
+    )
+  ) {
+    return { priority: 'low', hasExplicitPriority: true };
+  }
+  return { priority: undefined, hasExplicitPriority: false };
+}
+
+/**
+ * Extracts explicit reminder date and time from Russian text.
+ * Strictly separates reminder time/date from task execution time/date.
+ */
+export function parseExplicitReminderFromRuText(
+  text: string,
+  taskDueDate?: string,
+  taskDueTime?: string,
+  todayIso: string = toSyzranIsoDate(),
+  isDirectAnswer: boolean = false
+): {
+  wantsReminder?: boolean;
+  reminderDate?: string;
+  reminderTime?: string;
+  reminderAt?: string;
+  hasExplicitReminder: boolean;
+  isAmbiguous?: boolean;
+  ambiguityPromptRu?: string;
+} {
+  const lower = text.toLowerCase().trim();
+
+  // 1. Explicit refusal
+  if (
+    /(?:без\s+напоминани|не\s+надо\s+напомина|не\s+напоминай|не\s+нужно\s+напомина|напоминание\s+не\s+нужно|без\s+него|не\s+нужно|не\s+надо|нет(?=$|[^а-яёa-z0-9]))/i.test(
+      lower
+    )
+  ) {
+    return {
+      wantsReminder: false,
+      hasExplicitReminder: true,
+      reminderDate: undefined,
+      reminderTime: undefined,
+      reminderAt: undefined,
+    };
+  }
+
+  // If this is NOT a direct answer to a reminder question, check for explicit reminder cues
+  const hasReminderCue = /(?:напомн|предупред|напоминани|без\s+напоминани|не\s+напоминай|с\s+напоминанием|за\s+\d+\s*(?:час|мин)|за\s+(?:час|полчаса|день)|накануне)/i.test(
+    lower
+  );
+  if (!isDirectAnswer && !hasReminderCue) {
+    return {
+      hasExplicitReminder: false,
+    };
+  }
+
+  // 2. Relative offset: "за 1 час", "за час", "за 2 часа"
+  const hoursBeforeMatch = lower.match(
+    /(?:за\s+)?(\d{1,2})\s*(?:час(?:а|ов)?|ч)\s*(?:до\s+(?:начала|дедлайна|срока|задачи)|до)?/i
+  ) || (lower.includes('за час') ? [null, '1'] : null);
+
+  if (hoursBeforeMatch && hoursBeforeMatch[1]) {
+    const hours = parseInt(hoursBeforeMatch[1], 10);
+    if (taskDueDate && taskDueTime) {
+      const shifted = subtractTimeFromSyzranDateTime(taskDueDate, taskDueTime, hours * 60);
+      const iso = buildSyzranReminderIso(shifted.dateIso, shifted.timeHHMM);
+      return {
+        wantsReminder: true,
+        reminderDate: shifted.dateIso,
+        reminderTime: shifted.timeHHMM,
+        reminderAt: iso,
+        hasExplicitReminder: true,
+      };
+    }
+  }
+
+  // 3. Relative offset: "за 30 минут", "за полчаса", "за 15 минут"
+  const minsBeforeMatch = lower.match(
+    /(?:за\s+)?(\d{1,3})\s*(?:минут[уы]?|мин)\s*(?:до\s+(?:начала|дедлайна|срока|задачи)|до)?/i
+  ) || (lower.includes('полчаса') || lower.includes('пол-часа') ? [null, '30'] : null);
+
+  if (minsBeforeMatch && minsBeforeMatch[1]) {
+    const mins = parseInt(minsBeforeMatch[1], 10);
+    if (taskDueDate && taskDueTime) {
+      const shifted = subtractTimeFromSyzranDateTime(taskDueDate, taskDueTime, mins);
+      const iso = buildSyzranReminderIso(shifted.dateIso, shifted.timeHHMM);
+      return {
+        wantsReminder: true,
+        reminderDate: shifted.dateIso,
+        reminderTime: shifted.timeHHMM,
+        reminderAt: iso,
+        hasExplicitReminder: true,
+      };
+    }
+  }
+
+  // 4. Relative offset: "за 1 день", "за день", "накануне"
+  if (lower.includes('накануне') || lower.includes('за день') || lower.includes('за сутки')) {
+    if (taskDueDate) {
+      const prevDate = addDaysToIsoDate(taskDueDate, -1);
+      const time = taskDueTime || '10:00';
+      const iso = buildSyzranReminderIso(prevDate, time);
+      return {
+        wantsReminder: true,
+        reminderDate: prevDate,
+        reminderTime: time,
+        reminderAt: iso,
+        hasExplicitReminder: true,
+      };
+    }
+  }
+
+  // 5. Look for explicit date and/or time mentioned after reminder cue, or standalone reply
+  let reminderSubtext = lower;
+  const reminderCueMatch = lower.match(
+    /(?:напомни(?:ть)?|напоминани[ея]|предупреди(?:ть)?)\s*(?:мне\s+)?(?:о\s+ней\s+)?(?:в\s+|на\s+)?(.+)/i
+  );
+  if (reminderCueMatch && reminderCueMatch[1]) {
+    reminderSubtext = reminderCueMatch[1];
+  }
+
+  const parsed = parseRelativeDateAndTimeFromRuText(reminderSubtext, todayIso);
+
+  // If both date and time are detected for reminder:
+  if (parsed.dueDate && parsed.dueTime) {
+    const iso = buildSyzranReminderIso(parsed.dueDate, parsed.dueTime);
+    return {
+      wantsReminder: true,
+      reminderDate: parsed.dueDate,
+      reminderTime: parsed.dueTime,
+      reminderAt: iso,
+      hasExplicitReminder: true,
+    };
+  }
+
+  // If only time is detected for reminder:
+  if (parsed.dueTime && !parsed.dueDate) {
+    const rDate = taskDueDate || todayIso;
+    const iso = buildSyzranReminderIso(rDate, parsed.dueTime);
+    return {
+      wantsReminder: true,
+      reminderDate: rDate,
+      reminderTime: parsed.dueTime,
+      reminderAt: iso,
+      hasExplicitReminder: true,
+    };
+  }
+
+  // If only date is detected for reminder, but no time:
+  if (parsed.dueDate && !parsed.dueTime) {
+    return {
+      wantsReminder: true,
+      reminderDate: parsed.dueDate,
+      reminderTime: undefined,
+      hasExplicitReminder: false,
+      isAmbiguous: true,
+      ambiguityPromptRu: `Вы указали дату напоминания (${formatSyzranIsoDateRu(parsed.dueDate)}), но не указали время. Во сколько напомнить?`,
+    };
+  }
+
+  return {
+    hasExplicitReminder: false,
+  };
+}
+
+/**
+ * Formats the final personal task card for Anna's confirmation.
+ */
+export function formatPersonalTaskConfirmationCard(
+  draft: PixelPendingPersonalTaskDraft
+): string {
+  const schoolLabel =
+    draft.schoolId === 'kiberone'
+      ? 'KIBERone (КиберШкола)'
+      : draft.schoolId === 'renderia'
+      ? 'Renderia (Рендерия)'
+      : 'Обе школы';
+
+  const dateLabel = draft.dueDate
+    ? `${formatSyzranIsoDateRu(draft.dueDate)}`
+    : 'Без жёсткого срока';
+
+  const timeLabel = draft.dueTime
+    ? `${draft.dueTime} (по Сызрани, Europe/Samara)`
+    : 'Не указано';
+
+  const priorityLabel =
+    draft.priority === 'high'
+      ? '🔴 Высокий'
+      : draft.priority === 'medium'
+      ? '🟡 Средний'
+      : '🟢 Обычный';
+
+  let reminderLabel = 'Без напоминания';
+  if (draft.wantsReminder && draft.reminderDate && draft.reminderTime) {
+    reminderLabel = `🔔 ${formatSyzranIsoDateRu(draft.reminderDate)} в ${draft.reminderTime} (по Сызрани)`;
+  } else if (draft.reminderAt) {
+    const snap = getSyzranNow(new Date(draft.reminderAt));
+    reminderLabel = `🔔 ${formatSyzranIsoDateRu(snap.isoDate)} в ${snap.timeHHMM} (по Сызрани)`;
+  }
+
+  const lines = [
+    '### 📋 Подтверждение создания задачи',
+    '',
+    `- **Название:** ${draft.title}`,
+    `- **Описание:** ${draft.description || 'Не указано'}`,
+    `- **Школа:** ${schoolLabel}`,
+    `- **Дата выполнения:** ${dateLabel}`,
+    `- **Время выполнения:** ${timeLabel}`,
+    `- **Приоритет:** ${priorityLabel}`,
+    `- **Напоминание:** ${reminderLabel}`,
+    '',
+    'Все параметры заполнены. Подтвердите создание задачи («Создать» или «Да») либо укажите, что изменить («Отмена»).',
+  ];
+
+  return lines.join('\n');
+}
+
+/**
+ * Initializes a new personal task draft from Anna's request.
+ * Follows sequential short questions and never asks for already provided info.
+ */
+export function initPersonalTaskDraft(
+  userText: string,
+  activeSchool: SchoolId,
+  todayIso: string = toSyzranIsoDate()
+): {
+  draft: PixelPendingPersonalTaskDraft;
+  questionRu: string;
+  spokenSummary: string;
+} {
+  const trimmed = userText.trim();
+  const nowMs = Date.now();
+  const draftId = `draft_${nowMs}_${Math.random().toString(36).slice(2, 6)}`;
+
+  // 1. Title & description extraction
+  const explicitAddMatch = trimmed.match(
+    /^(?:[«"„“]+)?(?:пиксель\s*,?\s*)?(?:пожалуйста\s*,?\s*)?(?:добавь|создай|запиши|поставь|зафиксируй|внеси|запланируй)(?:\s*,?\s*пожалуйста\s*,?)?(?:\s+мне)?(?:\s+(?:в\s+список\s+дел|в\s+задачи|задач[уи]|дело))?[\s:—,-]*([\s\S]+)$/i
+  ) || trimmed.match(
+    /^(?:[«"„“]+)?(?:пиксель\s*,?\s*)?(?:мне\s+)?(?:нужно\s+не\s+забыть|надо\s+не\s+забыть|не\s+забыть(?:\s+бы)?|хочу\s+не\s+забыть)\s*[:—-]?\s*([\s\S]+)$/i
+  ) || trimmed.match(
+    /^(?:[«"„“]+)?(?:пиксель\s*,?\s*)?(?:мне\s+)?(?:(?:сегодня|завтра|послезавтра|(?:в|во|на)\s+(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье))\s+)?(?:мне\s+)?(?:нужно|надо|необходимо|предстоит)\s+(?:будет\s+)?(?:(?:сегодня|завтра|послезавтра|(?:в|во|на)\s+(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье))\s+)?(?:(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?\s*)?((?:провести|сделать|написать|позвонить|подготовить|подготовиться|отправить|проверить|собрать|обновить|согласовать|встретиться|запустить|оплатить|выгрузить|составить|организовать|заказать|купить|передать|разработать)(?=\s|$|[.,!?;:])[\s\S]+)$/i
+  );
+
+  const rawBody = explicitAddMatch && explicitAddMatch[1] ? explicitAddMatch[1].trim() : trimmed;
+  let title = cleanExtractedTaskTitle(rawBody) || cleanExtractedTaskTitle(trimmed) || 'Личная задача';
+
+  // 2. School
+  const schoolId = detectSchoolFromTaskText(trimmed, activeSchool);
+
+  // 3. Date & execution time
+  const parsedDateTime = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
+  const dueDate = parsedDateTime.dueDate || '';
+  const dueTime = parsedDateTime.dueTime;
+  const hasExplicitDate = Boolean(dueDate);
+  const hasExplicitDueTime = Boolean(dueTime);
+
+  // 4. Priority
+  const explicitPriority = parseExplicitPriorityFromRuText(trimmed);
+
+  // 5. Reminder
+  const explicitReminder = parseExplicitReminderFromRuText(trimmed, dueDate, dueTime, todayIso);
+
+  title = title
+    .replace(/(?:^|[^а-яёa-z0-9])(?:с\s+)?(?:высоким|средним|обычным|низким)\s+приоритетом(?=$|[^а-яёa-z0-9])/gi, '')
+    .replace(/(?:^|[^а-яёa-z0-9])(?:напомни\s+.*|без\s+напоминания)(?=$|[^а-яёa-z0-9])/gi, '')
+    .trim();
+  if (!title) title = 'Личная задача';
+
+  const draft: PixelPendingPersonalTaskDraft = {
+    draftId,
+    title,
+    description: `Поставлено Анной: «${trimmed}»`,
+    schoolId,
+    dueDate,
+    dueTime,
+    hasExplicitDate,
+    hasExplicitDueTime,
+    priority: explicitPriority.priority,
+    hasExplicitPriority: explicitPriority.hasExplicitPriority,
+    wantsReminder: explicitReminder.wantsReminder,
+    reminderDate: explicitReminder.reminderDate,
+    reminderTime: explicitReminder.reminderTime,
+    reminderAt: explicitReminder.reminderAt,
+    hasExplicitReminder: explicitReminder.hasExplicitReminder,
+    step: 'ready_for_confirmation',
+    status: 'drafting',
+    createdAtMs: nowMs,
+  };
+
+  // Sequential question 1: Date is missing or ambiguous
+  if (!hasExplicitDate) {
+    draft.step = 'clarifying_date';
+    const ambiguityNote = parsedDateTime.isDateAmbiguous && parsedDateTime.ambiguityPromptRu
+      ? `${parsedDateTime.ambiguityPromptRu}`
+      : 'На какую дату запланировать задачу? (например: сегодня, завтра или конкретное число)';
+    const questionRu = `Поставила в черновик задачу: **«${title}»**.\n\n${ambiguityNote}`;
+    return {
+      draft,
+      questionRu,
+      spokenSummary: `Поставила в черновик задачу ${title}. На какую дату её запланировать?`,
+    };
+  }
+
+  // Sequential question 2: Priority is missing
+  if (!explicitPriority.hasExplicitPriority) {
+    draft.step = 'clarifying_priority';
+    const datePart = dueDate ? ` на **${formatSyzranIsoDateRu(dueDate)}**` : '';
+    const timePart = dueTime ? ` в **${dueTime}**` : '';
+    const questionRu = `Записала в черновик задачу **«${title}»**${datePart}${timePart}.\n\nУточните, пожалуйста, приоритет задачи: **обычный**, **средний** или **высокий**?`;
+    return {
+      draft,
+      questionRu,
+      spokenSummary: `Уточните, пожалуйста, приоритет задачи: обычный, средний или высокий?`,
+    };
+  }
+
+  // Sequential question 3: Reminder is missing
+  if (!explicitReminder.hasExplicitReminder) {
+    draft.step = 'clarifying_reminder';
+    const questionRu = `Задача **«${title}»** (приоритет: ${draft.priority === 'high' ? 'высокий' : draft.priority === 'medium' ? 'средний' : 'обычный'}).\n\nНужно ли поставить напоминание? Если да, когда (дата) и во сколько напомнить? (Или скажите «без напоминания»)`;
+    return {
+      draft,
+      questionRu,
+      spokenSummary: `Нужно ли поставить напоминание? Когда и во сколько напомнить, или без напоминания?`,
+    };
+  }
+
+  // All fields were already provided in initial prompt!
+  draft.step = 'ready_for_confirmation';
+  draft.status = 'awaiting_confirmation';
+  const cardText = formatPersonalTaskConfirmationCard(draft);
+  return {
+    draft,
+    questionRu: cardText,
+    spokenSummary: `Подготовила карточку задачи ${title}. Пожалуйста, подтвердите создание.`,
+  };
+}
+
+/**
+ * Handles conversational input while a personal task draft is being clarified or confirmed.
+ */
+export function processPersonalTaskDraftInput(
+  draft: PixelPendingPersonalTaskDraft,
+  userText: string,
+  todayIso: string = toSyzranIsoDate()
+): {
+  action: 'updated' | 'confirmed' | 'cancelled';
+  draft: PixelPendingPersonalTaskDraft;
+  responseRu: string;
+  spokenSummary: string;
+  readyTask?: CompanionTaskRecord;
+} {
+  const trimmed = userText.trim();
+  const lower = trimmed.toLowerCase();
+
+  // 1. Cancellation check
+  if (
+    /^(?:отмена|отмени|не\s+надо|не\s+создавай|отбой|забудь|стоп)(?=$|[^а-яёa-z0-9])/i.test(
+      lower
+    )
+  ) {
+    return {
+      action: 'cancelled',
+      draft: { ...draft, status: 'cancelled' },
+      responseRu: 'Создание задачи отменено.',
+      spokenSummary: 'Создание задачи отменено.',
+    };
+  }
+
+  // 2. Confirmation check (when ready)
+  if (draft.step === 'ready_for_confirmation' || draft.status === 'awaiting_confirmation') {
+    if (
+      /^(?:да|создавай|создать|подтверждаю|сохраняй|сохранить|ок|хорошо|всё\s+верно|давай|ага|точно)(?=$|[^а-яёa-z0-9])/i.test(
+        lower
+      )
+    ) {
+      const nowMs = Date.now();
+      const syzranNow = getSyzranNow(new Date(nowMs));
+      const readyTask: CompanionTaskRecord = {
+        id: `ctask_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
+        title: draft.title,
+        description: draft.description,
+        dueDate: draft.dueDate || '',
+        dueTime: draft.dueTime,
+        priority: draft.priority || 'low',
+        priorityReason: `Приоритет выбран Анной: ${draft.priority === 'high' ? 'высокий' : draft.priority === 'medium' ? 'средний' : 'обычный'}`,
+        urgencyScore: draft.priority === 'high' ? 9 : draft.priority === 'medium' ? 6 : 3,
+        importanceScore: draft.priority === 'high' ? 9 : draft.priority === 'medium' ? 6 : 4,
+        estimatedMinutes: 30,
+        status: 'new',
+        schoolId: draft.schoolId,
+        sourceType: 'voice_command',
+        sourceExcerpt: draft.description,
+        reminderAt: draft.wantsReminder ? draft.reminderAt : undefined,
+        reminderRepeat: draft.wantsReminder && draft.reminderAt ? 'none' : undefined,
+        createdAt: syzranNow.time24,
+        createdAtMs: nowMs,
+      };
+
+      const priorityRu =
+        readyTask.priority === 'high' ? 'Высокий' : readyTask.priority === 'medium' ? 'Средний' : 'Обычный';
+      const dateRu = readyTask.dueDate ? formatSyzranIsoDateRu(readyTask.dueDate) : 'Без даты';
+      const timeRu = readyTask.dueTime ? `${readyTask.dueTime} (по Сызрани)` : 'Не указано';
+
+      let reminderNotice = 'Без напоминания.';
+      if (readyTask.reminderAt) {
+        const remSnap = getSyzranNow(new Date(readyTask.reminderAt));
+        reminderNotice = `🔔 **Напоминание установлено:** на **${formatSyzranIsoDateRu(remSnap.isoDate)}** в **${remSnap.timeHHMM}** (по Сызрани).\n*Доставка уведомления:* сработает в приложении со звуковым сигналом и сообщением в чате (пока открыта вкладка или запущено приложение).`;
+      }
+
+      const responseRu = `✅ **Задача «${readyTask.title}» успешно сохранена в списке дел!**\n\n- **Школа:** ${readyTask.schoolId === 'kiberone' ? 'KIBERone' : readyTask.schoolId === 'renderia' ? 'Renderia' : 'Обе школы'}\n- **Дата выполнения:** ${dateRu}\n- **Время выполнения:** ${timeRu}\n- **Приоритет:** ${priorityRu}\n- **Напоминание:** ${reminderNotice}`;
+
+      return {
+        action: 'confirmed',
+        draft: { ...draft, status: 'confirmed' },
+        readyTask,
+        responseRu,
+        spokenSummary: `Задача ${readyTask.title} сохранена в списке дел.`,
+      };
+    }
+  }
+
+  // 3. Answering step: clarifying_date
+  if (draft.step === 'clarifying_date') {
+    const parsed = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
+    if (parsed.isDateAmbiguous && parsed.ambiguityPromptRu) {
+      return {
+        action: 'updated',
+        draft,
+        responseRu: `⚠️ ${parsed.ambiguityPromptRu}`,
+        spokenSummary: 'Пожалуйста, уточните дату.',
+      };
+    }
+    if (parsed.dueDate) {
+      const nextDraft = {
+        ...draft,
+        dueDate: parsed.dueDate,
+        hasExplicitDate: true,
+        dueTime: parsed.dueTime || draft.dueTime,
+        hasExplicitDueTime: Boolean(parsed.dueTime || draft.dueTime),
+      };
+
+      if (!nextDraft.hasExplicitPriority) {
+        nextDraft.step = 'clarifying_priority';
+        const datePart = ` на **${formatSyzranIsoDateRu(nextDraft.dueDate)}**`;
+        const timePart = nextDraft.dueTime ? ` в **${nextDraft.dueTime}**` : '';
+        return {
+          action: 'updated',
+          draft: nextDraft,
+          responseRu: `Дата установлена:${datePart}${timePart}.\n\nУточните, пожалуйста, приоритет задачи: **обычный**, **средний** или **высокий**?`,
+          spokenSummary: 'Уточните, пожалуйста, приоритет задачи: обычный, средний или высокий?',
+        };
+      }
+
+      if (!nextDraft.hasExplicitReminder) {
+        nextDraft.step = 'clarifying_reminder';
+        return {
+          action: 'updated',
+          draft: nextDraft,
+          responseRu: `Дата установлена: **${formatSyzranIsoDateRu(nextDraft.dueDate)}**.\n\nНужно ли поставить напоминание? Если да, когда (дата) и во сколько напомнить? (Или скажите «без напоминания»)`,
+          spokenSummary: 'Нужно ли поставить напоминание, когда и во сколько?',
+        };
+      }
+
+      nextDraft.step = 'ready_for_confirmation';
+      nextDraft.status = 'awaiting_confirmation';
+      return {
+        action: 'updated',
+        draft: nextDraft,
+        responseRu: formatPersonalTaskConfirmationCard(nextDraft),
+        spokenSummary: 'Все параметры заполнены. Подтвердите создание задачи.',
+      };
+    }
+
+    return {
+      action: 'updated',
+      draft,
+      responseRu: 'Не удалось распознать дату. Укажите, пожалуйста, день для задачи (например: «на завтра», «на 4 ноября» или «на среду»).',
+      spokenSummary: 'Не удалось распознать дату. Укажите, пожалуйста, день для задачи.',
+    };
+  }
+
+  // 4. Answering step: clarifying_priority
+  if (draft.step === 'clarifying_priority') {
+    const parsedPriority = parseExplicitPriorityFromRuText(trimmed);
+    if (parsedPriority.hasExplicitPriority) {
+      const nextDraft = {
+        ...draft,
+        priority: parsedPriority.priority,
+        hasExplicitPriority: true,
+      };
+
+      // Also check if user specified time in this reply
+      const timeParsed = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
+      if (timeParsed.dueTime && !nextDraft.dueTime) {
+        nextDraft.dueTime = timeParsed.dueTime;
+        nextDraft.hasExplicitDueTime = true;
+      }
+
+      // Also check if user already answered reminder in this reply
+      const remParsed = parseExplicitReminderFromRuText(trimmed, nextDraft.dueDate, nextDraft.dueTime, todayIso);
+      if (remParsed.hasExplicitReminder) {
+        nextDraft.wantsReminder = remParsed.wantsReminder;
+        nextDraft.reminderDate = remParsed.reminderDate;
+        nextDraft.reminderTime = remParsed.reminderTime;
+        nextDraft.reminderAt = remParsed.reminderAt;
+        nextDraft.hasExplicitReminder = true;
+      }
+
+      if (!nextDraft.hasExplicitReminder) {
+        nextDraft.step = 'clarifying_reminder';
+        const pLabel = nextDraft.priority === 'high' ? 'высокий' : nextDraft.priority === 'medium' ? 'средний' : 'обычный';
+        return {
+          action: 'updated',
+          draft: nextDraft,
+          responseRu: `Приоритет: **${pLabel}**.\n\nНужно ли поставить напоминание? Если да, когда (дата) и во сколько напомнить? (Или скажите «без напоминания»)`,
+          spokenSummary: 'Нужно ли поставить напоминание? Когда и во сколько?',
+        };
+      }
+
+      nextDraft.step = 'ready_for_confirmation';
+      nextDraft.status = 'awaiting_confirmation';
+      return {
+        action: 'updated',
+        draft: nextDraft,
+        responseRu: formatPersonalTaskConfirmationCard(nextDraft),
+        spokenSummary: 'Все параметры заполнены. Подтвердите создание задачи.',
+      };
+    }
+
+    return {
+      action: 'updated',
+      draft,
+      responseRu: 'Пожалуйста, выберите приоритет: **обычный**, **средний** или **высокий**.',
+      spokenSummary: 'Пожалуйста, выберите приоритет: обычный, средний или высокий.',
+    };
+  }
+
+  // 5. Answering step: clarifying_reminder
+  if (draft.step === 'clarifying_reminder') {
+    const parsedRem = parseExplicitReminderFromRuText(trimmed, draft.dueDate, draft.dueTime, todayIso, true);
+    if (parsedRem.isAmbiguous && parsedRem.ambiguityPromptRu) {
+      return {
+        action: 'updated',
+        draft,
+        responseRu: parsedRem.ambiguityPromptRu,
+        spokenSummary: 'Во сколько напомнить?',
+      };
+    }
+
+    if (parsedRem.hasExplicitReminder) {
+      const nextDraft: PixelPendingPersonalTaskDraft = {
+        ...draft,
+        wantsReminder: parsedRem.wantsReminder,
+        reminderDate: parsedRem.reminderDate,
+        reminderTime: parsedRem.reminderTime,
+        reminderAt: parsedRem.reminderAt,
+        hasExplicitReminder: true,
+        step: 'ready_for_confirmation',
+        status: 'awaiting_confirmation',
+      };
+
+      return {
+        action: 'updated',
+        draft: nextDraft,
+        responseRu: formatPersonalTaskConfirmationCard(nextDraft),
+        spokenSummary: 'Все параметры заполнены. Подтвердите создание задачи.',
+      };
+    }
+
+    return {
+      action: 'updated',
+      draft,
+      responseRu: 'Пожалуйста, укажите дату и время напоминания (например: «4 ноября в 10:00», «за 1 час» или «без напоминания»).',
+      spokenSummary: 'Укажите время напоминания или скажите без напоминания.',
+    };
+  }
+
+  // 6. Adjusting fields while in ready_for_confirmation
+  const nextDraft = { ...draft };
+  let modifiedAny = false;
+
+  const prioAdj = parseExplicitPriorityFromRuText(trimmed);
+  if (prioAdj.hasExplicitPriority) {
+    nextDraft.priority = prioAdj.priority;
+    modifiedAny = true;
+  }
+
+  const isReminderAdjustment = /(?:напомн|предупред|напоминани|без\s+напоминани)/i.test(trimmed);
+  if (isReminderAdjustment) {
+    const remAdj = parseExplicitReminderFromRuText(trimmed, nextDraft.dueDate, nextDraft.dueTime, todayIso, true);
+    if (remAdj.hasExplicitReminder) {
+      nextDraft.wantsReminder = remAdj.wantsReminder;
+      nextDraft.reminderDate = remAdj.reminderDate;
+      nextDraft.reminderTime = remAdj.reminderTime;
+      nextDraft.reminderAt = remAdj.reminderAt;
+      modifiedAny = true;
+    }
+  } else {
+    const dtAdj = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
+    if (dtAdj.dueDate) {
+      nextDraft.dueDate = dtAdj.dueDate;
+      modifiedAny = true;
+    }
+    if (dtAdj.dueTime) {
+      nextDraft.dueTime = dtAdj.dueTime;
+      modifiedAny = true;
+    }
+  }
+
+  if (modifiedAny) {
+    nextDraft.step = 'ready_for_confirmation';
+    nextDraft.status = 'awaiting_confirmation';
+    return {
+      action: 'updated',
+      draft: nextDraft,
+      responseRu: `Обновила параметры черновика:\n\n${formatPersonalTaskConfirmationCard(nextDraft)}`,
+      spokenSummary: 'Обновила параметры задачи. Подтвердите создание.',
+    };
+  }
+
+  return {
+    action: 'updated',
+    draft,
+    responseRu: `Пожалуйста, подтвердите создание задачи («Создать» или «Да») либо укажите, что изменить:\n\n${formatPersonalTaskConfirmationCard(draft)}`,
+    spokenSummary: 'Пожалуйста, подтвердите создание задачи или укажите изменения.',
+  };
+}
+
+/**
  * Parses and executes voice & text task management commands directly against Anna's task list.
  */
 export function parseAndExecuteTaskCommand(
@@ -1201,86 +1920,12 @@ export function parseAndExecuteTaskCommand(
     : null;
 
   if (explicitAddMatch && explicitAddMatch[1] && !trimmed.includes('?')) {
-    const rawBody = explicitAddMatch[1].trim();
-    const { dueDate, dueTime, dateLabelRu, isDateAmbiguous, ambiguityPromptRu } =
-      parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
-    const fallbackDateTitle = dueDate
-      ? `Задача ${dateLabelRu.replace(/\s*\([^)]*\)/, '')}${dueTime ? ` в ${dueTime}` : ''}`
-      : 'Новая задача';
-    const title =
-      cleanExtractedTaskTitle(rawBody) ||
-      cleanExtractedTaskTitle(trimmed) ||
-      fallbackDateTitle;
-    const evaluation = evaluateTaskPriorityMultiCriteria(
-      title,
-      rawBody,
-      dueDate,
-      todayIso
-    );
-    const schoolId = detectSchoolFromTaskText(trimmed, activeSchool);
-    const nowMs = Date.now();
-    const explicitReminder = hasExplicitReminderRequest(trimmed);
-    const autoReminderIso = explicitReminder
-      ? buildSyzranReminderIso(dueDate, dueTime)
-      : undefined;
-    const validReminderIso =
-      autoReminderIso && new Date(autoReminderIso).getTime() > nowMs
-        ? autoReminderIso
-        : undefined;
-
-    const newTask: CompanionTaskRecord = {
-      id: `ctask_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
-      title,
-      description: `Поставлено командой Анны: «${trimmed}»`,
-      dueDate,
-      dueTime,
-      reminderAt: validReminderIso,
-      reminderRepeat: validReminderIso ? 'none' : undefined,
-      priority: evaluation.priority,
-      priorityReason: evaluation.priorityReason,
-      urgencyScore: evaluation.urgencyScore,
-      importanceScore: evaluation.importanceScore,
-      estimatedMinutes: evaluation.estimatedMinutes,
-      consequencesIfDelayed: evaluation.consequencesIfDelayed,
-      dependencyNote: evaluation.dependencyNote,
-      status: 'new',
-      schoolId,
-      sourceType: 'voice_command',
-      sourceExcerpt: trimmed,
-      createdAt: syzranNow.time24,
-      createdAtMs: nowMs,
-    };
-
-    const weekEndIso = addDaysToIsoDate(todayIso, 7);
-    const targetFilter: TaskCommandExecutionResult['openTasksTabWithFilter'] =
-      dueDate === todayIso
-        ? 'today'
-        : dueDate === tomorrowIso
-        ? 'tomorrow'
-        : dueDate && dueDate > tomorrowIso && dueDate <= weekEndIso
-        ? 'week'
-        : 'all';
-
-    const dateLine = dueDate
-      ? `**${formatSyzranIsoDateRu(dueDate)}** (${dateLabelRu})`
-      : isDateAmbiguous
-      ? 'Не указана точно *(требует уточнения)*'
-      : 'Без жёсткого срока';
-    const timeLine = dueTime ? `**${dueTime}** (по Сызрани, Europe/Samara)` : 'Не указано';
-    const reminderLine = validReminderIso
-      ? `\n- **Напоминание:** включено на ${formatSyzranIsoDateRu(dueDate)} в ${dueTime}`
-      : '';
-    const ambiguityBlock =
-      isDateAmbiguous && ambiguityPromptRu
-        ? `\n\n⚠️ **Уточните дату/время:** ${ambiguityPromptRu}`
-        : '';
-
+    const draftInit = initPersonalTaskDraft(trimmed, activeSchool, todayIso);
     return {
       handled: true,
-      createdTask: newTask,
-      openTasksTabWithFilter: targetFilter,
-      responseText: `Записала задачу **«${newTask.title}»** в список дел:\n\n- **Название:** ${newTask.title}\n- **Дата:** ${dateLine}\n- **Время:** ${timeLine}${reminderLine}\n- **Приоритет:** ${evaluation.priorityReason}${ambiguityBlock}`,
-      spokenSummary: `Записала задачу: ${newTask.title}${dueDate ? `, ${dateLabelRu}` : ''}${dueTime ? ` в ${dueTime}` : ''}.${isDateAmbiguous ? ' Пожалуйста, уточните точную дату.' : ''}`,
+      personalTaskDraft: draftInit.draft,
+      responseText: draftInit.questionRu,
+      spokenSummary: draftInit.spokenSummary,
     };
   }
 
