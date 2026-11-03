@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   Archive,
   BarChart3,
-  Palette,
   BookOpen,
   Check,
   CheckSquare,
@@ -12,6 +11,7 @@ import {
   ChevronRight,
   Clock,
   Cpu,
+  Eraser,
   GraduationCap,
   Home,
   Megaphone,
@@ -19,6 +19,7 @@ import {
   MessageSquareHeart,
   MessageSquarePlus,
   MoreVertical,
+  Palette,
   PenLine,
   Pin,
   PinOff,
@@ -47,6 +48,7 @@ interface SidebarProps {
   onCreateNewSession: (mode?: AgentMode, school?: SchoolId) => void;
   onRenameSession: (sessionId: string, newTitle: string) => Promise<boolean>;
   onTogglePinSession: (sessionId: string, isPinned: boolean) => Promise<boolean>;
+  onClearSessionMessages?: (sessionId: string) => Promise<boolean>;
   onDeleteSession: (sessionId: string) => Promise<boolean>;
   mobileOpen: boolean;
   onCloseMobile: () => void;
@@ -158,6 +160,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCreateNewSession,
   onRenameSession,
   onTogglePinSession,
+  onClearSessionMessages,
   onDeleteSession,
   mobileOpen,
   onCloseMobile,
@@ -802,11 +805,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             </div>
                           </div>
 
-                          {/* 3-Dots Context Menu Trigger (Opens Fixed Portal Menu) */}
+                          {/* Hover Quick Actions & 3-Dots Context Menu */}
                           <div
-                            className="shrink-0"
+                            className="shrink-0 flex items-center gap-0.5"
                             onClick={(e) => e.stopPropagation()}
                           >
+                            <div className="hidden group-hover:flex items-center gap-0.5 mr-0.5">
+                              {onClearSessionMessages && sess.messages.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => void onClearSessionMessages(sess.id)}
+                                  className="p-1 rounded-md text-slate-400 hover:text-amber-700 hover:bg-amber-100 transition-colors"
+                                  title="Очистить сообщения чата"
+                                >
+                                  <Eraser className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setSessionPendingDelete(sess)}
+                                className="p-1 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-100 transition-colors"
+                                title="Удалить чат из истории"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
                             <button
                               type="button"
                               onClick={(e) => handleOpenPortalMenu(e, sess)}
@@ -925,6 +949,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </>
               )}
             </button>
+
+            {onClearSessionMessages && portalMenu.session.messages.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const targetId = portalMenu.session.id;
+                  setPortalMenu(null);
+                  void onClearSessionMessages(targetId);
+                }}
+                className="w-full px-3.5 py-2 text-left hover:bg-amber-50 text-amber-900 flex items-center gap-2.5 font-medium transition-colors"
+              >
+                <Eraser className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>Очистить сообщения</span>
+              </button>
+            )}
 
             <div className="my-1 border-t border-slate-100" />
 

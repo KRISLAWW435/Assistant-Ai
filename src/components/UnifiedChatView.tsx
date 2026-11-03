@@ -192,6 +192,8 @@ interface UnifiedChatViewProps {
   isCheckingImageProviders?: boolean;
   onCheckImageProviders?: (providerId?: ImageProviderId) => Promise<void>;
   onInspectDesignArtifactInRightPanel?: (artifactId: string) => void;
+  isFlowPanelOpen?: boolean;
+  onToggleFlowPanel?: () => void;
 }
 
 const STAGE_ORDER: GenerationStage[] = [
@@ -333,6 +335,8 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   isCheckingImageProviders = false,
   onCheckImageProviders,
   onInspectDesignArtifactInRightPanel,
+  isFlowPanelOpen: externalIsFlowPanelOpen,
+  onToggleFlowPanel,
 }) => {
   const [draftPrompt, setDraftPrompt] = useState('');
   const [selectedQuickPromptId, setSelectedQuickPromptId] = useState<
@@ -401,7 +405,8 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
   // Google Flow (Nano Banana) Integration State & Interactive Splitter
   const isElectronFlowAvailable = Boolean(window.electronAPI?.flow?.isAvailable);
-  const [isFlowPanelOpen, setIsFlowPanelOpen] = useState(false);
+  const [internalFlowPanelOpen, setInternalFlowPanelOpen] = useState(false);
+  const isFlowPanelOpen = externalIsFlowPanelOpen !== undefined ? externalIsFlowPanelOpen : internalFlowPanelOpen;
   const [isBrowserFlowModalOpen, setIsBrowserFlowModalOpen] = useState(false);
   const [isFlowFullscreen, setIsFlowFullscreen] = useState(false);
   const [isDraggingSplitter, setIsDraggingSplitter] = useState(false);
@@ -452,7 +457,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       }
 
       if (!isFlowPanelOpen) {
-        setIsFlowPanelOpen(true);
+        if (onToggleFlowPanel) {
+          onToggleFlowPanel();
+        } else {
+          setInternalFlowPanelOpen(true);
+        }
       }
 
       if (window.electronAPI?.flow?.insertPrompt) {
@@ -485,26 +494,34 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   }, []);
 
   const handleToggleFlow = useCallback(() => {
-    if (!isElectronFlowAvailable) {
-      setIsBrowserFlowModalOpen(true);
-      return;
-    }
-    setIsFlowPanelOpen((prev) => {
-      if (prev) {
-        setIsFlowFullscreen(false);
+    if (onToggleFlowPanel) {
+      onToggleFlowPanel();
+    } else {
+      if (!isElectronFlowAvailable) {
+        setIsBrowserFlowModalOpen(true);
+        return;
       }
-      return !prev;
-    });
-  }, [isElectronFlowAvailable]);
+      setInternalFlowPanelOpen((prev) => {
+        if (prev) {
+          setIsFlowFullscreen(false);
+        }
+        return !prev;
+      });
+    }
+  }, [onToggleFlowPanel, isElectronFlowAvailable]);
 
   // Close Flow panel if mode changes away from designer
   useEffect(() => {
     if (activeMode !== 'designer' && isFlowPanelOpen) {
-      setIsFlowPanelOpen(false);
+      if (onToggleFlowPanel) {
+        onToggleFlowPanel();
+      } else {
+        setInternalFlowPanelOpen(false);
+      }
       setIsFlowFullscreen(false);
       window.electronAPI?.flow?.hide();
     }
-  }, [activeMode, isFlowPanelOpen]);
+  }, [activeMode, isFlowPanelOpen, onToggleFlowPanel]);
 
   // Splitter mouse/pointer drag handlers
   const handleSplitterPointerDown = useCallback(
@@ -1048,196 +1065,6 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-white h-full min-h-0 overflow-hidden">
-      {/* 1. Active Dialogue Subheader Bar (Sticky at top, never scrolls away) */}
-      <div className="shrink-0 sticky top-0 z-20 px-3 sm:px-5 py-1.5 sm:py-2 border-b border-slate-200/80 bg-white/95 backdrop-blur-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs">
-        {/* Left: Current Dialogue Title + Pin Badge + Inline Rename */}
-        <div className="flex items-center gap-1.5 min-w-0">
-          {currentSession ? (
-            isRenamingHeader ? (
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="text"
-                  value={headerRenameDraft}
-                  autoFocus
-                  onChange={(e) => setHeaderRenameDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleCommitHeaderRename();
-                    } else if (e.key === 'Escape') {
-                      setIsRenamingHeader(false);
-                    }
-                  }}
-                  className="rounded-lg border border-[#00A8B5] bg-white px-2.5 py-0.5 text-xs font-semibold text-slate-900 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={handleCommitHeaderRename}
-                  className="p-1 rounded-lg bg-slate-900 text-white hover:bg-slate-800"
-                  title="Сохранить название"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsRenamingHeader(false)}
-                  className="p-1 rounded-lg text-slate-500 hover:bg-slate-100"
-                  title="Отмена"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 min-w-0">
-                {currentSession.isPinned && (
-                  <span title="Закреплённый диалог" className="shrink-0">
-                    <Pin
-                      className={`w-3.5 h-3.5 rotate-45 ${
-                        activeSchool === 'renderia'
-                          ? 'text-[#65A30D]'
-                          : 'text-[#D97706]'
-                      }`}
-                    />
-                  </span>
-                )}
-                <h1
-                  className="font-display font-bold text-xs sm:text-sm text-slate-900 truncate"
-                  title={currentSession.title}
-                >
-                  {currentSession.title}
-                </h1>
-                <button
-                  type="button"
-                  onClick={handleStartHeaderRename}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors shrink-0"
-                  title="Переименовать диалог"
-                  aria-label="Переименовать диалог"
-                >
-                  <PenLine className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onTogglePinSession(
-                      currentSession.id,
-                      !currentSession.isPinned
-                    )
-                  }
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors shrink-0"
-                  title={
-                    currentSession.isPinned
-                      ? 'Открепить диалог'
-                      : 'Закрепить диалог вверху списка'
-                  }
-                >
-                  {currentSession.isPinned ? (
-                    <PinOff className="w-3.5 h-3.5 text-amber-600" />
-                  ) : (
-                    <Pin className="w-3.5 h-3.5" />
-                  )}
-                </button>
-              </div>
-            )
-          ) : (
-            <div className="flex items-center gap-1.5 min-w-0">
-              <h1 className="font-display font-bold text-xs sm:text-sm text-slate-900 truncate">
-                Новый диалог · {modeConfig.shortTitle} ({schoolConfig.name})
-              </h1>
-            </div>
-          )}
-        </div>
-
-        {/* Right: Specialist Selector + Session Actions */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {/* Compact Specialist Switcher */}
-          <div className="flex items-center gap-0.5 p-0.5 bg-slate-100 rounded-lg border border-slate-200/70">
-            {AGENT_MODE_LIST.map((m) => {
-              const active = m.id === activeMode;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => onChangeMode(m.id)}
-                  className={`px-2 py-0.5 rounded-md text-xs font-semibold transition-all whitespace-nowrap ${
-                    active
-                      ? 'bg-slate-900 text-white shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {m.shortTitle}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Google Flow (Nano Banana) Workspace Toggle (Designer Mode Only) */}
-          {activeMode === 'designer' && (
-            <button
-              type="button"
-              onClick={handleToggleFlow}
-              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-                isFlowPanelOpen
-                  ? 'bg-purple-600 text-white shadow-xs hover:bg-purple-700'
-                  : 'bg-purple-50 text-purple-700 border border-purple-200/90 hover:bg-purple-100/90'
-              }`}
-              title={
-                isElectronFlowAvailable
-                  ? isFlowPanelOpen
-                    ? 'Скрыть рабочую область Google Flow'
-                    : 'Показать рабочую область Google Flow (Nano Banana)'
-                  : 'Google Flow доступен в десктопном приложении Windows'
-              }
-            >
-              <Sparkles className={`w-3.5 h-3.5 ${isFlowPanelOpen ? 'text-amber-300' : 'text-purple-600'}`} />
-              <span>{isFlowPanelOpen ? 'Скрыть Flow' : 'Показать Flow'}</span>
-              {!isElectronFlowAvailable && (
-                <span className="px-1.5 py-0.2 rounded text-[10px] bg-purple-200/60 text-purple-900 font-bold">
-                  Desktop
-                </span>
-              )}
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => onCreateNewSession(activeMode, activeSchool)}
-            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-              activeSchool === 'renderia'
-                ? 'bg-[#84CC16] text-slate-950 hover:bg-[#76b813]'
-                : 'bg-[#FFD700] text-slate-950 hover:bg-[#f0ca00]'
-            }`}
-            title="Создать новый независимый чат"
-          >
-            <MessageSquarePlus className="w-3.5 h-3.5" />
-            <span>Новый чат</span>
-          </button>
-
-          {currentSession && (
-            <>
-              <button
-                type="button"
-                onClick={handleClearChatClick}
-                disabled={currentMessages.length === 0}
-                title="Очистить только сообщения внутри этого диалога"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-slate-600 hover:text-amber-800 hover:bg-amber-50 border border-slate-200/80 disabled:opacity-40 disabled:pointer-events-none transition-colors"
-              >
-                <Eraser className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Очистить</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSessionPendingDelete(currentSession)}
-                title="Полностью удалить диалог из истории и IndexedDB"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-red-600 hover:bg-red-50 border border-red-200/70 transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Удалить чат</span>
-              </button>
-            </>
-          )}
-        </div>
-      </div>
 
       {/* Background Dialogue Generation Notice (when user switches dialogue while generating) */}
       {backgroundGeneratingSession && (

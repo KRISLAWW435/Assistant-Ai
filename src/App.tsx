@@ -308,6 +308,7 @@ export default function App() {
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [isFlowPanelOpen, setIsFlowPanelOpen] = useState(false);
 
   // Pixel Companion persistent state (IndexedDB v3)
   const [companionMessages, setCompanionMessages] = useState<
@@ -1269,6 +1270,36 @@ export default function App() {
               : 'Ошибка очистки сообщений текущей сессии в IndexedDB.'
           );
         });
+    }
+  };
+
+  const handleClearSessionMessages = async (sessionId: string): Promise<boolean> => {
+    const now = new Date();
+    const updatedAt = formatTimeNow(now);
+    const updatedAtMs = now.getTime();
+
+    const nextList = sortSessionsPinnedAndUpdatedDesc(
+      sessionsRef.current.map((s) =>
+        s.id === sessionId
+          ? { ...s, messages: [], attachments: [], updatedAt, updatedAtMs }
+          : s
+      )
+    );
+    sessionsRef.current = nextList;
+    setSessions(nextList);
+    setSelectedAttachmentId(null);
+
+    try {
+      await storageProvider.clearSessionMessages(sessionId, updatedAt, updatedAtMs);
+      setStorageError(null);
+      return true;
+    } catch (err) {
+      setStorageError(
+        err instanceof Error
+          ? err.message
+          : 'Ошибка очистки сообщений в IndexedDB.'
+      );
+      return false;
     }
   };
 
@@ -3242,6 +3273,7 @@ export default function App() {
         onCreateNewSession={handleCreateNewSession}
         onRenameSession={handleRenameSession}
         onTogglePinSession={handleTogglePinSession}
+        onClearSessionMessages={handleClearSessionMessages}
         onDeleteSession={handleDeleteSession}
         mobileOpen={mobileMenuOpen}
         onCloseMobile={() => setMobileMenuOpen(false)}
@@ -3262,6 +3294,8 @@ export default function App() {
         <TopBar
           activeSection={activeSection}
           activeSchool={activeSchool}
+          activeAgentMode={activeAgentMode}
+          currentSession={currentSession}
           onSelectSchool={handleSelectSchool}
           onSelectSection={handleSelectSection}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
@@ -3274,16 +3308,10 @@ export default function App() {
           }}
           rightPanelOpen={!rightPanelCollapsed}
           dialogueFilesCount={currentDialogueFilesCount}
-          onOpenLiveVoice={handleOpenRightPanelVoiceSettings}
-          onOpenVoiceSettings={handleOpenRightPanelVoiceSettings}
-          onOpenVoiceDiagnostics={() => setIsVoiceDiagnosticsOpen(true)}
-          isWakeWordListening={
-            wakeWordState === 'standby_listening' ||
-            wakeWordState === 'hearing_speech'
-          }
-          wakeWordState={wakeWordState}
-          wakeWordDetail={wakeWordDetail}
-          onToggleWakeWord={handleToggleWakeWord}
+          onCreateNewSession={handleCreateNewSession}
+          onRenameSession={handleRenameSession}
+          isFlowPanelOpen={isFlowPanelOpen}
+          onToggleFlowView={() => setIsFlowPanelOpen((prev) => !prev)}
         />
 
         {/* IndexedDB / Validation Error Notification Banner */}
@@ -3426,6 +3454,8 @@ export default function App() {
                   onInspectDesignArtifactInRightPanel={
                     handleInspectDesignArtifactInRightPanel
                   }
+                  isFlowPanelOpen={isFlowPanelOpen}
+                  onToggleFlowPanel={() => setIsFlowPanelOpen((prev) => !prev)}
                 />
               )}
 
