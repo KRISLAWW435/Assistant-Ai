@@ -885,9 +885,10 @@ function ensureFlowView(): WebContentsView | null {
     const view = new WebContentsView({
       webPreferences: {
         session: flowSession,
-        contextIsolation: true,
+        preload: path.join(_mainDir, 'flow-inject.cjs'), // <-- ДОБАВЛЕНО
+        contextIsolation: false,                         // <-- ИЗМЕНЕНО
         nodeIntegration: false,
-        sandbox: true,
+        sandbox: false,                                  // <-- ИЗМЕНЕНО
         webSecurity: true,
       },
     });
@@ -931,7 +932,6 @@ function ensureFlowView(): WebContentsView | null {
     return null;
   }
 }
-
 function showFlowView(bounds: { x: number; y: number; width: number; height: number }): { success: boolean; error?: string } {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return { success: false, error: 'Главное окно недоступно' };

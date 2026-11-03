@@ -41,6 +41,21 @@ async function buildElectron() {
     minify: false,
   });
 
+  // --- ДОБАВЛЕННЫЙ БЛОК ДЛЯ FLOW-INJECT ---
+  console.log('[BuildElectron] Bundling electron/flow-inject.ts -> dist-electron/flow-inject.cjs...');
+  await esbuild.build({
+    entryPoints: [path.join(rootDir, 'electron/flow-inject.ts')],
+    outfile: path.join(outDir, 'flow-inject.cjs'),
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'cjs',
+    external: ['electron'],
+    sourcemap: false,
+    minify: false,
+  });
+  // ----------------------------------------
+
   console.log('[BuildElectron] Successfully built Electron artifacts in dist-electron/');
 }
 
