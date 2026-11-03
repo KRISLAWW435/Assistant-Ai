@@ -67,7 +67,7 @@
     return changed ? output : raw;
   }
 
-  function patchJson(data: any) {
+  function patchJson(data: any): any {
     if (!data || typeof data !== 'object') return data;
     if (Array.isArray(data)) return data.map(patchJson);
     for (const key of Object.keys(data)) {

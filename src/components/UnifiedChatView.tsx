@@ -16,7 +16,9 @@ import {
   Info,
   Layers,
   Loader2,
+  Maximize2,
   MessageSquarePlus,
+  Minimize2,
   Monitor,
   Palette,
   Paperclip,
@@ -367,10 +369,28 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     useState<ChatSession | null>(null);
   const [isDeletingSession, setIsDeletingSession] = useState(false);
 
-  // Google Flow (Nano Banana) Integration State (Stage 1)
+  // Google Flow (Nano Banana) Integration State & Interactive Splitter
   const isElectronFlowAvailable = Boolean(window.electronAPI?.flow?.isAvailable);
   const [isFlowPanelOpen, setIsFlowPanelOpen] = useState(false);
   const [isBrowserFlowModalOpen, setIsBrowserFlowModalOpen] = useState(false);
+  const [isFlowFullscreen, setIsFlowFullscreen] = useState(false);
+  const [isDraggingSplitter, setIsDraggingSplitter] = useState(false);
+  const [chatWidthPercent, setChatWidthPercent] = useState<number>(() => {
+    try {
+      const saved = window.localStorage.getItem('kiber_renderia_flow_chat_split');
+      if (saved) {
+        const parsed = Number(saved);
+        if (!Number.isNaN(parsed) && parsed >= 20 && parsed <= 80) return parsed;
+      }
+    } catch {}
+    return 45;
+  });
+  const currentPercentRef = useRef(chatWidthPercent);
+  useEffect(() => {
+    currentPercentRef.current = chatWidthPercent;
+  }, [chatWidthPercent]);
+
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
   const [flowState, setFlowState] = useState<{
     isVisible: boolean;
     isLoading: boolean;
@@ -403,16 +423,101 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       setIsBrowserFlowModalOpen(true);
       return;
     }
-    setIsFlowPanelOpen((prev) => !prev);
+    setIsFlowPanelOpen((prev) => {
+      if (prev) {
+        setIsFlowFullscreen(false);
+      }
+      return !prev;
+    });
   }, [isElectronFlowAvailable]);
 
   // Close Flow panel if mode changes away from designer
   useEffect(() => {
     if (activeMode !== 'designer' && isFlowPanelOpen) {
       setIsFlowPanelOpen(false);
+      setIsFlowFullscreen(false);
       window.electronAPI?.flow?.hide();
     }
   }, [activeMode, isFlowPanelOpen]);
+
+  // Splitter mouse/pointer drag handlers
+  const handleSplitterPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      setIsDraggingSplitter(true);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!isDraggingSplitter) return;
+
+    let rafId: number | null = null;
+
+    const handlePointerMove = (e: MouseEvent | PointerEvent) => {
+      if (!splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const offsetX = e.clientX - rect.left;
+      const rawPercent = (offsetX / rect.width) * 100;
+      const clamped = Math.min(80, Math.max(20, Math.round(rawPercent * 10) / 10));
+
+      setChatWidthPercent(clamped);
+
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      rafId = requestAnimationFrame(() => {
+        updateFlowRect();
+      });
+    };
+
+    const handlePointerUp = () => {
+      setIsDraggingSplitter(false);
+      try {
+        window.localStorage.setItem(
+          'kiber_renderia_flow_chat_split',
+          String(currentPercentRef.current)
+        );
+      } catch {}
+      setTimeout(updateFlowRect, 30);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [isDraggingSplitter, updateFlowRect]);
+
+  // Recalculate Flow bounds whenever fullscreen state toggles
+  useEffect(() => {
+    if (!isFlowPanelOpen) return;
+    updateFlowRect();
+    const t1 = setTimeout(updateFlowRect, 50);
+    const t2 = setTimeout(updateFlowRect, 200);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [isFlowFullscreen, isFlowPanelOpen, updateFlowRect]);
 
   // Sync Flow WebContentsView with target container coordinates
   useEffect(() => {
@@ -1148,14 +1253,23 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         </div>
       )}
 
-      <div className="flex-1 flex min-h-0 overflow-hidden">
+      <div ref={splitContainerRef} className="flex-1 flex min-h-0 overflow-hidden relative">
         {/* Chat Stream + Composer Column */}
         <div
-          className={`flex flex-col min-w-0 transition-all ${
+          style={
             isFlowPanelOpen
-              ? 'w-full lg:w-1/2 border-r border-slate-200/80'
+              ? isFlowFullscreen
+                ? { display: 'none' }
+                : { width: `${chatWidthPercent}%` }
+              : undefined
+          }
+          className={`flex flex-col min-w-0 ${
+            isFlowPanelOpen
+              ? isFlowFullscreen
+                ? 'hidden'
+                : 'border-r border-slate-200/80 shrink-0'
               : 'w-full'
-          }`}
+          } ${isDraggingSplitter ? 'transition-none select-none' : 'transition-[width] duration-150'}`}
         >
           {/* 2. Messages Viewport (ChatGPT-Style Centered Stream) */}
           <div className="flex-1 overflow-y-auto px-4 sm:px-6 pt-6 pb-20 bg-[#F9FAFB]/60">
@@ -3192,9 +3306,53 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       </div>
     </div>
 
+    {/* Resizable Splitter Handle between Chat and Flow */}
+    {isFlowPanelOpen && !isFlowFullscreen && (
+      <div
+        role="separator"
+        tabIndex={0}
+        aria-orientation="vertical"
+        aria-valuenow={chatWidthPercent}
+        aria-valuemin={20}
+        aria-valuemax={80}
+        onPointerDown={handleSplitterPointerDown}
+        onDoubleClick={() => {
+          setChatWidthPercent(45);
+          setTimeout(updateFlowRect, 30);
+        }}
+        title="Перетащите для изменения ширины колонок (двойной клик: 45%)"
+        className={`hidden lg:flex items-center justify-center w-2.5 -mx-1 z-20 cursor-col-resize group shrink-0 select-none ${
+          isDraggingSplitter ? 'bg-purple-500/20' : 'hover:bg-purple-500/10'
+        }`}
+      >
+        <div
+          className={`w-1 h-12 rounded-full transition-colors flex items-center justify-center ${
+            isDraggingSplitter
+              ? 'bg-purple-500 ring-2 ring-purple-400/40'
+              : 'bg-slate-300 group-hover:bg-purple-500'
+          }`}
+        >
+          <div className="flex flex-col gap-0.5 pointer-events-none">
+            <span className="w-0.5 h-0.5 rounded-full bg-white/80" />
+            <span className="w-0.5 h-0.5 rounded-full bg-white/80" />
+            <span className="w-0.5 h-0.5 rounded-full bg-white/80" />
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* Embedded Google Flow Panel (Electron WebContentsView target) */}
     {isFlowPanelOpen && (
-      <div className="hidden lg:flex w-1/2 flex-col bg-slate-900 min-w-0 relative">
+      <div
+        style={
+          isFlowFullscreen
+            ? { width: '100%' }
+            : { width: `${100 - chatWidthPercent}%` }
+        }
+        className={`hidden lg:flex flex-col bg-slate-900 min-w-0 relative ${
+          isFlowFullscreen ? 'w-full flex-1' : 'shrink-0'
+        } ${isDraggingSplitter ? 'transition-none' : 'transition-[width] duration-150'}`}
+      >
         {/* Flow Panel Header */}
         <div className="px-4 py-2.5 bg-slate-800 border-b border-slate-700/80 flex items-center justify-between gap-3 text-xs shrink-0 select-none">
           <div className="flex items-center gap-2 min-w-0">
@@ -3211,6 +3369,19 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 </span>
               </div>
             </div>
+
+            {/* Floating Restore Chat Button in Fullscreen Mode */}
+            {isFlowFullscreen && (
+              <button
+                type="button"
+                onClick={() => setIsFlowFullscreen(false)}
+                className="ml-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs shadow-xs transition-colors cursor-pointer shrink-0"
+                title="Вернуть чат (восстановить разделение экрана)"
+              >
+                <Minimize2 className="w-3.5 h-3.5" />
+                <span>Вернуть чат</span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -3257,6 +3428,28 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
               className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-700/70 transition-colors cursor-pointer"
             >
               <ExternalLink className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Fullscreen / Restore Toggle Button */}
+            <button
+              type="button"
+              onClick={() => setIsFlowFullscreen((prev) => !prev)}
+              title={
+                isFlowFullscreen
+                  ? 'Вернуть чат (восстановить разделение экрана)'
+                  : 'Развернуть Flow на весь экран'
+              }
+              className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                isFlowFullscreen
+                  ? 'text-purple-300 hover:text-white hover:bg-purple-600/40'
+                  : 'text-slate-400 hover:text-slate-100 hover:bg-slate-700/70'
+              }`}
+            >
+              {isFlowFullscreen ? (
+                <Minimize2 className="w-3.5 h-3.5" />
+              ) : (
+                <Maximize2 className="w-3.5 h-3.5" />
+              )}
             </button>
 
             {/* Close Flow View */}
