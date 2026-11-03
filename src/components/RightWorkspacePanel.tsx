@@ -512,7 +512,10 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
     [schoolKnowledge]
   );
   const schoolDocs = useMemo(
-    () => uploadedDocuments.filter((d) => d.schoolId === activeSchool),
+    () =>
+      uploadedDocuments.filter(
+        (d) => d.schoolId === activeSchool || d.schoolId === 'all'
+      ),
     [uploadedDocuments, activeSchool]
   );
 

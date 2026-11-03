@@ -1,31 +1,61 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Archive,
   Check,
   CheckCircle2,
+  Copy,
   Download,
+  ExternalLink,
   Eye,
+  FileSpreadsheet,
   FileText,
   FileUp,
+  Film,
+  Filter,
+  FolderOpen,
+  Image as ImageIcon,
+  Layers,
   Loader2,
+  Palette,
+  Play,
+  Plus,
+  Presentation,
   RotateCcw,
   Save,
+  Search,
+  Sparkles,
+  Tag,
   Trash2,
   Upload,
+  Video,
   X,
 } from 'lucide-react';
 import {
   DocumentProcessingStatus,
+  DocumentSchoolScope,
+  ExtractedDocumentImage,
+  ExtractedSlideItem,
   KnowledgeBaseBySchool,
   KnowledgeCategoryKey,
+  KnowledgeFileType,
   SchoolId,
   UploadedDocumentRecord,
+  VisualAssetRole,
+  VisualColorSample,
 } from '../types/assistant';
-import { KNOWLEDGE_CATEGORIES, SCHOOLS } from '../config/schoolsAndModes';
+import {
+  getSchoolNameRu,
+  KNOWLEDGE_CATEGORIES,
+  SCHOOLS,
+} from '../config/schoolsAndModes';
 import {
   getStatusLabelRu,
+  inspectZipArchive,
   ParsedDocumentResult,
   parseDocumentFile,
+  unpackSelectedZipEntries,
+  ZipArchiveEntry,
 } from '../utils/documentParser';
 import { formatFileSizeRu } from './RightWorkspacePanel';
 
@@ -58,14 +88,51 @@ type CompositeCategoryKey = `${SchoolId}:${KnowledgeCategoryKey}`;
 type FlagByCompositeKey = Partial<Record<CompositeCategoryKey, boolean>>;
 type CategoryInsertMode = 'append' | 'replace' | 'doc_only';
 
+export type KnowledgeSubTab =
+  | 'categories'
+  | 'visual_library'
+  | 'brandbooks'
+  | 'all_files';
+
 interface StagedKnowledgeDocument {
-  schoolId: SchoolId;
+  schoolId: DocumentSchoolScope;
   categoryKey: KnowledgeCategoryKey;
   parsed: ParsedDocumentResult;
   editableText: string;
   insertMode: CategoryInsertMode;
   confirmReplaceExisting: boolean;
+  visualRole?: VisualAssetRole;
+  tags: string[];
+  description: string;
+  sourceFile?: File;
 }
+
+const DEFAULT_BRAND_COLORS: Record<SchoolId, VisualColorSample[]> = {
+  kiberone: [
+    { hex: '#FFD700', label: 'Фирменный жёлтый' },
+    { hex: '#00A8B5', label: 'Бирюзовый акцент' },
+    { hex: '#165B73', label: 'Глубокий петроль' },
+    { hex: '#9B2C2C', label: 'Кирпичный акцент' },
+    { hex: '#0F172A', label: 'Тёмный графит' },
+    { hex: '#FFFFFF', label: 'Базовый белый' },
+  ],
+  renderia: [
+    { hex: '#84CC16', label: 'Яркий лайм' },
+    { hex: '#65A30D', label: 'Глубокий зелёный' },
+    { hex: '#1E293B', label: 'Тёмный слейт' },
+    { hex: '#38BDF8', label: 'Небесный акцент' },
+    { hex: '#F8FAFC', label: 'Фоновый светлый' },
+  ],
+};
+
+const VISUAL_ROLE_LABELS_RU: Record<VisualAssetRole, { label: string; badgeClass: string }> = {
+  logo: { label: 'Логотип', badgeClass: 'bg-blue-100 text-blue-800 border-blue-200' },
+  brandbook: { label: 'Брендбук', badgeClass: 'bg-purple-100 text-purple-800 border-purple-200' },
+  reference: { label: 'Референс', badgeClass: 'bg-amber-100 text-amber-900 border-amber-200' },
+  template: { label: 'Шаблон', badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
+  palette: { label: 'Палитра', badgeClass: 'bg-rose-100 text-rose-800 border-rose-200' },
+  other: { label: 'Материал', badgeClass: 'bg-slate-100 text-slate-700 border-slate-200' },
+};
 
 export function renderStatusBadge(status: DocumentProcessingStatus) {
   const label = getStatusLabelRu(status);
@@ -117,46 +184,68 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   statusBanner,
   onDismissBanner,
 }) => {
+  const [activeSubTab, setActiveSubTab] = useState<KnowledgeSubTab>('categories');
+
+  // Search & Filter State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [visualRoleFilter, setVisualRoleFilter] = useState<'all' | VisualAssetRole>('all');
+  const [schoolScopeFilter, setSchoolScopeFilter] = useState<'current' | 'all_schools'>('current');
+  const [fileTypeFilter, setFileTypeFilter] = useState<'all' | KnowledgeFileType>('all');
+
   const [selectedCategoryForUpload, setSelectedCategoryForUpload] =
     useState<KnowledgeCategoryKey>('programs');
 
-  // Live parsing status indicator while reading a file
+  // Live parsing status indicator
   const [activeParseState, setActiveParseState] = useState<{
     fileName: string;
     status: DocumentProcessingStatus;
     label: string;
   } | null>(null);
 
-  // Staged document awaiting manager verification & confirmation
-  const [stagedDoc, setStagedDoc] = useState<StagedKnowledgeDocument | null>(
-    null
-  );
+  // Staged document awaiting manager verification
+  const [stagedDoc, setStagedDoc] = useState<StagedKnowledgeDocument | null>(null);
   const [isCommittingStagedDoc, setIsCommittingStagedDoc] = useState(false);
+  const [tagInput, setTagInput] = useState('');
 
-  // Inspecting an already saved document
-  const [inspectedDoc, setInspectedDoc] =
-    useState<UploadedDocumentRecord | null>(null);
-  const [docPendingDelete, setDocPendingDelete] =
-    useState<UploadedDocumentRecord | null>(null);
+  // Modals for deep inspection & media viewing
+  const [fullSizeImageDoc, setFullSizeImageDoc] = useState<UploadedDocumentRecord | null>(null);
+  const [videoPlayerDoc, setVideoPlayerDoc] = useState<UploadedDocumentRecord | null>(null);
+  const [pptxSlidesDoc, setPptxSlidesDoc] = useState<UploadedDocumentRecord | null>(null);
+  const [selectedSlideIndex, setSelectedSlideIndex] = useState(0);
+
+  // Zip Archive Explorer Modal
+  const [zipExplorerState, setZipExplorerState] = useState<{
+    file: File;
+    entries: ZipArchiveEntry[];
+    selectedPaths: Set<string>;
+    targetSchool: DocumentSchoolScope;
+    targetCategory: KnowledgeCategoryKey;
+  } | null>(null);
+  const [isUnpackingZip, setIsUnpackingZip] = useState(false);
+
+  // Text Document Inspection & Delete
+  const [inspectedDoc, setInspectedDoc] = useState<UploadedDocumentRecord | null>(null);
+  const [docPendingDelete, setDocPendingDelete] = useState<UploadedDocumentRecord | null>(null);
   const [isDeletingDoc, setIsDeletingDoc] = useState(false);
 
-  // Unsaved draft values isolated by schoolId and categoryKey
-  const [draftFieldsBySchool, setDraftFieldsBySchool] =
-    useState<KnowledgeBaseBySchool>(() => ({
-      kiberone: { ...knowledgeBase.kiberone },
-      renderia: { ...knowledgeBase.renderia },
-    }));
+  // Color Copy Feedback
+  const [copiedHex, setCopiedHex] = useState<string | null>(null);
+
+  // Unsaved category draft values isolated by schoolId and categoryKey
+  const [draftFieldsBySchool, setDraftFieldsBySchool] = useState<KnowledgeBaseBySchool>(() => ({
+    kiberone: { ...knowledgeBase.kiberone },
+    renderia: { ...knowledgeBase.renderia },
+  }));
 
   const [dirtyByKey, setDirtyByKey] = useState<FlagByCompositeKey>({});
-  const [savedIndicatorByKey, setSavedIndicatorByKey] =
-    useState<FlagByCompositeKey>({});
+  const [savedIndicatorByKey, setSavedIndicatorByKey] = useState<FlagByCompositeKey>({});
   const [savingByKey, setSavingByKey] = useState<FlagByCompositeKey>({});
 
-  const saveTimersRef = useRef<
-    Partial<Record<CompositeCategoryKey, ReturnType<typeof setTimeout>>>
-  >({});
-  const docInputRef = useRef<HTMLInputElement | null>(null);
+  const saveTimersRef = useRef<Partial<Record<CompositeCategoryKey, ReturnType<typeof setTimeout>>>>({});
+  const universalInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const backupInputRef = useRef<HTMLInputElement | null>(null);
+  const videoPlayerRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const timers = saveTimersRef.current;
@@ -169,23 +258,111 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
   const schoolConfig = SCHOOLS[activeSchool];
   const confirmedSchoolData = knowledgeBase[activeSchool];
-  const schoolDocs = uploadedDocuments.filter(
-    (d) => d.schoolId === activeSchool
-  );
+
+  // Eligible documents for active view: matches activeSchool OR marked 'all'
+  const eligibleSchoolDocs = useMemo(() => {
+    return uploadedDocuments.filter(
+      (d) => d.schoolId === activeSchool || d.schoolId === 'all'
+    );
+  }, [uploadedDocuments, activeSchool]);
+
+  // Visual Library Items
+  const visualLibraryItems = useMemo(() => {
+    return uploadedDocuments.filter((d) => {
+      // School filter
+      if (schoolScopeFilter === 'current' && d.schoolId !== activeSchool && d.schoolId !== 'all') {
+        return false;
+      }
+      // Must be image or have dataUrl/thumbnail
+      const isVisual =
+        d.fileType === 'image' ||
+        ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(d.extension.toLowerCase()) ||
+        Boolean(d.dataUrl && d.mimeType?.startsWith('image/')) ||
+        Boolean(d.thumbnailUrl);
+
+      if (!isVisual) return false;
+
+      // Role filter
+      if (visualRoleFilter !== 'all' && d.visualRole !== visualRoleFilter) {
+        return false;
+      }
+
+      // Search query
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = d.name.toLowerCase().includes(q);
+        const matchDesc = (d.description || '').toLowerCase().includes(q);
+        const matchTag = (d.tags || []).some((t) => t.toLowerCase().includes(q));
+        if (!matchName && !matchDesc && !matchTag) return false;
+      }
+
+      return true;
+    });
+  }, [uploadedDocuments, activeSchool, schoolScopeFilter, visualRoleFilter, searchQuery]);
+
+  // All Files List (with full filtering)
+  const filteredAllFiles = useMemo(() => {
+    return uploadedDocuments.filter((d) => {
+      if (schoolScopeFilter === 'current' && d.schoolId !== activeSchool && d.schoolId !== 'all') {
+        return false;
+      }
+      if (fileTypeFilter !== 'all') {
+        if (d.fileType !== fileTypeFilter) return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = d.name.toLowerCase().includes(q);
+        const matchDesc = (d.description || '').toLowerCase().includes(q);
+        const matchTag = (d.tags || []).some((t) => t.toLowerCase().includes(q));
+        if (!matchName && !matchDesc && !matchTag) return false;
+      }
+      return true;
+    });
+  }, [uploadedDocuments, activeSchool, schoolScopeFilter, fileTypeFilter, searchQuery]);
+
+  // Brandbook Palette & Documents
+  const brandbookData = useMemo(() => {
+    const basePalette = DEFAULT_BRAND_COLORS[activeSchool] || [];
+    const extractedPalettes: VisualColorSample[] = [];
+    const seenHex = new Set(basePalette.map((p) => p.hex.toUpperCase()));
+
+    for (const doc of eligibleSchoolDocs) {
+      if (Array.isArray(doc.colorPalette)) {
+        for (const c of doc.colorPalette) {
+          const clean = c.hex.toUpperCase();
+          if (!seenHex.has(clean)) {
+            seenHex.add(clean);
+            extractedPalettes.push({
+              hex: clean,
+              label: c.label || `Из: ${doc.name}`,
+            });
+          }
+        }
+      }
+    }
+
+    const brandDocs = eligibleSchoolDocs.filter(
+      (d) =>
+        d.visualRole === 'brandbook' ||
+        d.visualRole === 'logo' ||
+        d.visualRole === 'palette' ||
+        (d.tags || []).some((t) => t.toLowerCase().includes('бренд') || t.toLowerCase().includes('лого'))
+    );
+
+    return {
+      palette: [...basePalette, ...extractedPalettes],
+      brandDocs,
+    };
+  }, [activeSchool, eligibleSchoolDocs]);
 
   const filledCount = KNOWLEDGE_CATEGORIES.filter(
     (c) => (confirmedSchoolData[c.key] || '').trim().length > 0
   ).length;
 
-  const triggerSavedFlash = (
-    schoolId: SchoolId,
-    key: KnowledgeCategoryKey
-  ) => {
+  const triggerSavedFlash = (schoolId: SchoolId, key: KnowledgeCategoryKey) => {
     const compositeKey: CompositeCategoryKey = `${schoolId}:${key}`;
     const prevTimer = saveTimersRef.current[compositeKey];
-    if (prevTimer) {
-      clearTimeout(prevTimer);
-    }
+    if (prevTimer) clearTimeout(prevTimer);
     setSavedIndicatorByKey((prev) => ({ ...prev, [compositeKey]: true }));
     saveTimersRef.current[compositeKey] = setTimeout(() => {
       setSavedIndicatorByKey((prev) => ({ ...prev, [compositeKey]: false }));
@@ -193,11 +370,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     }, 2600);
   };
 
-  const handleDraftChange = (
-    schoolId: SchoolId,
-    key: KnowledgeCategoryKey,
-    value: string
-  ) => {
+  const handleDraftChange = (schoolId: SchoolId, key: KnowledgeCategoryKey, value: string) => {
     const compositeKey: CompositeCategoryKey = `${schoolId}:${key}`;
     const confirmedVal = knowledgeBase[schoolId][key] ?? '';
 
@@ -216,18 +389,12 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
     if (savedIndicatorByKey[compositeKey]) {
       const prevTimer = saveTimersRef.current[compositeKey];
-      if (prevTimer) {
-        clearTimeout(prevTimer);
-        delete saveTimersRef.current[compositeKey];
-      }
+      if (prevTimer) clearTimeout(prevTimer);
       setSavedIndicatorByKey((prev) => ({ ...prev, [compositeKey]: false }));
     }
   };
 
-  const handleConfirmCategoryField = async (
-    schoolId: SchoolId,
-    key: KnowledgeCategoryKey
-  ) => {
+  const handleConfirmCategoryField = async (schoolId: SchoolId, key: KnowledgeCategoryKey) => {
     const compositeKey: CompositeCategoryKey = `${schoolId}:${key}`;
     const isDirty = Boolean(dirtyByKey[compositeKey]);
     const valueToCommit = isDirty
@@ -253,12 +420,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     }
   };
 
-  const handleClearCategoryField = async (
-    schoolId: SchoolId,
-    key: KnowledgeCategoryKey
-  ) => {
+  const handleClearCategoryField = async (schoolId: SchoolId, key: KnowledgeCategoryKey) => {
     const compositeKey: CompositeCategoryKey = `${schoolId}:${key}`;
-
     setDraftFieldsBySchool((prev) => ({
       ...prev,
       [schoolId]: {
@@ -268,10 +431,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     }));
 
     const prevTimer = saveTimersRef.current[compositeKey];
-    if (prevTimer) {
-      clearTimeout(prevTimer);
-      delete saveTimersRef.current[compositeKey];
-    }
+    if (prevTimer) clearTimeout(prevTimer);
     setSavedIndicatorByKey((prev) => ({ ...prev, [compositeKey]: false }));
 
     setSavingByKey((prev) => ({ ...prev, [compositeKey]: true }));
@@ -286,15 +446,38 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     }
   };
 
-  const handleDocUploadChange = async (
-    e: React.ChangeEvent<HTMLInputElement>
+  // Main file upload handler supporting all formats
+  const handleUniversalFileUpload = async (
+    file: File,
+    presetRole?: VisualAssetRole
   ) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
 
-    const targetSchool = activeSchool;
-    const targetCat = selectedCategoryForUpload;
+    // If zip archive: open Archive Explorer Modal directly
+    if (ext === 'zip') {
+      try {
+        setActiveParseState({
+          fileName: file.name,
+          status: 'processing',
+          label: 'Чтение архива ZIP',
+        });
+        const entries = await inspectZipArchive(file);
+        setActiveParseState(null);
+        setZipExplorerState({
+          file,
+          entries,
+          selectedPaths: new Set(entries.filter((e) => e.isSupported).map((e) => e.path)),
+          targetSchool: activeSchool,
+          targetCategory: selectedCategoryForUpload,
+        });
+      } catch (err) {
+        setActiveParseState(null);
+        alert(
+          `Ошибка открытия архива ZIP: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      return;
+    }
 
     setActiveParseState({
       fileName: file.name,
@@ -312,25 +495,61 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
     setActiveParseState(null);
 
+    const defaultRole: VisualAssetRole =
+      presetRole ||
+      (parsed.fileType === 'image'
+        ? file.name.toLowerCase().includes('logo') || file.name.toLowerCase().includes('лого')
+          ? 'logo'
+          : file.name.toLowerCase().includes('brand') || file.name.toLowerCase().includes('бренд')
+            ? 'brandbook'
+            : 'reference'
+        : 'other');
+
     const defaultInsertMode: CategoryInsertMode =
-      parsed.extractedText.trim().length > 0 ? 'append' : 'doc_only';
+      parsed.extractedText.trim().length > 0 && parsed.fileType === 'document'
+        ? 'append'
+        : 'doc_only';
+
+    const defaultTags: string[] = [];
+    if (parsed.fileType === 'image') defaultTags.push('визуал');
+    if (defaultRole === 'logo') defaultTags.push('логотип');
+    if (defaultRole === 'brandbook') defaultTags.push('брендбук');
+    if (parsed.fileType === 'video') defaultTags.push('видео');
+    if (parsed.fileType === 'presentation') defaultTags.push('презентация');
 
     setStagedDoc({
-      schoolId: targetSchool,
-      categoryKey: targetCat,
+      schoolId: activeSchool,
+      categoryKey: selectedCategoryForUpload,
       parsed,
       editableText: parsed.extractedText,
       insertMode: defaultInsertMode,
       confirmReplaceExisting: false,
+      visualRole: defaultRole,
+      tags: defaultTags,
+      description: '',
+      sourceFile: file,
     });
   };
 
   const handleCommitStagedDocument = async () => {
     if (!stagedDoc) return;
 
-    const { schoolId, categoryKey, parsed, editableText, insertMode } =
-      stagedDoc;
-    const existingText = (knowledgeBase[schoolId][categoryKey] || '').trim();
+    const {
+      schoolId,
+      categoryKey,
+      parsed,
+      editableText,
+      insertMode,
+      visualRole,
+      tags,
+      description,
+    } = stagedDoc;
+
+    const targetSchoolForCategory: SchoolId =
+      schoolId === 'all' ? activeSchool : schoolId;
+    const existingText = (
+      knowledgeBase[targetSchoolForCategory][categoryKey] || ''
+    ).trim();
     const cleanedDocText = editableText.trim();
 
     if (
@@ -355,7 +574,9 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       const finalStatus: DocumentProcessingStatus =
         parsed.status === 'error'
           ? 'error'
-          : cleanedDocText.length > 0
+          : cleanedDocText.length > 0 ||
+              parsed.fileType === 'image' ||
+              parsed.fileType === 'video'
             ? 'processed'
             : 'no_text';
 
@@ -374,6 +595,19 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         createdAtMs: now.getTime(),
         verifiedByManager: true,
         pageCount: parsed.pageCount,
+        fileType: parsed.fileType,
+        mimeType: parsed.mimeType,
+        tags: tags.length > 0 ? tags : undefined,
+        description: description.trim() || undefined,
+        visualRole,
+        dataUrl: parsed.dataUrl,
+        thumbnailUrl: parsed.thumbnailUrl,
+        slides: parsed.slides,
+        colorPalette: parsed.colorPalette,
+        extractedImages: parsed.extractedImages,
+        durationSec: parsed.durationSec,
+        videoWidth: parsed.videoWidth,
+        videoHeight: parsed.videoHeight,
       };
 
       let categoryUpdate:
@@ -384,19 +618,27 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           }
         | undefined;
 
-      if (insertMode === 'append' && cleanedDocText.length > 0) {
+      if (
+        insertMode === 'append' &&
+        cleanedDocText.length > 0 &&
+        parsed.fileType === 'document'
+      ) {
         const header = `[Источник: ${parsed.name}]`;
         const nextCategoryText = existingText
           ? `${existingText}\n\n${header}\n${cleanedDocText}`
           : `${header}\n${cleanedDocText}`;
         categoryUpdate = {
-          schoolId,
+          schoolId: targetSchoolForCategory,
           categoryKey,
           nextCategoryText,
         };
-      } else if (insertMode === 'replace' && cleanedDocText.length > 0) {
+      } else if (
+        insertMode === 'replace' &&
+        cleanedDocText.length > 0 &&
+        parsed.fileType === 'document'
+      ) {
         categoryUpdate = {
-          schoolId,
+          schoolId: targetSchoolForCategory,
           categoryKey,
           nextCategoryText: cleanedDocText,
         };
@@ -405,18 +647,19 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       const ok = await onSaveVerifiedDocument(docRecord, categoryUpdate);
       if (ok) {
         if (categoryUpdate) {
-          const compositeKey: CompositeCategoryKey = `${schoolId}:${categoryKey}`;
+          const compositeKey: CompositeCategoryKey = `${targetSchoolForCategory}:${categoryKey}`;
           setDirtyByKey((prev) => ({ ...prev, [compositeKey]: false }));
           setDraftFieldsBySchool((prev) => ({
             ...prev,
-            [schoolId]: {
-              ...prev[schoolId],
+            [targetSchoolForCategory]: {
+              ...prev[targetSchoolForCategory],
               [categoryKey]: categoryUpdate!.nextCategoryText,
             },
           }));
-          triggerSavedFlash(schoolId, categoryKey);
+          triggerSavedFlash(targetSchoolForCategory, categoryKey);
         }
         setStagedDoc(null);
+        setTagInput('');
       }
     } finally {
       setIsCommittingStagedDoc(false);
@@ -428,13 +671,164 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     setIsDeletingDoc(true);
     try {
       await onDeleteDocument(docPendingDelete.id);
-      if (inspectedDoc?.id === docPendingDelete.id) {
-        setInspectedDoc(null);
-      }
+      if (inspectedDoc?.id === docPendingDelete.id) setInspectedDoc(null);
+      if (fullSizeImageDoc?.id === docPendingDelete.id) setFullSizeImageDoc(null);
+      if (videoPlayerDoc?.id === docPendingDelete.id) setVideoPlayerDoc(null);
+      if (pptxSlidesDoc?.id === docPendingDelete.id) setPptxSlidesDoc(null);
       setDocPendingDelete(null);
     } finally {
       setIsDeletingDoc(false);
     }
+  };
+
+  const handleUpdateDocMetadata = async (
+    doc: UploadedDocumentRecord,
+    patch: Partial<UploadedDocumentRecord>
+  ) => {
+    const updated: UploadedDocumentRecord = {
+      ...doc,
+      ...patch,
+    };
+    await onSaveVerifiedDocument(updated);
+    if (fullSizeImageDoc?.id === doc.id) setFullSizeImageDoc(updated);
+  };
+
+  const handleCaptureVideoFrameToVisualLibrary = async () => {
+    if (!videoPlayerDoc || !videoPlayerRef.current) return;
+    const video = videoPlayerRef.current;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 360;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+
+      const now = new Date();
+      const timecode = Math.floor(video.currentTime || 0);
+      const newImgDoc: UploadedDocumentRecord = {
+        id: `doc-frame-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: `Стоп-кадр: ${videoPlayerDoc.name} (${timecode}с).jpg`,
+        extension: 'jpg',
+        sizeBytes: Math.round(dataUrl.length * 0.75),
+        schoolId: videoPlayerDoc.schoolId,
+        categoryKey: videoPlayerDoc.categoryKey,
+        status: 'processed',
+        statusMessage: 'Сохранён стоп-кадр',
+        extractedText: `[Стоп-кадр из видео «${videoPlayerDoc.name}», таймкод: ${timecode} с]`,
+        createdAt: now.toLocaleString('ru-RU'),
+        createdAtMs: now.getTime(),
+        verifiedByManager: true,
+        fileType: 'image',
+        mimeType: 'image/jpeg',
+        visualRole: 'reference',
+        tags: ['кадр_из_видео', 'референс'],
+        dataUrl,
+        thumbnailUrl: dataUrl,
+      };
+
+      await onSaveVerifiedDocument(newImgDoc);
+      alert('Стоп-кадр успешно сохранён в Визуальную библиотеку!');
+    } catch {
+      alert('Не удалось захватить кадр видео.');
+    }
+  };
+
+  const handleSavePptxSlideImageToLibrary = async (
+    img: ExtractedDocumentImage,
+    slideNum?: number
+  ) => {
+    if (!pptxSlidesDoc) return;
+    const now = new Date();
+    const newDoc: UploadedDocumentRecord = {
+      id: `doc-slideimg-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: `Слайд ${slideNum || 1} - ${img.name}`,
+      extension: img.mimeType.includes('png') ? 'png' : 'jpg',
+      sizeBytes: Math.round(img.dataUrl.length * 0.75),
+      schoolId: pptxSlidesDoc.schoolId,
+      categoryKey: pptxSlidesDoc.categoryKey,
+      status: 'processed',
+      statusMessage: 'Изображение со слайда',
+      extractedText: `[Изображение из презентации «${pptxSlidesDoc.name}», слайд ${slideNum || 1}]`,
+      createdAt: now.toLocaleString('ru-RU'),
+      createdAtMs: now.getTime(),
+      verifiedByManager: true,
+      fileType: 'image',
+      mimeType: img.mimeType,
+      visualRole: 'reference',
+      tags: ['слайд_презентации', 'референс'],
+      dataUrl: img.dataUrl,
+      thumbnailUrl: img.dataUrl,
+    };
+    await onSaveVerifiedDocument(newDoc);
+    alert('Изображение со слайда сохранено в Визуальную библиотеку!');
+  };
+
+  const handleUnpackSelectedZip = async () => {
+    if (!zipExplorerState || zipExplorerState.selectedPaths.size === 0) return;
+    setIsUnpackingZip(true);
+    try {
+      const selected = Array.from(zipExplorerState.selectedPaths);
+      const files = await unpackSelectedZipEntries(zipExplorerState.file, selected);
+
+      let successCount = 0;
+      for (const f of files) {
+        const parsed = await parseDocumentFile(f);
+        const now = new Date();
+        const role: VisualAssetRole =
+          parsed.fileType === 'image'
+            ? f.name.toLowerCase().includes('logo')
+              ? 'logo'
+              : 'reference'
+            : 'other';
+
+        const docRecord: UploadedDocumentRecord = {
+          id: `doc-zip-${now.getTime()}-${Math.random().toString(36).slice(2, 7)}`,
+          name: f.name,
+          extension: parsed.extension,
+          sizeBytes: f.size,
+          schoolId: zipExplorerState.targetSchool,
+          categoryKey: zipExplorerState.targetCategory,
+          status: parsed.status,
+          statusMessage: parsed.statusLabel,
+          warning: parsed.warning,
+          extractedText: parsed.extractedText,
+          createdAt: now.toLocaleString('ru-RU'),
+          createdAtMs: now.getTime(),
+          verifiedByManager: true,
+          pageCount: parsed.pageCount,
+          fileType: parsed.fileType,
+          mimeType: parsed.mimeType,
+          tags: ['из_архива', zipExplorerState.file.name.replace(/\.zip$/i, '')],
+          visualRole: role,
+          dataUrl: parsed.dataUrl,
+          thumbnailUrl: parsed.thumbnailUrl,
+          slides: parsed.slides,
+          colorPalette: parsed.colorPalette,
+          extractedImages: parsed.extractedImages,
+          durationSec: parsed.durationSec,
+          videoWidth: parsed.videoWidth,
+          videoHeight: parsed.videoHeight,
+        };
+
+        await onSaveVerifiedDocument(docRecord);
+        successCount++;
+      }
+
+      setZipExplorerState(null);
+      alert(`Успешно распаковано и добавлено файлов в Базу знаний: ${successCount}!`);
+    } catch (err) {
+      alert(`Ошибка распаковки: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsUnpackingZip(false);
+    }
+  };
+
+  const handleCopyHex = (hex: string) => {
+    navigator.clipboard?.writeText(hex);
+    setCopiedHex(hex);
+    setTimeout(() => setCopiedHex((prev) => (prev === hex ? null : prev)), 2000);
   };
 
   const handleBackupFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -446,36 +840,34 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* Top Header & Typographic School Switcher Card */}
+      {/* Top Header & School Switcher */}
       <div className="glass-panel rounded-2xl p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-        <div className="flex items-start gap-4 max-w-2xl">
-          <div className="space-y-1.5">
-            <div className="inline-flex items-center gap-2">
-              <span
-                className={`px-3.5 py-1 rounded-xl font-display font-extrabold text-sm tracking-wide transition-colors duration-200 ${
-                  activeSchool === 'kiberone'
-                    ? 'bg-[#FFD700] text-slate-950'
-                    : 'bg-[#84CC16] text-slate-950'
-                }`}
-              >
-                {schoolConfig.name}
-              </span>
-              <span className="text-xs font-medium text-slate-500">
-                · Активная база знаний
-              </span>
-            </div>
-            <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-900">
-              База знаний образовательных школ
-            </h1>
-            <p className="text-sm text-slate-600 leading-relaxed">
-              Сведения и загруженные документы хранятся раздельно для{' '}
-              <strong>KIBERONE</strong> и <strong>RENDERIA</strong> в локальном
-              хранилище <strong>IndexedDB</strong>.
-            </p>
+        <div className="space-y-1.5 max-w-2xl">
+          <div className="inline-flex items-center gap-2">
+            <span
+              className={`px-3.5 py-1 rounded-xl font-display font-extrabold text-sm tracking-wide transition-colors ${
+                activeSchool === 'kiberone'
+                  ? 'bg-[#FFD700] text-slate-950'
+                  : 'bg-[#84CC16] text-slate-950'
+              }`}
+            >
+              {schoolConfig.name}
+            </span>
+            <span className="text-xs font-medium text-slate-500">
+              · Полноценное хранилище знаний, брендбуков и медиа
+            </span>
           </div>
+          <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-900">
+            База знаний и визуальная библиотека школ
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+            Хранение документов (PDF, DOCX, TXT), презентаций (PPTX), архивов (ZIP),
+            видео (MP4) и брендбуков. Изоляция <strong>KIBERONE</strong> и <strong>RENDERIA</strong>,
+            с поддержкой общих материалов <code>ALL</code> и передачей в ИИ.
+          </p>
         </div>
 
-        {/* School Switcher + Backup Controls */}
+        {/* School Switcher & Backups */}
         <div className="flex flex-wrap items-center gap-3 shrink-0">
           <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
             {(['kiberone', 'renderia'] as SchoolId[]).map((id) => {
@@ -486,7 +878,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                   key={id}
                   type="button"
                   onClick={() => onSelectSchool(id)}
-                  className={`px-4 py-2 rounded-lg font-display font-extrabold text-xs sm:text-sm tracking-wide transition-colors duration-200 whitespace-nowrap ${
+                  className={`px-4 py-2 rounded-lg font-display font-extrabold text-xs sm:text-sm tracking-wide transition-colors whitespace-nowrap cursor-pointer ${
                     isSelected
                       ? id === 'kiberone'
                         ? 'bg-[#FFD700] text-slate-950 shadow-xs'
@@ -503,16 +895,10 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           <button
             type="button"
             onClick={onTriggerExportBackup}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition-colors whitespace-nowrap shadow-2xs"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition-colors whitespace-nowrap shadow-2xs cursor-pointer"
           >
-            <Download
-              className={`w-4 h-4 ${
-                activeSchool === 'renderia'
-                  ? 'text-[#84CC16]'
-                  : 'text-[#FFD700]'
-              }`}
-            />
-            <span>Создать резервную копию</span>
+            <Download className="w-4 h-4 text-[#FFD700]" />
+            <span>Резервная копия</span>
           </button>
 
           <input
@@ -525,10 +911,10 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           <button
             type="button"
             onClick={() => backupInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold glass-button text-slate-800 hover:bg-white transition-colors whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold glass-button text-slate-800 hover:bg-white transition-colors whitespace-nowrap cursor-pointer"
           >
             <Upload className="w-4 h-4 text-[#165B73]" />
-            <span>Импорт копии (.json)</span>
+            <span>Импорт (.json)</span>
           </button>
         </div>
       </div>
@@ -539,176 +925,259 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           <button
             type="button"
             onClick={onDismissBanner}
-            className="font-semibold text-[#00A8B5] hover:underline shrink-0"
+            className="font-semibold text-[#00A8B5] hover:underline shrink-0 cursor-pointer"
           >
             Понятно
           </button>
         </div>
       )}
 
-      {/* Document Upload & Text Extraction Bar */}
-      <div
-        className={`glass-panel rounded-2xl p-5 border flex flex-col md:flex-row md:items-center justify-between gap-4 ${
-          activeSchool === 'renderia'
-            ? 'border-[#84CC16]/60 bg-[#84CC16]/5'
-            : 'border-slate-200/80'
-        }`}
-      >
-        <div className="space-y-1">
-          <div className="text-sm font-display font-bold text-slate-900">
-            Загрузка и разбор документа для школы {schoolConfig.name}
-          </div>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            Поддерживаются форматы{' '}
-            <strong>PDF, DOCX, PPTX, TXT, CSV, MD</strong>. После выбора файла
-            текст будет автоматически извлечён и показан в окне предварительного
-            просмотра для вашего подтверждения.
-          </p>
+      {/* 4 Main Knowledge Base Navigation Tabs */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-2">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('categories')}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+              activeSubTab === 'categories'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <Layers className="w-4 h-4 text-[#FFD700]" />
+            <span>Разделы школы (8 тем)</span>
+            <span className="px-1.5 py-0.2 rounded-md bg-white/20 text-[11px] font-mono-tabular">
+              {filledCount}/8
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('visual_library')}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+              activeSubTab === 'visual_library'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <ImageIcon className="w-4 h-4 text-[#00A8B5]" />
+            <span>Визуальная библиотека</span>
+            <span className="px-1.5 py-0.2 rounded-md bg-white/20 text-[11px] font-mono-tabular">
+              {visualLibraryItems.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('brandbooks')}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+              activeSubTab === 'brandbooks'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <Palette className="w-4 h-4 text-[#84CC16]" />
+            <span>Брендбуки и стиль</span>
+            <span className="px-1.5 py-0.2 rounded-md bg-white/20 text-[11px] font-mono-tabular">
+              {brandbookData.brandDocs.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('all_files')}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+              activeSubTab === 'all_files'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <FolderOpen className="w-4 h-4 text-[#165B73]" />
+            <span>Все документы и медиа</span>
+            <span className="px-1.5 py-0.2 rounded-md bg-white/20 text-[11px] font-mono-tabular">
+              {eligibleSchoolDocs.length}
+            </span>
+          </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <select
-            value={selectedCategoryForUpload}
-            onChange={(e) =>
-              setSelectedCategoryForUpload(
-                e.target.value as KnowledgeCategoryKey
-              )
-            }
-            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
-          >
-            {KNOWLEDGE_CATEGORIES.map((cat) => (
-              <option key={cat.key} value={cat.key}>
-                Раздел: {cat.title}
-              </option>
-            ))}
-          </select>
-
+        {/* Universal Fast Upload Button */}
+        <div className="flex items-center gap-2">
           <input
-            ref={docInputRef}
+            ref={universalInputRef}
             type="file"
-            accept=".pdf,.docx,.pptx,.txt,.md,.csv"
-            onChange={handleDocUploadChange}
+            accept=".pdf,.docx,.pptx,.ppt,.txt,.csv,.md,.zip,.mp4,.mov,.webm,.png,.jpg,.jpeg,.webp,.svg"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUniversalFileUpload(f);
+              e.target.value = '';
+            }}
             className="hidden"
           />
+
           <button
             type="button"
             disabled={Boolean(activeParseState)}
-            onClick={() => docInputRef.current?.click()}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60 transition-colors whitespace-nowrap"
+            onClick={() => universalInputRef.current?.click()}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-[#00A8B5] text-white hover:bg-[#00929E] transition-colors shadow-xs cursor-pointer disabled:opacity-60"
           >
             {activeParseState ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin text-[#00A8B5]" />
-                <span>
-                  {activeParseState.label}: {activeParseState.fileName}
-                </span>
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                <span>{activeParseState.label}...</span>
               </>
             ) : (
               <>
-                <FileUp
-                  className={`w-4 h-4 ${
-                    activeSchool === 'renderia'
-                      ? 'text-[#84CC16]'
-                      : 'text-[#F5B800]'
-                  }`}
-                />
-                <span>Загрузить документ</span>
+                <FileUp className="w-4 h-4 text-white" />
+                <span>Загрузить любой материал</span>
               </>
             )}
           </button>
         </div>
       </div>
 
-      {/* Verified School Documents Section (Isolated by activeSchool) */}
-      <div className="glass-panel rounded-2xl p-5 border border-slate-200/80 space-y-3.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="font-display font-bold text-base text-slate-900">
-              Подтверждённые документы школы {schoolConfig.name} (
-              {schoolDocs.length})
-            </h2>
-            <p className="text-xs text-slate-500">
-              Документы хранятся в IndexedDB отдельно для каждой школы. Удаление
-              документа из списка не стирает текст разделов Базы знаний.
-            </p>
+      {/* ====================================================================
+          TAB 1: ТЕКСТОВЫЕ РАЗДЕЛЫ ШКОЛЫ (8 КАТЕГОРИЙ)
+         ==================================================================== */}
+      {activeSubTab === 'categories' && (
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 bg-white p-4 rounded-xl border border-slate-200/80">
+            <div>
+              Школа: <strong>{schoolConfig.name}</strong> · Заполнено{' '}
+              <span className="font-bold font-mono-tabular text-slate-900">
+                {filledCount}
+              </span>{' '}
+              из {KNOWLEDGE_CATEGORIES.length} разделов
+            </div>
+            <div className="text-slate-500">
+              Текстовые правила передаются специалистам строго с изоляцией по активной школе.
+            </div>
           </div>
-          <div className="text-xs text-slate-600">
-            Заполнено текстовых разделов ({schoolConfig.name}):{' '}
-            <span className="font-mono-tabular font-bold text-slate-900">
-              {filledCount} из {KNOWLEDGE_CATEGORIES.length}
-            </span>
-          </div>
-        </div>
 
-        {schoolDocs.length === 0 ? (
-          <div className="rounded-xl p-4 bg-white/85 border border-dashed border-slate-200 text-xs text-slate-500 text-center">
-            Для школы <strong>{schoolConfig.name}</strong> пока нет загруженных
-            документов. Анна, вы можете добавить PDF, DOCX, PPTX, TXT, CSV или
-            MD в карточке выше — мы аккуратно извлечём текст и покажем его перед
-            сохранением.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {schoolDocs.map((doc) => {
-              const catMeta = KNOWLEDGE_CATEGORIES.find(
-                (c) => c.key === doc.categoryKey
-              );
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {KNOWLEDGE_CATEGORIES.map((category) => {
+              const compositeKey: CompositeCategoryKey = `${activeSchool}:${category.key}`;
+              const confirmedValue = confirmedSchoolData[category.key] ?? '';
+              const isDirty = Boolean(dirtyByKey[compositeKey]);
+              const displayedValue = isDirty
+                ? draftFieldsBySchool[activeSchool][category.key] ?? ''
+                : confirmedValue;
+
+              const hasUnsavedChanges = isDirty && displayedValue !== confirmedValue;
+              const isConfirmedFilled = confirmedValue.trim().length > 0;
+              const isDraftOrConfirmedFilled = displayedValue.trim().length > 0 || isConfirmedFilled;
+              const isRecentlySaved = Boolean(savedIndicatorByKey[compositeKey]);
+              const isSaving = Boolean(savingByKey[compositeKey]);
+              const categoryDocsCount = eligibleSchoolDocs.filter(
+                (d) => d.categoryKey === category.key
+              ).length;
+
               return (
                 <div
-                  key={doc.id}
-                  className="rounded-xl p-3.5 bg-white border border-slate-200/90 flex flex-col justify-between gap-3 shadow-2xs"
+                  key={compositeKey}
+                  className={`glass-panel rounded-2xl p-5 flex flex-col justify-between gap-3 border ${
+                    activeSchool === 'renderia' && isConfirmedFilled
+                      ? 'border-[#84CC16]/60'
+                      : 'border-slate-200/80'
+                  }`}
                 >
-                  <div className="space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <FileText className="w-4 h-4 text-[#00A8B5] shrink-0" />
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-display font-bold text-base text-slate-900">
+                          {category.title}
+                        </h3>
                         <span
-                          className="font-semibold text-xs text-slate-900 truncate"
-                          title={doc.name}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            activeSchool === 'kiberone'
+                              ? 'bg-[#F5B800]/30 text-slate-900'
+                              : 'bg-[#84CC16]/35 text-[#365314]'
+                          }`}
                         >
-                          {doc.name}
+                          {schoolConfig.name}
                         </span>
+                        {categoryDocsCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-mono-tabular font-semibold">
+                            Документов: {categoryDocsCount}
+                          </span>
+                        )}
                       </div>
-                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono-tabular text-[10px] font-bold uppercase shrink-0">
-                        .{doc.extension}
-                      </span>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {category.subtitle}
+                      </p>
                     </div>
-
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {renderStatusBadge(doc.status)}
-                      <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px] font-medium truncate">
-                        {catMeta?.title || doc.categoryKey}
-                      </span>
-                    </div>
-
-                    {doc.warning && (
-                      <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2.5 py-1.5 leading-snug">
-                        {doc.warning}
-                      </div>
-                    )}
+                    <span className="text-xs text-slate-500 font-mono-tabular shrink-0">
+                      {hasUnsavedChanges
+                        ? `Черновик (${displayedValue.length} симв.)`
+                        : isConfirmedFilled
+                          ? `${confirmedValue.length} симв.`
+                          : 'Пусто'}
+                    </span>
                   </div>
 
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                    <span className="font-mono-tabular">
-                      {formatFileSizeRu(doc.sizeBytes)} · {doc.createdAt}
-                    </span>
+                  <textarea
+                    rows={5}
+                    value={displayedValue}
+                    onChange={(e) =>
+                      handleDraftChange(activeSchool, category.key, e.target.value)
+                    }
+                    placeholder={category.placeholder}
+                    className="w-full rounded-xl border border-slate-200/90 bg-white/90 px-3.5 py-2.5 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] leading-relaxed resize-y"
+                  />
 
-                    <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <div className="text-[11px] text-slate-500">
+                      {isSaving ? (
+                        <span className="text-slate-700 font-medium">
+                          Запись в IndexedDB ({schoolConfig.name})...
+                        </span>
+                      ) : hasUnsavedChanges ? (
+                        <span className="text-amber-700 font-medium">
+                          Черновик ({schoolConfig.name}) изменён — нажмите «Сохранить»
+                        </span>
+                      ) : isRecentlySaved ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
+                          <Check className="w-3.5 h-3.5" />
+                          Сохранено в IndexedDB для {schoolConfig.name}
+                        </span>
+                      ) : isConfirmedFilled ? (
+                        <span className="font-medium text-slate-700">
+                          Сохранено в IndexedDB для {schoolConfig.name}
+                        </span>
+                      ) : (
+                        <span>
+                          Нет данных ({schoolConfig.name}) — ИИ задаст уточняющий вопрос
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isDraftOrConfirmedFilled && (
+                        <button
+                          type="button"
+                          disabled={isSaving}
+                          onClick={() =>
+                            handleClearCategoryField(activeSchool, category.key)
+                          }
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs text-slate-500 hover:text-red-700 hover:bg-red-50 disabled:opacity-40 transition-colors cursor-pointer"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>Очистить</span>
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => setInspectedDoc(doc)}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg font-semibold text-slate-700 hover:bg-slate-100 transition-colors"
+                        onClick={() =>
+                          handleConfirmCategoryField(activeSchool, category.key)
+                        }
+                        disabled={!hasUnsavedChanges || isSaving}
+                        className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                          hasUnsavedChanges && !isSaving
+                            ? 'bg-slate-900 text-white hover:bg-slate-800'
+                            : 'bg-slate-100 text-slate-400 cursor-default'
+                        }`}
                       >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Текст</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDocPendingDelete(doc)}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg font-medium text-red-600 hover:bg-red-50 transition-colors"
-                        title="Удалить карточку документа из Базы знаний"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Save className="w-3 h-3 text-white" />
+                        <span>{isSaving ? 'Сохранение...' : 'Сохранить'}</span>
                       </button>
                     </div>
                   </div>
@@ -716,159 +1185,676 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               );
             })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* 8 Structured Categories Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {KNOWLEDGE_CATEGORIES.map((category) => {
-          const compositeKey: CompositeCategoryKey = `${activeSchool}:${category.key}`;
-          const confirmedValue = confirmedSchoolData[category.key] ?? '';
-          const isDirty = Boolean(dirtyByKey[compositeKey]);
-          const displayedValue = isDirty
-            ? draftFieldsBySchool[activeSchool][category.key] ?? ''
-            : confirmedValue;
-
-          const hasUnsavedChanges =
-            isDirty && displayedValue !== confirmedValue;
-          const isConfirmedFilled = confirmedValue.trim().length > 0;
-          const isDraftOrConfirmedFilled =
-            displayedValue.trim().length > 0 || isConfirmedFilled;
-          const isRecentlySaved = Boolean(savedIndicatorByKey[compositeKey]);
-          const isSaving = Boolean(savingByKey[compositeKey]);
-          const categoryDocsCount = schoolDocs.filter(
-            (d) => d.categoryKey === category.key
-          ).length;
-
-          return (
-            <div
-              key={compositeKey}
-              className={`glass-panel rounded-2xl p-5 flex flex-col justify-between gap-3 border ${
-                activeSchool === 'renderia' && isConfirmedFilled
-                  ? 'border-[#84CC16]/60'
-                  : 'border-slate-200/80'
-              }`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display font-bold text-base text-slate-900">
-                      {category.title}
-                    </h3>
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                        activeSchool === 'kiberone'
-                          ? 'bg-[#F5B800]/30 text-slate-900'
-                          : 'bg-[#84CC16]/35 text-[#365314]'
-                      }`}
-                    >
-                      {schoolConfig.name}
-                    </span>
-                    {categoryDocsCount > 0 && (
-                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-mono-tabular font-semibold">
-                        Документов: {categoryDocsCount}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {category.subtitle}
-                  </p>
-                </div>
-                <span className="text-xs text-slate-500 font-mono-tabular shrink-0">
-                  {hasUnsavedChanges
-                    ? `Черновик (${displayedValue.length} симв.)`
-                    : isConfirmedFilled
-                      ? `${confirmedValue.length} симв.`
-                      : 'Пусто'}
-                </span>
+      {/* ====================================================================
+          TAB 2: ВИЗУАЛЬНАЯ БИБЛИОТЕКА (ИЗОБРАЖЕНИЯ, ЛОГОТИПЫ, РЕФЕРЕНСЫ)
+         ==================================================================== */}
+      {activeSubTab === 'visual_library' && (
+        <div className="space-y-6">
+          {/* Controls & Filter Bar */}
+          <div className="glass-panel rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 border border-slate-200">
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Search */}
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Поиск по названию или тегам..."
+                  className="pl-9 pr-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] w-52 sm:w-64"
+                />
               </div>
 
-              <textarea
-                rows={5}
-                value={displayedValue}
-                onChange={(e) =>
-                  handleDraftChange(activeSchool, category.key, e.target.value)
-                }
-                placeholder={category.placeholder}
-                className="w-full rounded-xl border border-slate-200/90 bg-white/90 px-3.5 py-2.5 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] leading-relaxed resize-y"
-              />
-
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <div className="text-[11px] text-slate-500">
-                  {isSaving ? (
-                    <span className="text-slate-700 font-medium">
-                      Запись в IndexedDB ({schoolConfig.name})...
-                    </span>
-                  ) : hasUnsavedChanges ? (
-                    <span className="text-amber-700 font-medium">
-                      Черновик ({schoolConfig.name}) изменён — нажмите
-                      «Сохранить»
-                    </span>
-                  ) : isRecentlySaved ? (
-                    <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
-                      <Check className="w-3.5 h-3.5" />
-                      Сохранено в IndexedDB для {schoolConfig.name}
-                    </span>
-                  ) : isConfirmedFilled ? (
-                    <span className="font-medium text-slate-700">
-                      Сохранено в IndexedDB для {schoolConfig.name}
-                    </span>
-                  ) : (
-                    <span>
-                      Нет данных ({schoolConfig.name}) — ИИ задаст уточняющий
-                      вопрос
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  {isDraftOrConfirmedFilled && (
-                    <button
-                      type="button"
-                      disabled={isSaving}
-                      onClick={() =>
-                        handleClearCategoryField(activeSchool, category.key)
-                      }
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs text-slate-500 hover:text-red-700 hover:bg-red-50 disabled:opacity-40 transition-colors"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                      <span>Очистить</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleConfirmCategoryField(activeSchool, category.key)
-                    }
-                    disabled={!hasUnsavedChanges || isSaving}
-                    className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
-                      hasUnsavedChanges && !isSaving
-                        ? 'bg-slate-900 text-white hover:bg-slate-800'
-                        : 'bg-slate-100 text-slate-400 cursor-default'
-                    }`}
-                  >
-                    <Save
-                      className={`w-3 h-3 ${
-                        hasUnsavedChanges && !isSaving
-                          ? activeSchool === 'renderia'
-                            ? 'text-[#84CC16]'
-                            : 'text-[#F5B800]'
-                          : 'text-slate-400'
-                      }`}
-                    />
-                    <span>{isSaving ? 'Сохранение...' : 'Сохранить'}</span>
-                  </button>
-                </div>
+              {/* Visual Role Filter */}
+              <div className="flex items-center gap-1 overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => setVisualRoleFilter('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
+                    visualRoleFilter === 'all'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  Все ({visualLibraryItems.length})
+                </button>
+                {(['logo', 'brandbook', 'reference', 'template', 'palette'] as VisualAssetRole[]).map(
+                  (role) => {
+                    const cfg = VISUAL_ROLE_LABELS_RU[role];
+                    const isSelected = visualRoleFilter === role;
+                    return (
+                      <button
+                        key={role}
+                        type="button"
+                        onClick={() => setVisualRoleFilter(role)}
+                        className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
+                          isSelected
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {cfg.label}
+                      </button>
+                    );
+                  }
+                )}
               </div>
             </div>
-          );
-        })}
-      </div>
 
-      {/* MODAL 1: Document Extraction Preview & Manager Confirmation */}
+            {/* School Scope Filter & Add Button */}
+            <div className="flex items-center gap-2">
+              <select
+                value={schoolScopeFilter}
+                onChange={(e) => setSchoolScopeFilter(e.target.value as any)}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
+              >
+                <option value="current">Только {schoolConfig.name} + ALL</option>
+                <option value="all_schools">Обе школы (KIBERone & Renderia)</option>
+              </select>
+
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleUniversalFileUpload(f, 'reference');
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => imageInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-colors shadow-xs cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5 text-[#FFD700]" />
+                <span>Добавить изображение</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Grid of Visual Assets */}
+          {visualLibraryItems.length === 0 ? (
+            <div className="glass-panel rounded-2xl p-10 text-center space-y-3 border border-dashed border-slate-300">
+              <div className="w-12 h-12 rounded-2xl bg-[#00A8B5]/10 text-[#00A8B5] flex items-center justify-center mx-auto">
+                <ImageIcon className="w-6 h-6" />
+              </div>
+              <h3 className="font-display font-bold text-base text-slate-900">
+                В визуальной библиотеке пока нет материалов
+              </h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                Загрузите логотипы, страницы брендбуков, референсы оформления или шаблоны баннеров.
+                Все загруженные изображения доступны для просмотра в полном размере и могут передаваться ИИ-специалистам для визуального анализа!
+              </p>
+              <button
+                type="button"
+                onClick={() => imageInputRef.current?.click()}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-[#00A8B5] text-white hover:bg-[#00929E] transition-colors cursor-pointer"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Загрузить первое изображение (PNG, JPG, WEBP)</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {visualLibraryItems.map((doc) => {
+                const roleMeta =
+                  VISUAL_ROLE_LABELS_RU[doc.visualRole || 'other'] ||
+                  VISUAL_ROLE_LABELS_RU.other;
+
+                return (
+                  <div
+                    key={doc.id}
+                    className="glass-panel rounded-2xl overflow-hidden border border-slate-200/90 hover:border-slate-300 transition-all flex flex-col justify-between shadow-2xs group"
+                  >
+                    {/* Thumbnail Preview Area */}
+                    <div
+                      onClick={() => setFullSizeImageDoc(doc)}
+                      className="relative h-44 bg-slate-950 flex items-center justify-center cursor-pointer overflow-hidden"
+                    >
+                      {doc.dataUrl || doc.thumbnailUrl ? (
+                        <img
+                          src={doc.dataUrl || doc.thumbnailUrl}
+                          alt={doc.name}
+                          className="max-h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <ImageIcon className="w-10 h-10 text-slate-700" />
+                      )}
+
+                      {/* Top Badges */}
+                      <div className="absolute top-2 left-2 right-2 flex items-center justify-between gap-1">
+                        <span
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold uppercase tracking-wide border shadow-xs ${
+                            doc.schoolId === 'all'
+                              ? 'bg-[#00A8B5] text-white border-transparent'
+                              : doc.schoolId === 'renderia'
+                                ? 'bg-[#84CC16] text-slate-950 border-transparent'
+                                : 'bg-[#FFD700] text-slate-950 border-transparent'
+                          }`}
+                        >
+                          {doc.schoolId === 'all'
+                            ? 'Обе школы'
+                            : SCHOOLS[doc.schoolId]?.name || doc.schoolId}
+                        </span>
+
+                        <span
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border shadow-xs ${roleMeta.badgeClass}`}
+                        >
+                          {roleMeta.label}
+                        </span>
+                      </div>
+
+                      {/* Hover Overlay */}
+                      <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                        <span className="px-3 py-1.5 rounded-xl bg-white/95 text-slate-900 text-xs font-bold shadow-md flex items-center gap-1.5">
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Просмотр</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Metadata & Tag Footer */}
+                    <div className="p-3.5 space-y-2.5 flex-1 flex flex-col justify-between">
+                      <div className="space-y-1">
+                        <h4
+                          className="font-display font-bold text-xs text-slate-900 truncate"
+                          title={doc.name}
+                        >
+                          {doc.name}
+                        </h4>
+                        {doc.description && (
+                          <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
+                            {doc.description}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Tags */}
+                      {doc.tags && doc.tags.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1">
+                          {doc.tags.slice(0, 3).map((t) => (
+                            <span
+                              key={t}
+                              className="px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-medium"
+                            >
+                              #{t}
+                            </span>
+                          ))}
+                          {doc.tags.length > 3 && (
+                            <span className="text-[10px] text-slate-400">
+                              +{doc.tags.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Footer Actions */}
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500 font-mono-tabular">
+                        <span>{formatFileSizeRu(doc.sizeBytes)}</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setFullSizeImageDoc(doc)}
+                            className="p-1 rounded-md text-slate-600 hover:text-slate-900 hover:bg-slate-100 cursor-pointer"
+                            title="Открыть в полном размере и редактировать теги"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDocPendingDelete(doc)}
+                            className="p-1 rounded-md text-red-600 hover:bg-red-50 cursor-pointer"
+                            title="Удалить из библиотеки"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ====================================================================
+          TAB 3: БРЕНДБУКИ И СТИЛЬ (ПАЛИТРА, ПРАВИЛА, ЛОГОТИПЫ)
+         ==================================================================== */}
+      {activeSubTab === 'brandbooks' && (
+        <div className="space-y-6">
+          {/* Corporate Color Palette Section */}
+          <div className="glass-panel rounded-2xl p-5 border border-slate-200/90 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
+                  <Palette className="w-4 h-4 text-[#00A8B5]" />
+                  <span>Фирменные цвета и палитра: {schoolConfig.name}</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Нажмите на образец цвета, чтобы мгновенно скопировать HEX-код в буфер обмена.
+                </p>
+              </div>
+
+              {copiedHex && (
+                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-emerald-100 text-emerald-800 text-xs font-bold shadow-xs">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Скопировано: {copiedHex}</span>
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {brandbookData.palette.map((color, idx) => (
+                <div
+                  key={`${color.hex}-${idx}`}
+                  onClick={() => handleCopyHex(color.hex)}
+                  className="rounded-xl p-3 bg-white border border-slate-200 hover:border-slate-300 hover:shadow-xs transition-all cursor-pointer space-y-2 group"
+                >
+                  <div
+                    className="w-full h-14 rounded-lg border border-black/10 flex items-end justify-end p-1.5 shadow-2xs"
+                    style={{ backgroundColor: color.hex }}
+                  >
+                    <Copy className="w-3.5 h-3.5 text-white/80 opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-sm" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="font-mono text-xs font-bold text-slate-900">
+                      {color.hex}
+                    </div>
+                    {color.label && (
+                      <div className="text-[10px] text-slate-500 truncate" title={color.label}>
+                        {color.label}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Official Brandbook Documents & Guidelines */}
+          <div className="glass-panel rounded-2xl p-5 border border-slate-200/90 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#84CC16]" />
+                  <span>Материалы брендбука и правила стиля</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Официальные брендбуки в PDF, презентации со слайдами и правила оформления, используемые специалистами.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => imageInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-colors shadow-xs cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5 text-[#FFD700]" />
+                <span>Добавить материал брендбука</span>
+              </button>
+            </div>
+
+            {brandbookData.brandDocs.length === 0 ? (
+              <div className="p-6 rounded-xl bg-slate-50/70 border border-dashed border-slate-200 text-center text-xs text-slate-500 space-y-2">
+                <p>
+                  Для школы <strong>{schoolConfig.name}</strong> пока не отмечены отдельные брендбук-материалы.
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Вы можете загрузить PDF-гайдлайн, презентацию PPTX или логотип и назначить роль «Брендбук» или «Логотип».
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {brandbookData.brandDocs.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className="p-4 rounded-xl bg-white border border-slate-200/90 flex flex-col justify-between gap-3 shadow-2xs"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {doc.dataUrl ? (
+                            <img
+                              src={doc.dataUrl}
+                              alt={doc.name}
+                              className="w-8 h-8 rounded-lg object-contain bg-slate-950 p-1 shrink-0"
+                            />
+                          ) : (
+                            <FileText className="w-5 h-5 text-[#84CC16] shrink-0" />
+                          )}
+                          <span
+                            className="font-semibold text-xs text-slate-900 truncate"
+                            title={doc.name}
+                          >
+                            {doc.name}
+                          </span>
+                        </div>
+                        <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 text-[10px] font-bold uppercase shrink-0">
+                          {doc.visualRole || 'Бренд'}
+                        </span>
+                      </div>
+
+                      {doc.description && (
+                        <p className="text-[11px] text-slate-600 line-clamp-2">
+                          {doc.description}
+                        </p>
+                      )}
+
+                      {doc.extractedText && (
+                        <div className="p-2.5 rounded-lg bg-slate-50 text-[11px] text-slate-700 font-mono line-clamp-3 leading-relaxed">
+                          {doc.extractedText}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500 font-mono-tabular">
+                      <span>{formatFileSizeRu(doc.sizeBytes)}</span>
+                      <div className="flex items-center gap-1.5">
+                        {doc.dataUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setFullSizeImageDoc(doc)}
+                            className="px-2 py-1 rounded-md text-slate-700 hover:bg-slate-100 font-semibold cursor-pointer"
+                          >
+                            Визуал
+                          </button>
+                        )}
+                        {doc.extractedText && (
+                          <button
+                            type="button"
+                            onClick={() => setInspectedDoc(doc)}
+                            className="px-2 py-1 rounded-md text-slate-700 hover:bg-slate-100 font-semibold cursor-pointer"
+                          >
+                            Текст правил
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          TAB 4: ВСЕ ДОКУМЕНТЫ И МЕДИАФАЙЛЫ (РЕПОЗИТОРИЙ)
+         ==================================================================== */}
+      {activeSubTab === 'all_files' && (
+        <div className="space-y-6">
+          {/* Filters Bar */}
+          <div className="glass-panel rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 border border-slate-200">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Поиск по названию или тегам..."
+                  className="pl-9 pr-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] w-52 sm:w-64"
+                />
+              </div>
+
+              {/* Type filter */}
+              <div className="flex items-center gap-1 overflow-x-auto">
+                {(
+                  [
+                    { id: 'all', label: 'Все' },
+                    { id: 'document', label: 'Документы (PDF/DOCX/TXT)' },
+                    { id: 'presentation', label: 'Презентации (PPTX)' },
+                    { id: 'image', label: 'Изображения' },
+                    { id: 'video', label: 'Видео' },
+                    { id: 'archive', label: 'Архивы (ZIP)' },
+                  ] as const
+                ).map((t) => {
+                  const isSelected = fileTypeFilter === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setFileTypeFilter(t.id as any)}
+                      className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap ${
+                        isSelected
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <select
+              value={schoolScopeFilter}
+              onChange={(e) => setSchoolScopeFilter(e.target.value as any)}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
+            >
+              <option value="current">Только {schoolConfig.name} + ALL</option>
+              <option value="all_schools">Обе школы (KIBERone & Renderia)</option>
+            </select>
+          </div>
+
+          {/* Files Grid / List */}
+          {filteredAllFiles.length === 0 ? (
+            <div className="glass-panel rounded-2xl p-10 text-center space-y-3 border border-dashed border-slate-300">
+              <FolderOpen className="w-10 h-10 text-slate-400 mx-auto" />
+              <div className="text-sm font-semibold text-slate-800">
+                Документов по заданным фильтрам не найдено
+              </div>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Загрузите любой учебный план, прайс, брендбук, видео или архив кнопкой «Загрузить любой материал» вверху.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {filteredAllFiles.map((doc) => {
+                const catMeta = KNOWLEDGE_CATEGORIES.find(
+                  (c) => c.key === doc.categoryKey
+                );
+                const isPptx = doc.extension === 'pptx';
+                const isVideo = doc.fileType === 'video' || ['mp4', 'mov', 'webm'].includes(doc.extension);
+                const isImage = doc.fileType === 'image' || Boolean(doc.dataUrl);
+
+                return (
+                  <div
+                    key={doc.id}
+                    className="rounded-2xl p-4 bg-white border border-slate-200/90 flex flex-col justify-between gap-3 shadow-2xs hover:border-slate-300 transition-all"
+                  >
+                    <div className="space-y-2.5">
+                      {/* Header with Type Icon, Name & Scope */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-center shrink-0">
+                            {isVideo ? (
+                              <Film className="w-4 h-4 text-rose-600" />
+                            ) : isImage ? (
+                              <ImageIcon className="w-4 h-4 text-[#00A8B5]" />
+                            ) : isPptx ? (
+                              <Presentation className="w-4 h-4 text-amber-600" />
+                            ) : doc.extension === 'zip' ? (
+                              <Archive className="w-4 h-4 text-purple-600" />
+                            ) : doc.extension === 'csv' ? (
+                              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                            ) : (
+                              <FileText className="w-4 h-4 text-slate-700" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <h4
+                              className="font-semibold text-xs text-slate-900 truncate"
+                              title={doc.name}
+                            >
+                              {doc.name}
+                            </h4>
+                            <span className="text-[10px] text-slate-400 font-mono-tabular uppercase">
+                              .{doc.extension} · {formatFileSizeRu(doc.sizeBytes)}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* School Badge */}
+                        <span
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase shrink-0 ${
+                            doc.schoolId === 'all'
+                              ? 'bg-[#00A8B5] text-white'
+                              : doc.schoolId === 'renderia'
+                                ? 'bg-[#84CC16] text-slate-950'
+                                : 'bg-[#FFD700] text-slate-950'
+                          }`}
+                        >
+                          {doc.schoolId === 'all' ? 'ALL' : SCHOOLS[doc.schoolId]?.name}
+                        </span>
+                      </div>
+
+                      {/* Status & Category */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {renderStatusBadge(doc.status)}
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px] font-medium truncate">
+                          {catMeta?.title || doc.categoryKey}
+                        </span>
+                        {doc.visualRole && (
+                          <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 text-[10px] font-bold">
+                            {VISUAL_ROLE_LABELS_RU[doc.visualRole]?.label || doc.visualRole}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Video / Image thumbnail preview */}
+                      {doc.thumbnailUrl && (
+                        <div
+                          onClick={() => {
+                            if (isVideo) setVideoPlayerDoc(doc);
+                            else if (isImage) setFullSizeImageDoc(doc);
+                          }}
+                          className="h-28 w-full rounded-xl bg-slate-950 flex items-center justify-center overflow-hidden cursor-pointer relative group"
+                        >
+                          <img
+                            src={doc.thumbnailUrl}
+                            alt={doc.name}
+                            className="max-h-full max-w-full object-contain"
+                          />
+                          {isVideo && (
+                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                              <div className="w-8 h-8 rounded-full bg-white/90 text-slate-900 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                                <Play className="w-4 h-4 fill-current ml-0.5" />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Warnings if any */}
+                      {doc.warning && (
+                        <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2.5 py-1.5 leading-snug">
+                          {doc.warning}
+                        </div>
+                      )}
+
+                      {/* Tags */}
+                      {doc.tags && doc.tags.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1">
+                          {doc.tags.map((t) => (
+                            <span
+                              key={t}
+                              className="px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-medium"
+                            >
+                              #{t}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px]">
+                      <span className="text-slate-400 font-mono-tabular">
+                        {doc.createdAt}
+                      </span>
+
+                      <div className="flex items-center gap-1">
+                        {isPptx && doc.slides && doc.slides.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPptxSlidesDoc(doc);
+                              setSelectedSlideIndex(0);
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold bg-amber-50 text-amber-900 hover:bg-amber-100 cursor-pointer"
+                          >
+                            <Presentation className="w-3.5 h-3.5" />
+                            <span>Слайды ({doc.slides.length})</span>
+                          </button>
+                        )}
+
+                        {isVideo && (
+                          <button
+                            type="button"
+                            onClick={() => setVideoPlayerDoc(doc)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold bg-rose-50 text-rose-900 hover:bg-rose-100 cursor-pointer"
+                          >
+                            <Play className="w-3 h-3 fill-current" />
+                            <span>Видео</span>
+                          </button>
+                        )}
+
+                        {isImage && (
+                          <button
+                            type="button"
+                            onClick={() => setFullSizeImageDoc(doc)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Просмотр</span>
+                          </button>
+                        )}
+
+                        {doc.extractedText && !isImage && (
+                          <button
+                            type="button"
+                            onClick={() => setInspectedDoc(doc)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Текст</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => setDocPendingDelete(doc)}
+                          className="p-1 rounded-lg font-medium text-red-600 hover:bg-red-50 cursor-pointer"
+                          title="Удалить карточку"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ====================================================================
+          MODAL 1: STAGED DOCUMENT CONFIRMATION (ANY FORMAT)
+         ==================================================================== */}
       {stagedDoc && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/55 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
           onClick={() => {
             if (!isCommittingStagedDoc) setStagedDoc(null);
           }}
@@ -882,62 +1868,85 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 <div className="flex items-center gap-2 flex-wrap">
                   <span
                     className={`px-2 py-0.5 rounded text-xs font-bold ${
-                      stagedDoc.schoolId === 'kiberone'
-                        ? 'bg-[#F5B800] text-slate-950'
-                        : 'bg-[#84CC16] text-slate-950'
+                      stagedDoc.schoolId === 'all'
+                        ? 'bg-[#00A8B5] text-white'
+                        : stagedDoc.schoolId === 'kiberone'
+                          ? 'bg-[#FFD700] text-slate-950'
+                          : 'bg-[#84CC16] text-slate-950'
                     }`}
                   >
-                    Школа: {SCHOOLS[stagedDoc.schoolId].name}
+                    Школа: {stagedDoc.schoolId === 'all' ? 'Обе школы (ALL)' : SCHOOLS[stagedDoc.schoolId]?.name}
                   </span>
                   {renderStatusBadge(stagedDoc.parsed.status)}
                 </div>
                 <h3 className="font-display font-bold text-lg text-slate-900">
-                  Проверка документа перед добавлением в Базу знаний
+                  Добавление материала в Базу знаний
                 </h3>
-                <p className="text-xs text-slate-500">
-                  До нажатия кнопки подтверждения документ не добавляется в
-                  общую Базу знаний школы.
-                </p>
               </div>
               <button
                 type="button"
                 disabled={isCommittingStagedDoc}
                 onClick={() => setStagedDoc(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* File Metadata Summary */}
+            {/* Preview if image or video */}
+            {stagedDoc.parsed.dataUrl && stagedDoc.parsed.fileType === 'image' && (
+              <div className="h-56 bg-slate-950 rounded-xl flex items-center justify-center p-2 overflow-hidden border border-slate-200">
+                <img
+                  src={stagedDoc.parsed.dataUrl}
+                  alt={stagedDoc.parsed.name}
+                  className="max-h-full max-w-full object-contain"
+                />
+              </div>
+            )}
+
+            {/* Metadata Fields */}
             <div className="rounded-xl p-3.5 bg-slate-50 border border-slate-200/80 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <div>
                 <span className="text-slate-400 block">Файл</span>
                 <span className="font-semibold text-slate-900 break-all">
                   {stagedDoc.parsed.name}
                 </span>
-              </div>
-              <div>
-                <span className="text-slate-400 block">Формат и размер</span>
-                <span className="font-mono-tabular font-semibold text-slate-800 uppercase">
-                  .{stagedDoc.parsed.extension} ·{' '}
-                  {formatFileSizeRu(stagedDoc.parsed.sizeBytes)}
+                <span className="font-mono-tabular text-slate-500 block text-[10px] uppercase">
+                  .{stagedDoc.parsed.extension} · {formatFileSizeRu(stagedDoc.parsed.sizeBytes)}
                 </span>
               </div>
+
               <div>
                 <label className="text-slate-400 block mb-0.5">
-                  Целевой раздел Базы знаний
+                  Школа (изоляция)
+                </label>
+                <select
+                  value={stagedDoc.schoolId}
+                  onChange={(e) =>
+                    setStagedDoc((prev) =>
+                      prev
+                        ? { ...prev, schoolId: e.target.value as DocumentSchoolScope }
+                        : null
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900"
+                >
+                  <option value="kiberone">Только KIBERONE</option>
+                  <option value="renderia">Только RENDERIA</option>
+                  <option value="all">Обе школы (Общие материалы - ALL)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-0.5">
+                  Категория Базы знаний
                 </label>
                 <select
                   value={stagedDoc.categoryKey}
                   onChange={(e) =>
                     setStagedDoc((prev) =>
                       prev
-                        ? {
-                            ...prev,
-                            categoryKey: e.target.value as KnowledgeCategoryKey,
-                            confirmReplaceExisting: false,
-                          }
+                        ? { ...prev, categoryKey: e.target.value as KnowledgeCategoryKey }
                         : null
                     )
                   }
@@ -952,190 +1961,94 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               </div>
             </div>
 
-            {/* Warnings if partial or no text */}
-            {stagedDoc.parsed.warning && (
-              <div className="rounded-xl p-3.5 bg-amber-50 border border-amber-200 text-xs text-amber-950 flex items-start gap-2.5 leading-relaxed">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <div className="font-bold mb-0.5">
-                    Предупреждение при разборе файла
-                  </div>
-                  <div>{stagedDoc.parsed.warning}</div>
-                </div>
+            {/* Visual Role & Tags if Image/Brandbook */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Назначение материала (Visual Role)
+                </label>
+                <select
+                  value={stagedDoc.visualRole || 'other'}
+                  onChange={(e) =>
+                    setStagedDoc((prev) =>
+                      prev ? { ...prev, visualRole: e.target.value as VisualAssetRole } : null
+                    )
+                  }
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-900"
+                >
+                  <option value="logo">Логотип школы</option>
+                  <option value="brandbook">Брендбук / Руководство по стилю</option>
+                  <option value="reference">Референс оформления / Визуал</option>
+                  <option value="template">Шаблон макета</option>
+                  <option value="palette">Цветовая палитра</option>
+                  <option value="other">Обычный материал / документ</option>
+                </select>
               </div>
-            )}
 
-            {/* Editable Extracted Text */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-slate-800">
-                  Извлечённый текст документа (можно отредактировать перед
-                  сохранением):
-                </span>
-                <span className="font-mono-tabular text-slate-500">
-                  {stagedDoc.editableText.length} симв.
-                </span>
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Теги (через запятую)
+                </label>
+                <input
+                  type="text"
+                  value={stagedDoc.tags.join(', ')}
+                  onChange={(e) => {
+                    const parsedTags = e.target.value
+                      .split(',')
+                      .map((t) => t.trim().replace(/^#/, ''))
+                      .filter(Boolean);
+                    setStagedDoc((prev) => (prev ? { ...prev, tags: parsedTags } : null));
+                  }}
+                  placeholder="логотип, вконтакте, шапка, баннер"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900"
+                />
               </div>
-              <textarea
-                rows={9}
-                value={stagedDoc.editableText}
-                onChange={(e) =>
-                  setStagedDoc((prev) =>
-                    prev ? { ...prev, editableText: e.target.value } : null
-                  )
-                }
-                placeholder="Если файл не содержит текстового слоя, вы можете ввести ключевые сведения вручную или сохранить только карточку документа..."
-                className="w-full rounded-xl border border-slate-300 bg-white p-3 text-xs font-mono text-slate-800 leading-relaxed focus:outline-none focus:ring-2 focus:ring-[#00A8B5] resize-y"
-              />
             </div>
 
-            {/* Mode of adding to the Category (Prevents accidental overwrite!) */}
-            {(() => {
-              const existingCatText = (
-                knowledgeBase[stagedDoc.schoolId][stagedDoc.categoryKey] || ''
-              ).trim();
-              const catMeta = KNOWLEDGE_CATEGORIES.find(
-                (c) => c.key === stagedDoc.categoryKey
-              );
-              const hasTextToInsert =
-                stagedDoc.editableText.trim().length > 0;
-
-              return (
-                <div className="rounded-xl p-3.5 bg-slate-50 border border-slate-200/90 space-y-2.5 text-xs">
-                  <div className="font-semibold text-slate-900">
-                    Как добавить содержимое в раздел «{catMeta?.title}» (
-                    {SCHOOLS[stagedDoc.schoolId].name}):
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="kb-insert-mode"
-                        checked={stagedDoc.insertMode === 'append'}
-                        disabled={!hasTextToInsert}
-                        onChange={() =>
-                          setStagedDoc((prev) =>
-                            prev ? { ...prev, insertMode: 'append' } : null
-                          )
-                        }
-                        className="mt-0.5"
-                      />
-                      <span>
-                        <strong>Дополнить раздел</strong> — добавить проверенный
-                        текст документа к существующим материалам раздела без
-                        потери старых данных.
-                      </span>
-                    </label>
-
-                    <label className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="kb-insert-mode"
-                        checked={stagedDoc.insertMode === 'doc_only'}
-                        onChange={() =>
-                          setStagedDoc((prev) =>
-                            prev ? { ...prev, insertMode: 'doc_only' } : null
-                          )
-                        }
-                        className="mt-0.5"
-                      />
-                      <span>
-                        <strong>Только карточка документа</strong> — сохранить
-                        документ и его извлечённый текст в списке документов
-                        школы, не меняя текст поля раздела.
-                      </span>
-                    </label>
-
-                    <label className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="kb-insert-mode"
-                        checked={stagedDoc.insertMode === 'replace'}
-                        disabled={!hasTextToInsert}
-                        onChange={() =>
-                          setStagedDoc((prev) =>
-                            prev ? { ...prev, insertMode: 'replace' } : null
-                          )
-                        }
-                        className="mt-0.5"
-                      />
-                      <span>
-                        <strong>Заменить текст раздела</strong> — полностью
-                        заменить текст раздела «{catMeta?.title}» текстом этого
-                        документа.
-                      </span>
-                    </label>
-                  </div>
-
-                  {stagedDoc.insertMode === 'replace' &&
-                    existingCatText.length > 0 && (
-                      <div className="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-950 space-y-1.5">
-                        <div className="font-semibold">
-                          Внимание: раздел «{catMeta?.title}» уже содержит{' '}
-                          {existingCatText.length} симв.
-                        </div>
-                        <label className="flex items-center gap-2 cursor-pointer font-medium">
-                          <input
-                            type="checkbox"
-                            checked={stagedDoc.confirmReplaceExisting}
-                            onChange={(e) =>
-                              setStagedDoc((prev) =>
-                                prev
-                                  ? {
-                                      ...prev,
-                                      confirmReplaceExisting: e.target.checked,
-                                    }
-                                  : null
-                              )
-                            }
-                          />
-                          <span>
-                            Подтверждаю замену существующих материалов раздела
-                          </span>
-                        </label>
-                      </div>
-                    )}
+            {/* Extracted Text (editable) */}
+            {stagedDoc.parsed.fileType !== 'image' && stagedDoc.parsed.fileType !== 'video' && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-800">
+                    Извлечённый текст (будет доступен ИИ):
+                  </span>
+                  <span className="font-mono-tabular text-slate-500">
+                    {stagedDoc.editableText.length} симв.
+                  </span>
                 </div>
-              );
-            })()}
+                <textarea
+                  rows={6}
+                  value={stagedDoc.editableText}
+                  onChange={(e) =>
+                    setStagedDoc((prev) =>
+                      prev ? { ...prev, editableText: e.target.value } : null
+                    )
+                  }
+                  className="w-full rounded-xl border border-slate-300 bg-white p-3 text-xs font-mono text-slate-800 leading-relaxed focus:outline-none focus:ring-2 focus:ring-[#00A8B5] resize-y"
+                />
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
               <button
                 type="button"
                 disabled={isCommittingStagedDoc}
                 onClick={() => setStagedDoc(null)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 cursor-pointer"
               >
                 Отмена
               </button>
               <button
                 type="button"
-                disabled={
-                  isCommittingStagedDoc ||
-                  stagedDoc.parsed.status === 'error' ||
-                  (stagedDoc.insertMode === 'replace' &&
-                    (
-                      knowledgeBase[stagedDoc.schoolId][
-                        stagedDoc.categoryKey
-                      ] || ''
-                    ).trim().length > 0 &&
-                    !stagedDoc.confirmReplaceExisting)
-                }
+                disabled={isCommittingStagedDoc || stagedDoc.parsed.status === 'error'}
                 onClick={handleCommitStagedDocument}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 transition-colors shadow-xs"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 transition-colors shadow-xs cursor-pointer"
               >
-                <Check
-                  className={`w-4 h-4 ${
-                    stagedDoc.schoolId === 'renderia'
-                      ? 'text-[#84CC16]'
-                      : 'text-[#F5B800]'
-                  }`}
-                />
+                <Check className="w-4 h-4 text-[#00A8B5]" />
                 <span>
                   {isCommittingStagedDoc
                     ? 'Сохранение в IndexedDB...'
-                    : 'Подтвердить и добавить в Базу знаний'}
+                    : 'Подтвердить и сохранить в Базу знаний'}
                 </span>
               </button>
             </div>
@@ -1143,10 +2056,581 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         </div>
       )}
 
-      {/* MODAL 2: Inspect Saved Document Text */}
+      {/* ====================================================================
+          MODAL 2: FULL-SIZE VISUAL VIEWER & METADATA EDITOR
+         ==================================================================== */}
+      {fullSizeImageDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+          onClick={() => setFullSizeImageDoc(null)}
+        >
+          <div
+            className="w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white border border-slate-200 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`px-2 py-0.5 rounded text-xs font-bold ${
+                      fullSizeImageDoc.schoolId === 'all'
+                        ? 'bg-[#00A8B5] text-white'
+                        : fullSizeImageDoc.schoolId === 'renderia'
+                          ? 'bg-[#84CC16] text-slate-950'
+                          : 'bg-[#FFD700] text-slate-950'
+                    }`}
+                  >
+                    {getSchoolNameRu(fullSizeImageDoc.schoolId)}
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-blue-100 text-blue-800">
+                    {VISUAL_ROLE_LABELS_RU[fullSizeImageDoc.visualRole || 'other']?.label || 'Материал'}
+                  </span>
+                </div>
+                <h3 className="font-display font-bold text-lg text-slate-900 break-all">
+                  {fullSizeImageDoc.name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFullSizeImageDoc(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Large Image Container */}
+            <div className="w-full min-h-[280px] max-h-[500px] bg-slate-950 rounded-2xl flex items-center justify-center p-3 overflow-hidden border border-slate-300">
+              {fullSizeImageDoc.dataUrl ? (
+                <img
+                  src={fullSizeImageDoc.dataUrl}
+                  alt={fullSizeImageDoc.name}
+                  className="max-h-[480px] max-w-full object-contain"
+                />
+              ) : (
+                <div className="text-slate-500 text-xs">Изображение недоступно</div>
+              )}
+            </div>
+
+            {/* Editable Tags & Visual Role */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+              <div>
+                <label className="text-slate-500 font-semibold block mb-1">
+                  Назначение
+                </label>
+                <select
+                  value={fullSizeImageDoc.visualRole || 'other'}
+                  onChange={(e) =>
+                    handleUpdateDocMetadata(fullSizeImageDoc, {
+                      visualRole: e.target.value as VisualAssetRole,
+                    })
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-900"
+                >
+                  <option value="logo">Логотип школы</option>
+                  <option value="brandbook">Брендбук / Гайдлайн</option>
+                  <option value="reference">Референс оформления</option>
+                  <option value="template">Шаблон</option>
+                  <option value="palette">Палитра</option>
+                  <option value="other">Материал</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-500 font-semibold block mb-1">
+                  Школа (привязка)
+                </label>
+                <select
+                  value={fullSizeImageDoc.schoolId}
+                  onChange={(e) =>
+                    handleUpdateDocMetadata(fullSizeImageDoc, {
+                      schoolId: e.target.value as DocumentSchoolScope,
+                    })
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-900"
+                >
+                  <option value="kiberone">Только KIBERONE</option>
+                  <option value="renderia">Только RENDERIA</option>
+                  <option value="all">Обе школы (ALL)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-500 font-semibold block mb-1">
+                  Добавить тег
+                </label>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && tagInput.trim()) {
+                        e.preventDefault();
+                        const currentTags = fullSizeImageDoc.tags || [];
+                        const next = Array.from(new Set([...currentTags, tagInput.trim()]));
+                        handleUpdateDocMetadata(fullSizeImageDoc, { tags: next });
+                        setTagInput('');
+                      }
+                    }}
+                    placeholder="лого, шапка..."
+                    className="flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (tagInput.trim()) {
+                        const currentTags = fullSizeImageDoc.tags || [];
+                        const next = Array.from(new Set([...currentTags, tagInput.trim()]));
+                        handleUpdateDocMetadata(fullSizeImageDoc, { tags: next });
+                        setTagInput('');
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-slate-900 text-white font-semibold cursor-pointer"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Current Tags Chips */}
+            {fullSizeImageDoc.tags && fullSizeImageDoc.tags.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-slate-500 font-semibold">Теги:</span>
+                {fullSizeImageDoc.tags.map((t) => (
+                  <span
+                    key={t}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-medium"
+                  >
+                    <span>#{t}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = (fullSizeImageDoc.tags || []).filter((x) => x !== t);
+                        handleUpdateDocMetadata(fullSizeImageDoc, { tags: next });
+                      }}
+                      className="text-slate-400 hover:text-red-600"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = fullSizeImageDoc;
+                  setFullSizeImageDoc(null);
+                  setDocPendingDelete(target);
+                }}
+                className="text-red-600 hover:underline font-semibold cursor-pointer"
+              >
+                Удалить из библиотеки
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setFullSizeImageDoc(null)}
+                className="px-4 py-2 rounded-xl bg-slate-900 text-white font-semibold cursor-pointer"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          MODAL 3: VIDEO PLAYER & SNAPSHOT FRAME CAPTURER
+         ==================================================================== */}
+      {videoPlayerDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm"
+          onClick={() => setVideoPlayerDoc(null)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white border border-slate-200 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-display font-bold text-base text-slate-900">
+                  {videoPlayerDoc.name}
+                </h3>
+                <span className="text-xs text-slate-500 font-mono-tabular">
+                  {formatFileSizeRu(videoPlayerDoc.sizeBytes)} · Формат .
+                  {videoPlayerDoc.extension.toUpperCase()}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVideoPlayerDoc(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Video HTML5 Player */}
+            <div className="w-full bg-slate-950 rounded-2xl overflow-hidden flex items-center justify-center">
+              {videoPlayerDoc.dataUrl ? (
+                <video
+                  ref={videoPlayerRef}
+                  controls
+                  playsInline
+                  src={videoPlayerDoc.dataUrl}
+                  className="max-h-[460px] w-full"
+                />
+              ) : (
+                <div className="p-8 text-center text-slate-400 text-xs">
+                  Большие видеозаписи хранятся локально в IndexedDB без base64-дублирования.
+                </div>
+              )}
+            </div>
+
+            {/* Video Action Controls */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+              <button
+                type="button"
+                onClick={handleCaptureVideoFrameToVisualLibrary}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#00A8B5] text-white font-bold hover:bg-[#00929E] cursor-pointer shadow-xs"
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                <span>Захватить кадр в Визуальную библиотеку</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setVideoPlayerDoc(null)}
+                className="px-4 py-2 rounded-xl bg-slate-900 text-white font-semibold cursor-pointer"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          MODAL 4: PPTX SLIDE EXPLORER & EMBEDDED IMAGES EXTRACTOR
+         ==================================================================== */}
+      {pptxSlidesDoc && pptxSlidesDoc.slides && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+          onClick={() => setPptxSlidesDoc(null)}
+        >
+          <div
+            className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white border border-slate-200 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-display font-bold text-base text-slate-900">
+                  Презентация: {pptxSlidesDoc.name} ({pptxSlidesDoc.slides.length} сл.)
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Просмотр слайдов, заметок докладчика и встроенных иллюстраций
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPptxSlidesDoc(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Slide Index Tabs */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-2 border-b border-slate-200">
+              {pptxSlidesDoc.slides.map((s, idx) => (
+                <button
+                  key={s.slideNumber}
+                  type="button"
+                  onClick={() => setSelectedSlideIndex(idx)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-colors cursor-pointer ${
+                    selectedSlideIndex === idx
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  Слайд {s.slideNumber}
+                </button>
+              ))}
+            </div>
+
+            {/* Active Slide Body */}
+            {(() => {
+              const slide = pptxSlidesDoc.slides[selectedSlideIndex];
+              if (!slide) return null;
+              return (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                    <div className="text-xs font-bold text-slate-900">
+                      Текст слайда #{slide.slideNumber}:
+                    </div>
+                    <pre className="text-xs font-mono text-slate-800 whitespace-pre-wrap leading-relaxed max-h-52 overflow-y-auto">
+                      {slide.text || '(На этом слайде нет текстовых блоков)'}
+                    </pre>
+
+                    {slide.notes && (
+                      <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-950">
+                        <strong>Заметки:</strong> {slide.notes}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Slide Images */}
+                  {slide.imageUrls && slide.imageUrls.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-xs font-bold text-slate-900">
+                        Иллюстрации слайда #{slide.slideNumber} ({slide.imageUrls.length}):
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {slide.imageUrls.map((url, i) => (
+                          <div
+                            key={i}
+                            className="rounded-xl border border-slate-200 overflow-hidden bg-slate-950 p-2 flex flex-col justify-between gap-2"
+                          >
+                            <img
+                              src={url}
+                              alt={`Слайд ${slide.slideNumber} img ${i}`}
+                              className="max-h-36 max-w-full object-contain mx-auto"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSavePptxSlideImageToLibrary(
+                                  {
+                                    id: `img-${slide.slideNumber}-${i}`,
+                                    name: `Иллюстрация со слайда ${slide.slideNumber}`,
+                                    dataUrl: url,
+                                    mimeType: 'image/png',
+                                  },
+                                  slide.slideNumber
+                                )
+                              }
+                              className="w-full py-1 text-[11px] font-bold rounded-lg bg-white/90 hover:bg-white text-slate-900 cursor-pointer shadow-xs"
+                            >
+                              В библиотеку
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="flex items-center justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setPptxSlidesDoc(null)}
+                className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold cursor-pointer"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          MODAL 5: ZIP ARCHIVE EXPLORER & UNPACKER
+         ==================================================================== */}
+      {zipExplorerState && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+          onClick={() => {
+            if (!isUnpackingZip) setZipExplorerState(null);
+          }}
+        >
+          <div
+            className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white border border-slate-200 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
+                  <Archive className="w-5 h-5 text-purple-600" />
+                  <span>Содержимое архива: {zipExplorerState.file.name}</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Архив открыт безопасно без исполнения файлов. Выберите, какие материалы добавить в Базу знаний.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isUnpackingZip}
+                onClick={() => setZipExplorerState(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Target Settings */}
+            <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+              <div>
+                <label className="text-slate-500 font-semibold block mb-1">
+                  Целевая школа
+                </label>
+                <select
+                  value={zipExplorerState.targetSchool}
+                  onChange={(e) =>
+                    setZipExplorerState((prev) =>
+                      prev
+                        ? { ...prev, targetSchool: e.target.value as DocumentSchoolScope }
+                        : null
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-900"
+                >
+                  <option value="kiberone">Только KIBERONE</option>
+                  <option value="renderia">Только RENDERIA</option>
+                  <option value="all">Обе школы (ALL)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-500 font-semibold block mb-1">
+                  Целевой раздел
+                </label>
+                <select
+                  value={zipExplorerState.targetCategory}
+                  onChange={(e) =>
+                    setZipExplorerState((prev) =>
+                      prev
+                        ? { ...prev, targetCategory: e.target.value as KnowledgeCategoryKey }
+                        : null
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-900"
+                >
+                  {KNOWLEDGE_CATEGORIES.map((cat) => (
+                    <option key={cat.key} value={cat.key}>
+                      {cat.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Entries List with Checkboxes */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-slate-600 px-1">
+                <span>
+                  Файлов в архиве: <strong>{zipExplorerState.entries.length}</strong> (выбрано{' '}
+                  <strong>{zipExplorerState.selectedPaths.size}</strong>)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allSupported = zipExplorerState.entries
+                      .filter((e) => e.isSupported)
+                      .map((e) => e.path);
+                    setZipExplorerState((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            selectedPaths:
+                              prev.selectedPaths.size === allSupported.length
+                                ? new Set()
+                                : new Set(allSupported),
+                          }
+                        : null
+                    );
+                  }}
+                  className="text-[#00A8B5] font-semibold hover:underline"
+                >
+                  {zipExplorerState.selectedPaths.size === zipExplorerState.entries.length
+                    ? 'Снять выбор'
+                    : 'Выбрать все поддерживаемые'}
+                </button>
+              </div>
+
+              <div className="max-h-64 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
+                {zipExplorerState.entries.map((entry) => {
+                  const isChecked = zipExplorerState.selectedPaths.has(entry.path);
+                  return (
+                    <label
+                      key={entry.path}
+                      className="flex items-center justify-between p-2.5 hover:bg-slate-50 cursor-pointer text-xs"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            const next = new Set(zipExplorerState.selectedPaths);
+                            if (e.target.checked) next.add(entry.path);
+                            else next.delete(entry.path);
+                            setZipExplorerState((prev) =>
+                              prev ? { ...prev, selectedPaths: next } : null
+                            );
+                          }}
+                          className="rounded text-[#00A8B5]"
+                        />
+                        <span className="font-semibold text-slate-900 truncate" title={entry.path}>
+                          {entry.name}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 font-mono-tabular text-slate-500 text-[11px]">
+                        <span>{formatFileSizeRu(entry.sizeBytes)}</span>
+                        <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 uppercase font-bold text-[10px]">
+                          .{entry.extension}
+                        </span>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100 text-xs">
+              <button
+                type="button"
+                disabled={isUnpackingZip}
+                onClick={() => setZipExplorerState(null)}
+                className="px-4 py-2 rounded-xl text-slate-700 bg-slate-100 hover:bg-slate-200 cursor-pointer font-semibold"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                disabled={isUnpackingZip || zipExplorerState.selectedPaths.size === 0}
+                onClick={handleUnpackSelectedZip}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white font-bold hover:bg-slate-800 disabled:opacity-40 transition-colors cursor-pointer shadow-xs"
+              >
+                {isUnpackingZip ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-[#00A8B5]" />
+                    <span>Распаковка и анализ файлов...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 text-[#00A8B5]" />
+                    <span>Распаковать выбранные ({zipExplorerState.selectedPaths.size})</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          MODAL 6: INSPECT DOCUMENT TEXT (TXT / PDF / DOCX)
+         ==================================================================== */}
       {inspectedDoc && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/55 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
           onClick={() => setInspectedDoc(null)}
         >
           <div
@@ -1158,17 +2642,18 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 <div className="flex items-center gap-2 flex-wrap">
                   <span
                     className={`px-2 py-0.5 rounded text-xs font-bold ${
-                      inspectedDoc.schoolId === 'kiberone'
-                        ? 'bg-[#F5B800] text-slate-950'
-                        : 'bg-[#84CC16] text-slate-950'
+                      inspectedDoc.schoolId === 'all'
+                        ? 'bg-[#00A8B5] text-white'
+                        : inspectedDoc.schoolId === 'kiberone'
+                          ? 'bg-[#FFD700] text-slate-950'
+                          : 'bg-[#84CC16] text-slate-950'
                     }`}
                   >
-                    {SCHOOLS[inspectedDoc.schoolId].name}
+                    {getSchoolNameRu(inspectedDoc.schoolId)}
                   </span>
                   {renderStatusBadge(inspectedDoc.status)}
                   <span className="text-xs text-slate-500 font-mono-tabular">
-                    {formatFileSizeRu(inspectedDoc.sizeBytes)} ·{' '}
-                    {inspectedDoc.createdAt}
+                    {formatFileSizeRu(inspectedDoc.sizeBytes)} · {inspectedDoc.createdAt}
                   </span>
                 </div>
                 <h3 className="font-display font-bold text-base text-slate-900 break-all">
@@ -1178,7 +2663,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               <button
                 type="button"
                 onClick={() => setInspectedDoc(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1208,7 +2693,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                   setInspectedDoc(null);
                   setDocPendingDelete(target);
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-50 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Удалить документ</span>
@@ -1216,7 +2701,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               <button
                 type="button"
                 onClick={() => setInspectedDoc(null)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800"
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 cursor-pointer"
               >
                 Закрыть
               </button>
@@ -1225,10 +2710,12 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         </div>
       )}
 
-      {/* MODAL 3: Confirm Deleting a Saved Document */}
+      {/* ====================================================================
+          MODAL 7: CONFIRM DELETION
+         ==================================================================== */}
       {docPendingDelete && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/55 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
           onClick={() => {
             if (!isDeletingDoc) setDocPendingDelete(null);
           }}
@@ -1243,19 +2730,16 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               </div>
               <div>
                 <h3 className="font-display font-bold text-sm text-slate-900">
-                  Удалить документ из списка?
+                  Удалить материал из Базы знаний?
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5 break-all">
-                  «{docPendingDelete.name}» (
-                  {SCHOOLS[docPendingDelete.schoolId].name})
+                  «{docPendingDelete.name}» ({getSchoolNameRu(docPendingDelete.schoolId)})
                 </p>
               </div>
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              Карточка документа будет удалена из таблицы{' '}
-              <code>documents</code> в IndexedDB. Остальные документы и
-              сохранённый текст разделов Базы знаний останутся без изменений.
+              Карточка документа и его медиа-данные будут удалены из локального хранилища IndexedDB.
             </p>
 
             <div className="flex items-center justify-end gap-2 pt-1">
@@ -1263,7 +2747,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 type="button"
                 disabled={isDeletingDoc}
                 onClick={() => setDocPendingDelete(null)}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200"
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 cursor-pointer"
               >
                 Отмена
               </button>
@@ -1271,10 +2755,10 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 type="button"
                 disabled={isDeletingDoc}
                 onClick={handleConfirmDeleteDoc}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>{isDeletingDoc ? 'Удаление...' : 'Удалить документ'}</span>
+                <span>{isDeletingDoc ? 'Удаление...' : 'Удалить'}</span>
               </button>
             </div>
           </div>

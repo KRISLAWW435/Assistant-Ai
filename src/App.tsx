@@ -38,6 +38,7 @@ import {
 import {
   AGENT_MODES,
   createEmptyKnowledgeBase,
+  getSchoolNameRu,
   KNOWLEDGE_CATEGORIES,
   SCHOOLS,
 } from './config/schoolsAndModes';
@@ -1635,7 +1636,7 @@ export default function App() {
           ]
         : [];
 
-    const { sendableDocuments, skippedNoTextDocuments } =
+    const { sendableDocuments, sendableImages: docImages, skippedNoTextDocuments } =
       documentProvider.prepareSelectedDocumentsForApi({
         draftAttachment: isLinkedImage ? null : linkedAttachment,
         dialogueAttachments: baseSession.attachments || [],
@@ -1646,6 +1647,11 @@ export default function App() {
         activeSchool: targetSchool,
       });
 
+    const combinedImages = [
+      ...selectedImages,
+      ...(docImages || []),
+    ];
+
     const usedContextSummary: string[] = [
       `Школа: ${schoolCfg.name}`,
       `Роль: ${modeCfg.shortTitle}`,
@@ -1655,8 +1661,8 @@ export default function App() {
         `База знаний ${schoolCfg.name} (${kbContext.length} разд.)`
       );
     }
-    for (const img of selectedImages) {
-      usedContextSummary.push(`Изображение: «${img.name}»`);
+    for (const img of combinedImages) {
+      usedContextSummary.push(`Визуальный материал: «${img.name}»`);
     }
     for (const doc of sendableDocuments) {
       usedContextSummary.push(`Документ: «${doc.name}»`);
@@ -1809,7 +1815,7 @@ export default function App() {
         sessionId: initialUpdatedSession.id,
         messages: historyForApi,
         selectedDocuments: sendableDocuments,
-        selectedImages,
+        selectedImages: combinedImages,
         knowledgeBaseContext: kbContext,
         externalApiConsentConfirmed:
           contextOptions.externalApiConsentConfirmed,
@@ -2073,8 +2079,8 @@ export default function App() {
         doc.categoryKey;
       setKnowledgeBanner(
         categoryUpdate
-          ? `Документ «${doc.name}» (${SCHOOLS[doc.schoolId].name}) успешно сохранён в IndexedDB, а раздел «${catTitle}» обновлён.`
-          : `Документ «${doc.name}» (${SCHOOLS[doc.schoolId].name}) сохранён в списке документов школы (раздел «${catTitle}»).`
+          ? `Документ «${doc.name}» (${getSchoolNameRu(doc.schoolId)}) успешно сохранён в IndexedDB, а раздел «${catTitle}» обновлён.`
+          : `Документ «${doc.name}» (${getSchoolNameRu(doc.schoolId)}) сохранён в списке документов школы (раздел «${catTitle}»).`
       );
       setStorageError(null);
       return true;
@@ -2096,7 +2102,7 @@ export default function App() {
       setUploadedDocuments((prev) => prev.filter((d) => d.id !== docId));
       if (target) {
         setKnowledgeBanner(
-          `Документ «${target.name}» удалён из хранилища школы ${SCHOOLS[target.schoolId].name}.`
+          `Документ «${target.name}» удалён из хранилища (${getSchoolNameRu(target.schoolId)}).`
         );
       }
       setStorageError(null);

@@ -45,12 +45,50 @@ export type DocumentProcessingStatus =
   | 'pending'
   | 'verified';
 
+export type DocumentSchoolScope = SchoolId | 'all';
+
+export type VisualAssetRole =
+  | 'logo'
+  | 'brandbook'
+  | 'reference'
+  | 'template'
+  | 'palette'
+  | 'other';
+
+export type KnowledgeFileType =
+  | 'document'
+  | 'image'
+  | 'presentation'
+  | 'archive'
+  | 'video';
+
+export interface VisualColorSample {
+  hex: string;
+  label?: string;
+}
+
+export interface ExtractedSlideItem {
+  slideNumber: number;
+  text: string;
+  imageUrls?: string[];
+  notes?: string;
+}
+
+export interface ExtractedDocumentImage {
+  id: string;
+  name: string;
+  dataUrl: string;
+  mimeType: string;
+  sourceSlide?: number;
+  visualRole?: VisualAssetRole;
+}
+
 export interface UploadedDocumentRecord {
   id: string;
   name: string;
   extension: string;
   sizeBytes: number;
-  schoolId: SchoolId;
+  schoolId: DocumentSchoolScope;
   categoryKey: KnowledgeCategoryKey;
   status: DocumentProcessingStatus;
   statusMessage?: string;
@@ -60,6 +98,20 @@ export interface UploadedDocumentRecord {
   createdAtMs?: number;
   verifiedByManager: boolean;
   pageCount?: number;
+  fileType?: KnowledgeFileType;
+  mimeType?: string;
+  tags?: string[];
+  description?: string;
+  visualRole?: VisualAssetRole;
+  dataUrl?: string;
+  thumbnailUrl?: string;
+  slides?: ExtractedSlideItem[];
+  colorPalette?: VisualColorSample[];
+  extractedImages?: ExtractedDocumentImage[];
+  durationSec?: number;
+  videoWidth?: number;
+  videoHeight?: number;
+  archiveFilesCount?: number;
 }
 
 export interface ChatAttachment {

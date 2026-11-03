@@ -244,7 +244,10 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     [currentSession]
   );
   const schoolDocuments = useMemo(
-    () => uploadedDocuments.filter((d) => d.schoolId === activeSchool),
+    () =>
+      uploadedDocuments.filter(
+        (d) => d.schoolId === activeSchool || d.schoolId === 'all'
+      ),
     [uploadedDocuments, activeSchool]
   );
 
@@ -260,35 +263,45 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     setShowDocPickerPopover(false);
   }, [activeSchool, currentSession?.id]);
 
-  // Determine which documents with extracted text are slated to be sent in this request
+  // Determine which documents/images are slated to be sent in this request
   const selectedDocNamesWithText = useMemo(() => {
     const names: string[] = [];
-    if (
+    const isDraftSendable =
       draftAttachment &&
-      (draftAttachment.extractedText || '').trim().length > 0 &&
-      draftAttachment.status !== 'error'
-    ) {
+      (((draftAttachment.extractedText || '').trim().length > 0 &&
+        draftAttachment.status !== 'error') ||
+        Boolean(
+          draftAttachment.dataUrl &&
+            (draftAttachment.mimeType?.startsWith('image/') ||
+              ['png', 'jpg', 'jpeg', 'webp'].includes(draftAttachment.extension))
+        ));
+
+    if (draftAttachment && isDraftSendable) {
       names.push(draftAttachment.name);
     }
     const selDialSet = new Set(selectedDialogueAttachmentIds);
     for (const att of dialogueAttachments) {
-      if (
-        selDialSet.has(att.id) &&
-        (att.extractedText || '').trim().length > 0 &&
-        att.status !== 'error' &&
-        !names.includes(att.name)
-      ) {
+      const isSendable =
+        ((att.extractedText || '').trim().length > 0 && att.status !== 'error') ||
+        Boolean(
+          att.dataUrl &&
+            (att.mimeType?.startsWith('image/') ||
+              ['png', 'jpg', 'jpeg', 'webp'].includes(att.extension))
+        );
+      if (selDialSet.has(att.id) && isSendable && !names.includes(att.name)) {
         names.push(att.name);
       }
     }
     const selSchoolSet = new Set(selectedSchoolDocumentIds);
     for (const doc of schoolDocuments) {
-      if (
-        selSchoolSet.has(doc.id) &&
-        (doc.extractedText || '').trim().length > 0 &&
-        doc.status !== 'error' &&
-        !names.includes(doc.name)
-      ) {
+      const isSendable =
+        ((doc.extractedText || '').trim().length > 0 && doc.status !== 'error') ||
+        Boolean(
+          doc.dataUrl &&
+            (doc.fileType === 'image' ||
+              ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(doc.extension))
+        );
+      if (selSchoolSet.has(doc.id) && isSendable && !names.includes(doc.name)) {
         names.push(doc.name);
       }
     }
@@ -302,6 +315,28 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   ]);
 
   const hasSelectedDocsWithText = selectedDocNamesWithText.length > 0;
+
+  const hasSelectedImages = useMemo(() => {
+    if (
+      draftAttachment?.dataUrl &&
+      (draftAttachment.mimeType?.startsWith('image/') ||
+        ['png', 'jpg', 'jpeg', 'webp'].includes(draftAttachment.extension))
+    ) {
+      return true;
+    }
+    const selSchoolSet = new Set(selectedSchoolDocumentIds);
+    for (const doc of schoolDocuments) {
+      if (
+        selSchoolSet.has(doc.id) &&
+        doc.dataUrl &&
+        (doc.fileType === 'image' ||
+          ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(doc.extension))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }, [draftAttachment, selectedSchoolDocumentIds, schoolDocuments]);
 
   const primaryProviderForDocs: AIProviderId =
     providerSelection === 'auto' ? 'gemini' : providerSelection;
@@ -491,11 +526,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     );
 
     if (
-      isDraftImage &&
+      (isDraftImage || hasSelectedImages) &&
       (providerSelection === 'ollama' || providerSelection === 'openrouter')
     ) {
       setAttachmentNotice(
-        `Выбранный провайдер (${PROVIDER_LABELS_RU[providerSelection]}) не поддерживает анализ изображений. Пожалуйста, переключите провайдера на «Автовыбор ИИ» или «Google Gemini Free».`
+        `Выбранный провайдер (${PROVIDER_LABELS_RU[providerSelection]}) не поддерживает мультимодальный анализ изображений. Пожалуйста, переключите провайдера на «Автовыбор ИИ» или «Google Gemini Free».`
       );
       return;
     }
@@ -1598,21 +1633,27 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                           </div>
                           <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
                             {dialogueAttachments.map((att) => {
+                              const isImg = Boolean(
+                                att.dataUrl &&
+                                  (att.mimeType?.startsWith('image/') ||
+                                    ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(att.extension))
+                              );
                               const hasText =
                                 (att.extractedText || '').trim().length > 0 &&
                                 att.status !== 'error';
+                              const isSendable = hasText || isImg;
                               return (
                                 <label
                                   key={att.id}
                                   className={`flex items-start gap-2 p-1.5 rounded-lg border text-[11px] ${
-                                    hasText
+                                    isSendable
                                       ? 'border-slate-200/80 hover:bg-slate-50 cursor-pointer'
                                       : 'border-slate-100 bg-slate-50/60 text-slate-400 cursor-not-allowed'
                                   }`}
                                 >
                                   <input
                                     type="checkbox"
-                                    disabled={!hasText}
+                                    disabled={!isSendable}
                                     checked={selectedDialogueAttachmentIds.includes(
                                       att.id
                                     )}
@@ -1628,9 +1669,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                       {att.name}
                                     </div>
                                     <div className="text-[10px] text-slate-500">
-                                      {hasText
-                                        ? `${att.extractedText.length.toLocaleString('ru-RU')} симв.`
-                                        : 'Нет текстового слоя (не отправляется)'}
+                                      {isImg
+                                        ? 'Изображение (мультимодальный анализ Gemini)'
+                                        : hasText
+                                          ? `${att.extractedText.length.toLocaleString('ru-RU')} симв.`
+                                          : 'Нет текстового слоя (не отправляется)'}
                                     </div>
                                   </div>
                                 </label>
@@ -1642,27 +1685,35 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
                       {schoolDocuments.length > 0 && (
                         <div className="space-y-1.5">
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                            Документы школы {schoolConfig.name} (
-                            {schoolDocuments.length})
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+                            <span>Материалы Базы знаний ({schoolDocuments.length})</span>
+                            <span className="text-[9px] lowercase font-normal text-slate-400">
+                              {schoolConfig.name} + общие
+                            </span>
                           </div>
-                          <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
+                          <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
                             {schoolDocuments.map((doc) => {
+                              const isImg = Boolean(
+                                doc.dataUrl &&
+                                  (doc.fileType === 'image' ||
+                                    ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(doc.extension))
+                              );
                               const hasText =
                                 (doc.extractedText || '').trim().length > 0 &&
                                 doc.status !== 'error';
+                              const isSendable = hasText || isImg;
                               return (
                                 <label
                                   key={doc.id}
                                   className={`flex items-start gap-2 p-1.5 rounded-lg border text-[11px] ${
-                                    hasText
+                                    isSendable
                                       ? 'border-slate-200/80 hover:bg-slate-50 cursor-pointer'
                                       : 'border-slate-100 bg-slate-50/60 text-slate-400 cursor-not-allowed'
                                   }`}
                                 >
                                   <input
                                     type="checkbox"
-                                    disabled={!hasText}
+                                    disabled={!isSendable}
                                     checked={selectedSchoolDocumentIds.includes(
                                       doc.id
                                     )}
@@ -1672,13 +1723,35 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                     className="mt-0.5 rounded border-slate-300"
                                   />
                                   <div className="min-w-0 flex-1">
-                                    <div className="font-medium text-slate-800 truncate">
-                                      {doc.name}
+                                    <div className="font-medium text-slate-800 truncate flex items-center gap-1">
+                                      <span className="truncate">{doc.name}</span>
+                                      {doc.schoolId === 'all' && (
+                                        <span className="shrink-0 px-1 py-0.2 rounded text-[9px] bg-slate-100 text-slate-600 font-medium">
+                                          обе
+                                        </span>
+                                      )}
+                                      {doc.visualRole && (
+                                        <span className="shrink-0 px-1 py-0.2 rounded text-[9px] bg-[#00A8B5]/10 text-[#00A8B5] font-semibold">
+                                          {doc.visualRole === 'logo'
+                                            ? 'лого'
+                                            : doc.visualRole === 'brandbook'
+                                              ? 'брендбук'
+                                              : doc.visualRole === 'template'
+                                                ? 'шаблон'
+                                                : doc.visualRole === 'reference'
+                                                  ? 'реф'
+                                                  : doc.visualRole}
+                                        </span>
+                                      )}
                                     </div>
                                     <div className="text-[10px] text-slate-500">
-                                      {hasText
-                                        ? `${doc.extractedText.length.toLocaleString('ru-RU')} симв.`
-                                        : 'Нет текстового слоя'}
+                                      {isImg
+                                        ? 'Визуальный материал (анализ Gemini)'
+                                        : doc.slides && doc.slides.length > 0
+                                          ? `Презентация (${doc.slides.length} сл., ${(doc.extractedText || '').length} симв.)`
+                                          : hasText
+                                            ? `${(doc.extractedText || '').length.toLocaleString('ru-RU')} симв.`
+                                            : 'Нет текстового слоя'}
                                     </div>
                                   </div>
                                 </label>

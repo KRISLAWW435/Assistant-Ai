@@ -31,6 +31,11 @@ export const SCHOOLS: Record<SchoolId, SchoolConfig> = {
   },
 };
 
+export function getSchoolNameRu(schoolId: SchoolId | 'all'): string {
+  if (schoolId === 'all') return 'Обе школы (KIBERone & Renderia)';
+  return SCHOOLS[schoolId]?.name || schoolId;
+}
+
 export const KNOWLEDGE_CATEGORIES: KnowledgeCategoryMeta[] = [
   {
     key: 'description',

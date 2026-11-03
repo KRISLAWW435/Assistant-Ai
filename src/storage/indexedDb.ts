@@ -1624,7 +1624,7 @@ export function validateBackupArchiveJson(
     if (typeof d.id !== 'string' || !d.id.trim()) {
       throw new Error(`У документа (индекс ${i}) отсутствует обязательный id.`);
     }
-    if (d.schoolId !== 'kiberone' && d.schoolId !== 'renderia') {
+    if (d.schoolId !== 'kiberone' && d.schoolId !== 'renderia' && d.schoolId !== 'all') {
       throw new Error(`У документа «${d.id}» недопустимый schoolId.`);
     }
     if (!VALID_CATEGORIES.has(d.categoryKey as KnowledgeCategoryKey)) {
@@ -1653,6 +1653,19 @@ export function validateBackupArchiveJson(
         typeof d.createdAtMs === 'number' ? d.createdAtMs : Date.now(),
       verifiedByManager: Boolean(d.verifiedByManager),
       pageCount: typeof d.pageCount === 'number' ? d.pageCount : undefined,
+      fileType: typeof d.fileType === 'string' ? (d.fileType as any) : undefined,
+      mimeType: typeof d.mimeType === 'string' ? d.mimeType : undefined,
+      tags: Array.isArray(d.tags) ? d.tags.filter((t) => typeof t === 'string') : undefined,
+      description: typeof d.description === 'string' ? d.description : undefined,
+      visualRole: typeof d.visualRole === 'string' ? (d.visualRole as any) : undefined,
+      dataUrl: typeof d.dataUrl === 'string' ? d.dataUrl : undefined,
+      thumbnailUrl: typeof d.thumbnailUrl === 'string' ? d.thumbnailUrl : undefined,
+      slides: Array.isArray(d.slides) ? d.slides : undefined,
+      colorPalette: Array.isArray(d.colorPalette) ? d.colorPalette : undefined,
+      extractedImages: Array.isArray(d.extractedImages) ? d.extractedImages : undefined,
+      durationSec: typeof d.durationSec === 'number' ? d.durationSec : undefined,
+      videoWidth: typeof d.videoWidth === 'number' ? d.videoWidth : undefined,
+      videoHeight: typeof d.videoHeight === 'number' ? d.videoHeight : undefined,
     });
   }
 
