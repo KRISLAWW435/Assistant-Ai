@@ -545,12 +545,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'aiConnections:getCloudflareImageConfig',
-    async (): Promise<{
-      configured: boolean;
-      accountId: string;
-      maskedApiToken: string;
-      hasSavedToken: boolean;
-    }> => {
+    async () => {
       const vault = readVault();
       let accountId = '';
       let apiToken = '';
@@ -577,6 +572,11 @@ function registerIpcHandlers(): void {
         accountId,
         maskedApiToken: hasSavedToken ? maskApiKey(apiToken) : 'Не настроен',
         hasSavedToken,
+        tokenStatusLabel: hasSavedToken ? 'Токен сохранён' : 'Не настроен',
+        storageMode: 'electron_safe_storage' as const,
+        persistentEncryptedAvailable: true,
+        storageDescriptionRu:
+          'Electron Vault (ai-connections-vault.json) с шифрованием ОС safeStorage.',
       };
     }
   );
@@ -586,12 +586,7 @@ function registerIpcHandlers(): void {
     async (
       _event,
       input: { accountId: string; rawApiToken?: string }
-    ): Promise<{
-      configured: boolean;
-      accountId: string;
-      maskedApiToken: string;
-      hasSavedToken: boolean;
-    }> => {
+    ) => {
       const vault = readVault();
       let existingAccountId = '';
       let existingApiToken = '';
@@ -631,6 +626,11 @@ function registerIpcHandlers(): void {
         accountId: cleanAccountId,
         maskedApiToken: maskApiKey(cleanApiToken),
         hasSavedToken: true,
+        tokenStatusLabel: 'Токен сохранён',
+        storageMode: 'electron_safe_storage' as const,
+        persistentEncryptedAvailable: true,
+        storageDescriptionRu:
+          'Electron Vault (ai-connections-vault.json) с шифрованием ОС safeStorage.',
       };
     }
   );

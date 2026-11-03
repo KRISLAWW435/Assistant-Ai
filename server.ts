@@ -323,19 +323,13 @@ export function setServerOpenRouterKey(key: string): void {
 
 export function setServerCloudflareCredentials(
   accountId: string,
-  apiToken: string
+  apiToken?: string
 ): void {
   const cleanAccount = (accountId || '').trim();
   const cleanToken = (apiToken || '').trim();
-  if (cleanAccount) {
-    process.env.CLOUDFLARE_ACCOUNT_ID = cleanAccount;
-  }
-  if (cleanToken) {
-    process.env.CLOUDFLARE_API_TOKEN = cleanToken;
-  }
   imageProviderRegistry
     .getCloudflareAdapter()
-    .setCredentials(cleanAccount, cleanToken);
+    .setCredentials(cleanAccount, cleanToken || undefined);
 }
 
 function getOpenRouterApiKey(): string {
@@ -2761,6 +2755,46 @@ export async function startServer(
         err instanceof Error ? err.message : 'Ошибка проверки провайдеров генерации';
       res.status(500).json({ error: msg });
     }
+  });
+
+  // Cloudflare Workers AI Connection Management Endpoints (Browser & Server API)
+  app.get('/api/ai/cloudflare-config', (_req: Request, res: Response) => {
+    const safeConfig = imageProviderRegistry
+      .getCloudflareAdapter()
+      .getSafeConnectionConfig();
+    res.json(safeConfig);
+  });
+
+  app.post('/api/ai/cloudflare-config', (req: Request, res: Response) => {
+    const { accountId, rawApiToken } = req.body || {};
+    const cleanAccount =
+      typeof accountId === 'string' ? accountId.trim() : '';
+    const cleanToken =
+      typeof rawApiToken === 'string' ? rawApiToken.trim() : '';
+
+    const cfAdapter = imageProviderRegistry.getCloudflareAdapter();
+    const currentSafe = cfAdapter.getSafeConnectionConfig();
+
+    if (!cleanAccount || cleanAccount.length < 10) {
+      return res.status(400).json({
+        error: {
+          message:
+            'Укажите корректный Cloudflare Account ID (не менее 10 символов).',
+        },
+      });
+    }
+
+    if (!currentSafe.hasSavedToken && (!cleanToken || cleanToken.length < 10)) {
+      return res.status(400).json({
+        error: {
+          message:
+            'Укажите корректный Cloudflare API Token (не менее 10 символов).',
+        },
+      });
+    }
+
+    setServerCloudflareCredentials(cleanAccount, cleanToken || undefined);
+    res.json(cfAdapter.getSafeConnectionConfig());
   });
 
   // Designer Visual Generation & Regional AI Editing Endpoint (Strictly Free API via ImageProviderRegistry)

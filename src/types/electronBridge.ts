@@ -30,6 +30,13 @@ export interface CloudflareImageConnectionConfig {
   accountId: string;
   maskedApiToken: string;
   hasSavedToken: boolean;
+  tokenStatusLabel?: string;
+  storageMode?:
+    | 'electron_safe_storage'
+    | 'server_encrypted_file'
+    | 'server_encrypted_memory';
+  persistentEncryptedAvailable?: boolean;
+  storageDescriptionRu?: string;
 }
 
 export interface SaveCloudflareImageConfigInput {

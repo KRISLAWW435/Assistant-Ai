@@ -1,3 +1,7 @@
+import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import type {
   DesignAspectRatio,
   DesignQualityMode,
@@ -11,6 +15,7 @@ import type {
   ImageProvidersRegistryState,
   SchoolId,
 } from '../types/assistant';
+import type { CloudflareImageConnectionConfig } from '../types/electronBridge';
 
 export interface ImageGenerationAdapterRequest {
   schoolId: SchoolId;
@@ -113,6 +118,100 @@ function maskSecretToken(token: string): string {
   return `${trimmed.slice(0, 4)}••••${trimmed.slice(-4)}`;
 }
 
+function sanitizeSecretText(text: string, secret: string): string {
+  if (!text) return '';
+  const cleanSecret = (secret || '').trim();
+  if (!cleanSecret || cleanSecret.length < 6) return text;
+  return text.split(cleanSecret).join('[REDACTED_TOKEN]');
+}
+
+interface EncryptedSecretEnvelope {
+  ivBase64: string;
+  authTagBase64: string;
+  ciphertextBase64: string;
+}
+
+interface PersistedServerCloudflareVault {
+  accountId: string;
+  encryptedToken: EncryptedSecretEnvelope;
+  updatedAtIso: string;
+}
+
+const EPHEMERAL_SERVER_VAULT_KEY: Buffer = crypto.randomBytes(32);
+const SERVER_VAULT_DIR = path.join(
+  os.homedir(),
+  '.config',
+  'kiberone-renderia-assistant'
+);
+const SERVER_VAULT_FILE_PATH = path.join(
+  SERVER_VAULT_DIR,
+  'cloudflare-vault.enc.json'
+);
+
+function getConfiguredMasterKey(): Buffer | null {
+  const rawMaster = (process.env.SERVER_VAULT_MASTER_KEY || '').trim();
+  if (rawMaster.length >= 16) {
+    return crypto.scryptSync(
+      rawMaster,
+      'kiberone-renderia-cf-vault-salt-v1',
+      32
+    );
+  }
+  return null;
+}
+
+function getActiveEncryptionKey(): {
+  key: Buffer;
+  isPersistentFileSupported: boolean;
+} {
+  const masterKey = getConfiguredMasterKey();
+  if (masterKey) {
+    return { key: masterKey, isPersistentFileSupported: true };
+  }
+  return {
+    key: EPHEMERAL_SERVER_VAULT_KEY,
+    isPersistentFileSupported: false,
+  };
+}
+
+function encryptSecretAes256Gcm(
+  plainText: string,
+  key: Buffer
+): EncryptedSecretEnvelope {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(plainText, 'utf8'),
+    cipher.final(),
+  ]);
+  const authTag = cipher.getAuthTag();
+  return {
+    ivBase64: iv.toString('base64'),
+    authTagBase64: authTag.toString('base64'),
+    ciphertextBase64: encrypted.toString('base64'),
+  };
+}
+
+function decryptSecretAes256Gcm(
+  envelope: EncryptedSecretEnvelope,
+  key: Buffer
+): string {
+  try {
+    const iv = Buffer.from(envelope.ivBase64, 'base64');
+    const authTag = Buffer.from(envelope.authTagBase64, 'base64');
+    const ciphertext = Buffer.from(envelope.ciphertextBase64, 'base64');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    const decrypted = Buffer.concat([
+      decipher.update(ciphertext),
+      decipher.final(),
+    ]);
+    return decrypted.toString('utf8');
+  } catch {
+    return '';
+  }
+}
+
 const STATUS_LABELS_RU: Record<ImageProviderAvailabilityStatus, string> = {
   available: 'Доступен (Бесплатный тариф)',
   not_configured: 'Не настроен (требуются Account ID и API Token)',
@@ -128,7 +227,7 @@ export class CloudflareWorkersAiImageAdapter
   public readonly shortLabel = 'Cloudflare Free';
 
   private accountIdOverride = '';
-  private apiTokenOverride = '';
+  private encryptedTokenEnvelope: EncryptedSecretEnvelope | null = null;
 
   private utcDateKey = getUtcDateKey();
   private requestsTodayCount = 0;
@@ -138,9 +237,78 @@ export class CloudflareWorkersAiImageAdapter
   private lastVerifiedStatus: ImageProviderAvailabilityStatus | null = null;
   private lastCheckedAtIso: string | undefined;
 
-  public setCredentials(accountId: string, apiToken: string): void {
-    this.accountIdOverride = (accountId || '').trim();
-    this.apiTokenOverride = (apiToken || '').trim();
+  constructor() {
+    this.loadPersistedVaultIfAvailable();
+  }
+
+  private loadPersistedVaultIfAvailable(): void {
+    const { key, isPersistentFileSupported } = getActiveEncryptionKey();
+    if (!isPersistentFileSupported) return;
+    try {
+      if (!fs.existsSync(SERVER_VAULT_FILE_PATH)) return;
+      const raw = fs.readFileSync(SERVER_VAULT_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(raw) as PersistedServerCloudflareVault;
+      if (parsed && parsed.accountId && parsed.encryptedToken) {
+        const decrypted = decryptSecretAes256Gcm(parsed.encryptedToken, key);
+        if (decrypted.length >= 10) {
+          this.accountIdOverride = parsed.accountId.trim();
+          this.encryptedTokenEnvelope = parsed.encryptedToken;
+        }
+      }
+    } catch {
+      // Never log secret file contents
+    }
+  }
+
+  private persistVaultIfSupported(
+    accountId: string,
+    envelope: EncryptedSecretEnvelope
+  ): void {
+    const { isPersistentFileSupported } = getActiveEncryptionKey();
+    if (!isPersistentFileSupported) return;
+    try {
+      if (!fs.existsSync(SERVER_VAULT_DIR)) {
+        fs.mkdirSync(SERVER_VAULT_DIR, { recursive: true, mode: 0o700 });
+      }
+      const payload: PersistedServerCloudflareVault = {
+        accountId,
+        encryptedToken: envelope,
+        updatedAtIso: new Date().toISOString(),
+      };
+      fs.writeFileSync(
+        SERVER_VAULT_FILE_PATH,
+        JSON.stringify(payload, null, 2),
+        { encoding: 'utf-8', mode: 0o600 }
+      );
+    } catch {
+      // Ignore filesystem write errors if container filesystem is read-only
+    }
+  }
+
+  public setCredentials(accountId: string, apiToken?: string): void {
+    const cleanAccount = (accountId || '').trim();
+    const cleanToken = (apiToken || '').trim();
+    const { key } = getActiveEncryptionKey();
+
+    if (cleanAccount) {
+      this.accountIdOverride = cleanAccount;
+    }
+
+    if (cleanToken) {
+      this.encryptedTokenEnvelope = encryptSecretAes256Gcm(cleanToken, key);
+      if (this.accountIdOverride) {
+        this.persistVaultIfSupported(
+          this.accountIdOverride,
+          this.encryptedTokenEnvelope
+        );
+      }
+    } else if (this.accountIdOverride && this.encryptedTokenEnvelope) {
+      this.persistVaultIfSupported(
+        this.accountIdOverride,
+        this.encryptedTokenEnvelope
+      );
+    }
+
     this.lastError = undefined;
     this.isQuotaExhausted = false;
     this.lastVerifiedStatus = null;
@@ -152,17 +320,43 @@ export class CloudflareWorkersAiImageAdapter
       process.env.CLOUDFLARE_ACCOUNT_ID ||
       ''
     ).trim();
-    const apiToken = (
-      this.apiTokenOverride ||
-      process.env.CLOUDFLARE_API_TOKEN ||
-      ''
-    ).trim();
+
+    let apiToken = '';
+    if (this.encryptedTokenEnvelope) {
+      const { key } = getActiveEncryptionKey();
+      apiToken = decryptSecretAes256Gcm(this.encryptedTokenEnvelope, key).trim();
+    }
+    if (!apiToken) {
+      apiToken = (process.env.CLOUDFLARE_API_TOKEN || '').trim();
+    }
     return { accountId, apiToken };
   }
 
   public isConfigured(): boolean {
     const { accountId, apiToken } = this.resolveCredentials();
     return accountId.length >= 10 && apiToken.length >= 10;
+  }
+
+  public getSafeConnectionConfig(): CloudflareImageConnectionConfig {
+    const { accountId, apiToken } = this.resolveCredentials();
+    const hasSavedToken = apiToken.length >= 10;
+    const { isPersistentFileSupported } = getActiveEncryptionKey();
+    const storageMode = isPersistentFileSupported
+      ? 'server_encrypted_file'
+      : 'server_encrypted_memory';
+
+    return {
+      configured: this.isConfigured(),
+      accountId: accountId || '',
+      maskedApiToken: hasSavedToken ? maskSecretToken(apiToken) : 'Не настроен',
+      hasSavedToken,
+      tokenStatusLabel: hasSavedToken ? 'Токен сохранён' : 'Не настроен',
+      storageMode,
+      persistentEncryptedAvailable: isPersistentFileSupported,
+      storageDescriptionRu: isPersistentFileSupported
+        ? 'Сервер: AES-256-GCM зашифрованное хранилище (chmod 600) с ключом SERVER_VAULT_MASTER_KEY.'
+        : 'Сервер: изолированное ОЗУ процесса с шифрованием AES-256-GCM (без записи открытого текста на диск). Для постоянного межсессионного хранения при перезапуске контейнера необходим Secret Manager / KMS или секрет окружения SERVER_VAULT_MASTER_KEY.',
+    };
   }
 
   private ensureFreshUtcDay(): void {
@@ -316,11 +510,11 @@ export class CloudflareWorkersAiImageAdapter
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => null);
-        const apiErrMsg =
+        const rawApiErrMsg =
           errJson?.errors?.[0]?.message ||
           `HTTP ${res.status}: не удалось подтвердить доступ к Cloudflare Workers AI.`;
         this.lastVerifiedStatus = 'error';
-        this.lastError = apiErrMsg;
+        this.lastError = sanitizeSecretText(rawApiErrMsg, apiToken);
         return this.getDescriptor();
       }
 
@@ -331,10 +525,11 @@ export class CloudflareWorkersAiImageAdapter
       return this.getDescriptor();
     } catch (err) {
       this.lastVerifiedStatus = 'error';
-      this.lastError =
+      const rawErr =
         err instanceof Error
           ? `Ошибка соединения с Cloudflare API: ${err.message}`
           : 'Ошибка соединения с Cloudflare API.';
+      this.lastError = sanitizeSecretText(rawErr, apiToken);
       return this.getDescriptor();
     } finally {
       clearTimeout(timer);

@@ -222,6 +222,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   const [cfRawToken, setCfRawToken] = useState('');
   const [cfMaskedToken, setCfMaskedToken] = useState('Не настроен');
   const [cfHasSavedToken, setCfHasSavedToken] = useState(false);
+  const [cfStorageDescription, setCfStorageDescription] = useState<string>('');
   const [showCfToken, setShowCfToken] = useState(false);
   const [isSavingCf, setIsSavingCf] = useState(false);
   const [isCheckingCf, setIsCheckingCf] = useState(false);
@@ -734,6 +735,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           accountId: '',
           maskedApiToken: 'Не настроен',
           hasSavedToken: false,
+          storageDescriptionRu: '',
         })),
         geminiProvider.getDesignImageProviders().catch(() => null),
       ]);
@@ -763,7 +765,9 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           loadedCfConfig.hasSavedToken || cfFromRegistry?.hasSavedToken
         )
       );
+      setCfStorageDescription(loadedCfConfig.storageDescriptionRu || '');
       setCfRawToken('');
+      setShowCfToken(false);
     } catch {
       setBannerNotice({
         type: 'error',
@@ -829,21 +833,13 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     e.preventDefault();
     setBannerNotice(null);
 
-    if (!isElectron) {
-      setBannerNotice({
-        type: 'info',
-        text: 'Настройка ключей доступна в настольном приложении Electron (через защищённый Vault и safeStorage). В браузерном Preview сохранение секретов отключено.',
-      });
-      return;
-    }
-
     const cleanAccountId = cfAccountId.trim();
     const cleanToken = cfRawToken.trim();
 
     if (!cleanAccountId || cleanAccountId.length < 10) {
       setBannerNotice({
         type: 'error',
-        text: 'Введите корректный Account ID Cloudflare.',
+        text: 'Введите корректный Account ID Cloudflare (не менее 10 символов).',
       });
       return;
     }
@@ -865,6 +861,9 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
       setCfAccountId(saved.accountId);
       setCfMaskedToken(saved.maskedApiToken);
       setCfHasSavedToken(saved.hasSavedToken);
+      if (saved.storageDescriptionRu) {
+        setCfStorageDescription(saved.storageDescriptionRu);
+      }
       setCfRawToken('');
       setShowCfToken(false);
 
@@ -875,10 +874,18 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         await onCheckImageProviders('cloudflare');
       }
 
-      setBannerNotice({
-        type: 'success',
-        text: 'Подключение Cloudflare Workers AI сохранено в защищённом хранилище Electron Vault и проверено.',
-      });
+      const cf = checked.providers.find((p) => p.id === 'cloudflare');
+      if (cf?.status === 'available') {
+        setBannerNotice({
+          type: 'success',
+          text: 'Токен сохранён. Соединение с Cloudflare Workers AI успешно проверено.',
+        });
+      } else {
+        setBannerNotice({
+          type: 'info',
+          text: `Токен сохранён (${saved.maskedApiToken}). Статус проверки API: ${cf?.quota.lastError || cf?.statusLabelRu || 'требуется проверка параметров'}.`,
+        });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setBannerNotice({
@@ -1910,22 +1917,31 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   </button>
                 </div>
 
-                {/* Browser Preview Notice when not in Electron */}
-                {!isElectron && (
-                  <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
-                    <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                    <div className="leading-relaxed">
-                      <strong>Режим браузерного Preview:</strong> настройка и
-                      безопасное сохранение ключей Cloudflare Workers AI (через
-                      защищённый <code>Electron Vault</code> и{' '}
-                      <code>safeStorage</code>) доступны в настольном
-                      приложении. В браузере секретные токены не сохраняются в{' '}
-                      <code>localStorage</code> или <code>IndexedDB</code>. Вы
-                      можете проверить текущий серверный статус подключения и
-                      доступные модели ниже.
-                    </div>
+                {/* Security & Storage Architecture Notice */}
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs text-slate-600 flex items-start gap-2.5">
+                  <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+                  <div className="leading-relaxed">
+                    {isElectron ? (
+                      <span>
+                        <strong className="text-slate-800">
+                          Защита ключей (Electron Vault + safeStorage):
+                        </strong>{' '}
+                        токен шифруется средствами ОС и передаётся серверу по
+                        защищённому IPC. Никогда не сохраняется в{' '}
+                        <code>localStorage</code>, <code>IndexedDB</code> или
+                        резервных копиях.
+                      </span>
+                    ) : (
+                      <span>
+                        <strong className="text-slate-800">
+                          Защита ключей (Серверный API по HTTPS):
+                        </strong>{' '}
+                        {cfStorageDescription ||
+                          'токен передаётся на сервер по HTTPS и хранится на стороне сервера с шифрованием AES-256-GCM (без сохранения в localStorage, IndexedDB, sessionStorage или клиентских переменных).'}
+                      </span>
+                    )}
                   </div>
-                )}
+                </div>
 
                 {/* Account ID & API Token Form */}
                 <form
@@ -1937,9 +1953,19 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                       Параметры авторизации Cloudflare Workers AI
                     </span>
                     <div className="flex items-center gap-2 text-xs text-slate-600 flex-wrap">
-                      <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">
-                        Токен: {cfMaskedToken}
-                      </span>
+                      {cfHasSavedToken ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Токен сохранён</span>
+                          <span className="font-mono text-[11px] text-emerald-800">
+                            ({cfMaskedToken})
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-600">
+                          Токен: Не настроен
+                        </span>
+                      )}
                       {cloudflareProvider?.lastCheckedAtIso && (
                         <span className="text-slate-400">
                           Проверен:{' '}
@@ -1967,7 +1993,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                         type="text"
                         value={cfAccountId}
                         onChange={(e) => setCfAccountId(e.target.value)}
-                        disabled={!isElectron || isSavingCf}
+                        disabled={isSavingCf}
                         placeholder="Например: 1a2b3c4d5e6f7g8h9i0j..."
                         autoComplete="off"
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 disabled:bg-slate-100 disabled:text-slate-500"
@@ -1981,8 +2007,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                       >
                         Cloudflare API Token{' '}
                         {cfHasSavedToken && (
-                          <span className="text-emerald-700 font-normal">
-                            (сохранён: {cfMaskedToken})
+                          <span className="text-emerald-700 font-semibold">
+                            · Токен сохранён
                           </span>
                         )}
                       </label>
@@ -1992,10 +2018,10 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                           type={showCfToken ? 'text' : 'password'}
                           value={cfRawToken}
                           onChange={(e) => setCfRawToken(e.target.value)}
-                          disabled={!isElectron || isSavingCf}
+                          disabled={isSavingCf}
                           placeholder={
                             cfHasSavedToken
-                              ? 'Введите новый токен только для замены текущего...'
+                              ? 'Токен сохранён. Введите новый токен только для замены...'
                               : 'Введите API Token с правами Workers AI...'
                           }
                           autoComplete="new-password"
@@ -2004,8 +2030,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                         <button
                           type="button"
                           onClick={() => setShowCfToken((v) => !v)}
-                          disabled={!isElectron}
-                          className="absolute right-2.5 p-1 text-slate-400 hover:text-slate-700 disabled:opacity-40"
+                          disabled={isSavingCf}
+                          className="absolute right-2.5 p-1 text-slate-400 hover:text-slate-700 disabled:opacity-40 cursor-pointer"
                           title={
                             showCfToken
                               ? 'Скрыть вводимый токен'
@@ -2032,12 +2058,12 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                     <span className="text-[11px] text-slate-500">
                       Существующий токен никогда не раскрывается в интерфейсе.
-                      Чтобы заменить токен, введите новое значение и нажмите
-                      «Сохранить подключение».
+                      Для замены введите новый токен и нажмите «Сохранить
+                      подключение».
                     </span>
                     <button
                       type="submit"
-                      disabled={!isElectron || isSavingCf}
+                      disabled={isSavingCf}
                       className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 transition shadow-sm cursor-pointer"
                     >
                       {isSavingCf ? (

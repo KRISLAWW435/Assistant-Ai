@@ -312,7 +312,7 @@ class AIConnectionManager {
     ) {
       return window.electronAPI.aiConnections.getCloudflareImageConfig();
     }
-    const res = await fetch('/api/design/providers', {
+    const res = await fetch('/api/ai/cloudflare-config', {
       method: 'GET',
       headers: { Accept: 'application/json' },
     });
@@ -324,14 +324,7 @@ class AIConnectionManager {
         hasSavedToken: false,
       };
     }
-    const state = (await res.json()) as ImageProvidersRegistryState;
-    const cf = state.providers.find((p) => p.id === 'cloudflare');
-    return {
-      configured: Boolean(cf?.configured),
-      accountId: cf?.configuredAccountId || '',
-      maskedApiToken: cf?.maskedApiToken || 'Не настроен',
-      hasSavedToken: Boolean(cf?.hasSavedToken),
-    };
+    return (await res.json()) as CloudflareImageConnectionConfig;
   }
 
   async saveCloudflareImageConfig(
@@ -343,9 +336,22 @@ class AIConnectionManager {
     ) {
       return window.electronAPI.aiConnections.saveCloudflareImageConfig(input);
     }
-    throw new Error(
-      'Настройка и безопасное сохранение ключей доступны в настольном приложении (Electron Vault и safeStorage).'
-    );
+    const res = await fetch('/api/ai/cloudflare-config', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(
+        err?.error?.message ||
+          'Не удалось сохранить подключение Cloudflare Workers AI на сервере.'
+      );
+    }
+    return (await res.json()) as CloudflareImageConnectionConfig;
   }
 
   openOllamaOfficialWebsite(): void {
