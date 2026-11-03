@@ -97,6 +97,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('flow:getState'),
     reload: (): Promise<void> =>
       ipcRenderer.invoke('flow:reload'),
+    insertPrompt: (promptText: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('flow:insertPrompt', promptText),
     onStateChange: (callback: (state: any) => void) => {
       const listener = (_event: any, state: any) => callback(state);
       ipcRenderer.on('flow:stateChange', listener);

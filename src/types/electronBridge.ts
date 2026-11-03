@@ -117,6 +117,7 @@ export interface ElectronFlowBridge {
   updateBounds(bounds: FlowViewBounds): Promise<{ success: boolean }>;
   getState(): Promise<FlowViewState>;
   reload(): Promise<void>;
+  insertPrompt(promptText: string): Promise<{ success: boolean; error?: string }>;
   onStateChange?(callback: (state: FlowViewState) => void): () => void;
 }
 

@@ -3222,7 +3222,13 @@ export default function App() {
       : 0);
 
   return (
-    <div className="min-h-screen flex bg-[#F9FAFB] text-slate-900">
+    <div
+      className={`min-h-screen flex bg-[#F9FAFB] text-slate-900 ${
+        isAgentModeSection(activeSection)
+          ? 'h-screen max-h-screen overflow-hidden'
+          : ''
+      }`}
+    >
       {/* 1. LEFT PANEL: Navigation, Specialists, Dialogue History, App Sections */}
       <Sidebar
         activeSection={activeSection}
@@ -3246,7 +3252,13 @@ export default function App() {
       />
 
       {/* 2. CENTER PANEL: Active Dialogue or Selected App Section */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div
+        className={`flex-1 flex flex-col min-w-0 ${
+          isAgentModeSection(activeSection)
+            ? 'h-screen max-h-screen overflow-hidden'
+            : 'min-h-screen'
+        }`}
+      >
         <TopBar
           activeSection={activeSection}
           activeSchool={activeSchool}
@@ -3294,7 +3306,11 @@ export default function App() {
           </div>
         )}
 
-        <main className="flex-1 flex flex-col min-w-0">
+        <main
+          className={`flex-1 flex flex-col min-w-0 ${
+            isAgentModeSection(activeSection) ? 'min-h-0 overflow-hidden' : ''
+          }`}
+        >
           {isStorageLoading ? (
             <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 p-8">
               <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-[#00A8B5] shadow-xs">

@@ -846,6 +846,10 @@ function registerIpcHandlers(): void {
       flowView.webContents.reload();
     }
   });
+
+  ipcMain.handle('flow:insertPrompt', async (_event, promptText: string) => {
+    return insertPromptIntoFlow(promptText);
+  });
 }
 
 // ============================================================================
@@ -1008,6 +1012,21 @@ function updateFlowBounds(bounds: { x: number; y: number; width: number; height:
   } catch (err) {
     console.error('[Electron Flow] updateBounds error:', err);
     return { success: false };
+  }
+}
+
+function insertPromptIntoFlow(promptText: string): { success: boolean; error?: string } {
+  if (!flowView || flowView.webContents.isDestroyed()) {
+    return { success: false, error: 'Google Flow не запущен' };
+  }
+  try {
+    flowView.webContents.focus();
+    flowView.webContents.insertText(promptText);
+    return { success: true };
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.warn('[Electron Flow] insertPrompt error:', errMsg);
+    return { success: false, error: errMsg };
   }
 }
 

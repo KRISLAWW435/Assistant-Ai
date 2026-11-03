@@ -5,6 +5,7 @@ import {
   BookOpen,
   Check,
   CheckCircle2,
+  ChevronDown,
   Clock,
   Copy,
   Eraser,
@@ -255,6 +256,32 @@ const DESIGN_TEMPLATE_PRESETS: Array<{
   { id: 'free_concept', label: 'Свободный концепт', defaultRatio: '1:1' },
 ];
 
+export function extractFlowPromptFromMessage(content: string): string | null {
+  if (!content) return null;
+
+  // 1. Check for ```flow-prompt ... ``` or ```prompt ... ```
+  const codeBlockMatch = content.match(
+    /```(?:flow-prompt|prompt|flow)?\s*\n([\s\S]*?)\n```/i
+  );
+  if (codeBlockMatch && codeBlockMatch[1]?.trim()) {
+    const raw = codeBlockMatch[1].trim();
+    if (!raw.startsWith('{') && !raw.startsWith('[')) {
+      return raw;
+    }
+  }
+
+  // 2. Check for "Промпт для Google Flow:" or "Промпт:"
+  const promptHeaderMatch = content.match(
+    /(?:Промпт для Google Flow|Промпт для Flow|Flow prompt|Google Flow Prompt|Промпт):\s*\n*([^\n#*]+(?:\n[^\n#*]+)*)/i
+  );
+  if (promptHeaderMatch && promptHeaderMatch[1]?.trim()) {
+    const candidate = promptHeaderMatch[1].replace(/```/g, '').trim();
+    if (candidate.length > 10) return candidate;
+  }
+
+  return null;
+}
+
 export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   activeMode,
   activeSchool,
@@ -360,6 +387,9 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     []
   );
 
+  // Collapsible input settings accordion (templates, school selector, model, format, knowledge base)
+  const [isInputSettingsOpen, setIsInputSettingsOpen] = useState(false);
+
   // Header inline rename state
   const [isRenamingHeader, setIsRenamingHeader] = useState(false);
   const [headerRenameDraft, setHeaderRenameDraft] = useState('');
@@ -377,13 +407,15 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   const [isDraggingSplitter, setIsDraggingSplitter] = useState(false);
   const [chatWidthPercent, setChatWidthPercent] = useState<number>(() => {
     try {
-      const saved = window.localStorage.getItem('kiber_renderia_flow_chat_split');
+      // Clear legacy storage key so the new 35% chat / 65% Flow default applies immediately
+      window.localStorage.removeItem('kiber_renderia_flow_chat_split');
+      const saved = window.localStorage.getItem('kiber_renderia_flow_chat_split_v2');
       if (saved) {
         const parsed = Number(saved);
         if (!Number.isNaN(parsed) && parsed >= 20 && parsed <= 80) return parsed;
       }
     } catch {}
-    return 45;
+    return 35; // Default: 35% for Chat, 65% for Google Flow
   });
   const currentPercentRef = useRef(chatWidthPercent);
   useEffect(() => {
@@ -391,6 +423,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   }, [chatWidthPercent]);
 
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  const [copiedFlowPromptMsgId, setCopiedFlowPromptMsgId] = useState<string | null>(null);
   const [flowState, setFlowState] = useState<{
     isVisible: boolean;
     isLoading: boolean;
@@ -404,6 +437,39 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   });
 
   const flowTargetRef = useRef<HTMLDivElement | null>(null);
+
+  const handleSendPromptToFlow = useCallback(
+    async (promptText: string, messageId: string) => {
+      try {
+        await navigator.clipboard.writeText(promptText);
+      } catch {
+        const el = document.createElement('textarea');
+        el.value = promptText;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      }
+
+      if (!isFlowPanelOpen) {
+        setIsFlowPanelOpen(true);
+      }
+
+      if (window.electronAPI?.flow?.insertPrompt) {
+        try {
+          await window.electronAPI.flow.insertPrompt(promptText);
+        } catch (err) {
+          console.warn('[Flow Insert Prompt Failed]', err);
+        }
+      }
+
+      setCopiedFlowPromptMsgId(messageId);
+      setTimeout(() => {
+        setCopiedFlowPromptMsgId((prev) => (prev === messageId ? null : prev));
+      }, 2500);
+    },
+    [isFlowPanelOpen]
+  );
 
   const updateFlowRect = useCallback(() => {
     if (!flowTargetRef.current || !window.electronAPI?.flow) return;
@@ -479,7 +545,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       setIsDraggingSplitter(false);
       try {
         window.localStorage.setItem(
-          'kiber_renderia_flow_chat_split',
+          'kiber_renderia_flow_chat_split_v2',
           String(currentPercentRef.current)
         );
       } catch {}
@@ -809,6 +875,66 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     await onStageFileForDraft(file);
   };
 
+  const handleEvaluateImage = useCallback(
+    (attachment: ChatAttachment) => {
+      if (activeMode !== 'designer') {
+        onChangeMode('designer');
+      }
+      const evalPrompt = `Пожалуйста, внимательно оцени результат этого изображения, сгенерированного в Google Flow для школы ${schoolConfig.name}:
+1. Насколько точно передан визуальный замысел и брендбук школы?
+2. Нет ли явных визуальных артефактов (на персонажах, лицах, руках/пальцах, фоне)?
+3. Как сбалансирована композиция под текстовые слои макета (Заголовок, Оффер, CTA)?
+4. Что конкретно стоит улучшить или изменить в следующем промпте для Google Flow?`;
+
+      onSendMessage(evalPrompt, attachment, {
+        includeKnowledgeBase: true,
+        selectedDialogueAttachmentIds: [],
+        selectedSchoolDocumentIds: [],
+        externalApiConsentConfirmed: true,
+        providerSelection:
+          providerSelection === 'ollama' ? 'auto' : providerSelection,
+      });
+      if (draftAttachment?.id === attachment.id) {
+        onClearDraftAttachment();
+      }
+    },
+    [
+      activeMode,
+      onChangeMode,
+      schoolConfig.name,
+      onSendMessage,
+      providerSelection,
+      draftAttachment?.id,
+      onClearDraftAttachment,
+    ]
+  );
+
+  // Global clipboard paste listener to capture images from Google Flow or screenshots
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            void onStageFileForDraft(file);
+            if (activeMode !== 'designer' && isFlowPanelOpen) {
+              onChangeMode('designer');
+            }
+            break;
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => {
+      window.removeEventListener('paste', handlePaste);
+    };
+  }, [onStageFileForDraft, activeMode, isFlowPanelOpen, onChangeMode]);
+
   const handleClearChatClick = () => {
     setDraftPrompt('');
     setSelectedQuickPromptId(null);
@@ -921,11 +1047,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-white">
-      {/* 1. Active Dialogue Subheader Bar */}
-      <div className="px-4 sm:px-6 py-3 border-b border-slate-200/80 bg-white flex flex-wrap items-center justify-between gap-3">
+    <div className="flex-1 flex flex-col min-w-0 bg-white h-full min-h-0 overflow-hidden">
+      {/* 1. Active Dialogue Subheader Bar (Sticky at top, never scrolls away) */}
+      <div className="shrink-0 sticky top-0 z-20 px-3 sm:px-5 py-1.5 sm:py-2 border-b border-slate-200/80 bg-white/95 backdrop-blur-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs">
         {/* Left: Current Dialogue Title + Pin Badge + Inline Rename */}
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
           {currentSession ? (
             isRenamingHeader ? (
               <div className="flex items-center gap-1.5">
@@ -942,12 +1068,12 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                       setIsRenamingHeader(false);
                     }
                   }}
-                  className="rounded-lg border border-[#00A8B5] bg-white px-2.5 py-1 text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none"
+                  className="rounded-lg border border-[#00A8B5] bg-white px-2.5 py-0.5 text-xs font-semibold text-slate-900 focus:outline-none"
                 />
                 <button
                   type="button"
                   onClick={handleCommitHeaderRename}
-                  className="p-1.5 rounded-lg bg-slate-900 text-white hover:bg-slate-800"
+                  className="p-1 rounded-lg bg-slate-900 text-white hover:bg-slate-800"
                   title="Сохранить название"
                 >
                   <Check className="w-3.5 h-3.5" />
@@ -955,7 +1081,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsRenamingHeader(false)}
-                  className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+                  className="p-1 rounded-lg text-slate-500 hover:bg-slate-100"
                   title="Отмена"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -975,7 +1101,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   </span>
                 )}
                 <h1
-                  className="font-display font-bold text-sm sm:text-base text-slate-900 truncate"
+                  className="font-display font-bold text-xs sm:text-sm text-slate-900 truncate"
                   title={currentSession.title}
                 >
                   {currentSession.title}
@@ -1013,8 +1139,8 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
               </div>
             )
           ) : (
-            <div className="flex items-center gap-2 min-w-0">
-              <h1 className="font-display font-bold text-sm sm:text-base text-slate-900 truncate">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <h1 className="font-display font-bold text-xs sm:text-sm text-slate-900 truncate">
                 Новый диалог · {modeConfig.shortTitle} ({schoolConfig.name})
               </h1>
             </div>
@@ -1022,9 +1148,9 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         </div>
 
         {/* Right: Specialist Selector + Session Actions */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           {/* Compact Specialist Switcher */}
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200/70">
+          <div className="flex items-center gap-0.5 p-0.5 bg-slate-100 rounded-lg border border-slate-200/70">
             {AGENT_MODE_LIST.map((m) => {
               const active = m.id === activeMode;
               return (
@@ -1032,7 +1158,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   key={m.id}
                   type="button"
                   onClick={() => onChangeMode(m.id)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
+                  className={`px-2 py-0.5 rounded-md text-xs font-semibold transition-all whitespace-nowrap ${
                     active
                       ? 'bg-slate-900 text-white shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -1049,7 +1175,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             <button
               type="button"
               onClick={handleToggleFlow}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                 isFlowPanelOpen
                   ? 'bg-purple-600 text-white shadow-xs hover:bg-purple-700'
                   : 'bg-purple-50 text-purple-700 border border-purple-200/90 hover:bg-purple-100/90'
@@ -1075,7 +1201,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
           <button
             type="button"
             onClick={() => onCreateNewSession(activeMode, activeSchool)}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
               activeSchool === 'renderia'
                 ? 'bg-[#84CC16] text-slate-950 hover:bg-[#76b813]'
                 : 'bg-[#FFD700] text-slate-950 hover:bg-[#f0ca00]'
@@ -1093,7 +1219,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 onClick={handleClearChatClick}
                 disabled={currentMessages.length === 0}
                 title="Очистить только сообщения внутри этого диалога"
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium text-slate-600 hover:text-amber-800 hover:bg-amber-50 border border-slate-200/80 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-slate-600 hover:text-amber-800 hover:bg-amber-50 border border-slate-200/80 disabled:opacity-40 disabled:pointer-events-none transition-colors"
               >
                 <Eraser className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Очистить</span>
@@ -1103,7 +1229,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 type="button"
                 onClick={() => setSessionPendingDelete(currentSession)}
                 title="Полностью удалить диалог из истории и IndexedDB"
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium text-red-600 hover:bg-red-50 border border-red-200/70 transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-red-600 hover:bg-red-50 border border-red-200/70 transition-colors"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Удалить чат</span>
@@ -1115,7 +1241,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
       {/* Background Dialogue Generation Notice (when user switches dialogue while generating) */}
       {backgroundGeneratingSession && (
-        <div className="px-4 sm:px-6 py-2 bg-amber-50/90 border-b border-amber-200/80 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-950">
+        <div className="shrink-0 px-4 sm:px-6 py-2 bg-amber-50/90 border-b border-amber-200/80 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-950">
           <div className="flex items-center gap-2 min-w-0">
             <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00A8B5] shrink-0" />
             <span className="truncate">
@@ -1149,7 +1275,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
       {/* Linked Inter-Specialist Handoff Banner (Stage 1) */}
       {currentSession?.linkedHandoffPacket && (
-        <div className="px-4 sm:px-6 py-2.5 bg-purple-50/90 border-b border-purple-200 text-xs text-purple-950 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="shrink-0 px-4 sm:px-6 py-2.5 bg-purple-50/90 border-b border-purple-200 text-xs text-purple-950 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2 min-w-0">
             <ArrowRightLeft className="w-4 h-4 text-purple-700 shrink-0" />
             <div className="truncate">
@@ -1263,7 +1389,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 : { width: `${chatWidthPercent}%` }
               : undefined
           }
-          className={`flex flex-col min-w-0 ${
+          className={`flex flex-col min-w-0 h-full ${
             isFlowPanelOpen
               ? isFlowFullscreen
                 ? 'hidden'
@@ -1272,7 +1398,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
           } ${isDraggingSplitter ? 'transition-none select-none' : 'transition-[width] duration-150'}`}
         >
           {/* 2. Messages Viewport (ChatGPT-Style Centered Stream) */}
-          <div className="flex-1 overflow-y-auto px-4 sm:px-6 pt-6 pb-20 bg-[#F9FAFB]/60">
+          <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 bg-[#F9FAFB]/60">
         <div className="max-w-3xl mx-auto">
           {currentMessages.length === 0 ? (
             /* Warm Personal Welcome Screen for Anna with Expressive Typographic School Badge */
@@ -1511,24 +1637,63 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                 )}
                               </div>
 
-                              {msg.attachmentMeta && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    onInspectAttachmentInRightPanel(
-                                      msg.attachmentMeta!.id
-                                    )
-                                  }
-                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold shrink-0 transition-colors ${
-                                    isUser
-                                      ? 'bg-slate-800 text-white hover:bg-slate-700'
-                                      : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
-                                  }`}
-                                >
-                                  <Eye className="w-3 h-3" />
-                                  <span>Просмотр</span>
-                                </button>
-                              )}
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {imageDataUrl && (
+                                  <button
+                                    type="button"
+                                    disabled={isGenerating}
+                                    onClick={() => {
+                                      const attachmentToEval: ChatAttachment =
+                                        matchedAttachment || {
+                                          id:
+                                            msg.attachmentMeta?.id ||
+                                            `img-${msg.id}`,
+                                          name:
+                                            msg.attachmentMeta?.name ||
+                                            msg.attachmentName ||
+                                            'flow_result.png',
+                                          extension:
+                                            msg.attachmentMeta?.extension ||
+                                            'png',
+                                          sizeBytes:
+                                            msg.attachmentMeta?.sizeBytes || 0,
+                                          mimeType:
+                                            msg.attachmentMeta?.mimeType ||
+                                            'image/png',
+                                          extractedText: '',
+                                          dataUrl: imageDataUrl,
+                                          status: 'processed',
+                                          uploadedAt: msg.createdAt,
+                                        };
+                                      handleEvaluateImage(attachmentToEval);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-2xs transition-all cursor-pointer"
+                                    title="Отправить это изображение агенту «Дизайнер» для оценки качества визуала и поиска артефактов"
+                                  >
+                                    <Sparkles className="w-3 h-3 text-amber-300" />
+                                    <span>Оценить результат</span>
+                                  </button>
+                                )}
+
+                                {msg.attachmentMeta && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onInspectAttachmentInRightPanel(
+                                        msg.attachmentMeta!.id
+                                      )
+                                    }
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold shrink-0 transition-colors ${
+                                      isUser
+                                        ? 'bg-slate-800 text-white hover:bg-slate-700'
+                                        : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
+                                    }`}
+                                  >
+                                    <Eye className="w-3 h-3" />
+                                    <span>Просмотр</span>
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         );
@@ -2177,6 +2342,26 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                   <span>Повторить отправку</span>
                                 </button>
                               )}
+                            {(() => {
+                              const flowPrompt = extractFlowPromptFromMessage(msg.content);
+                              if (!flowPrompt) return null;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => handleSendPromptToFlow(flowPrompt, msg.id)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-gradient-to-r from-purple-600 via-indigo-600 to-amber-500 hover:from-purple-500 hover:via-indigo-500 hover:to-amber-400 text-white shadow-xs transition-all cursor-pointer"
+                                  title="Скопировать промпт и передать его в поле ввода Google Flow"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5 text-amber-200" />
+                                  <span>
+                                    {copiedFlowPromptMsgId === msg.id
+                                      ? 'Передано в Flow!'
+                                      : 'Передать промпт в Flow'}
+                                  </span>
+                                </button>
+                              );
+                            })()}
+
                             <button
                               type="button"
                               onClick={() => handleCopyMessage(msg)}
@@ -2370,38 +2555,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       </div>
 
       {/* 3. Bottom Composer Area (ChatGPT Style) */}
-      <div className="border-t border-slate-200/80 bg-white px-4 sm:px-6 py-3.5">
+      <div className="shrink-0 border-t border-slate-200/80 bg-white px-3 sm:px-6 py-2 sm:py-2.5">
         <form
           onSubmit={handleSubmit}
-          className="max-w-3xl mx-auto space-y-2.5"
+          className="max-w-3xl mx-auto space-y-2"
         >
-          {/* Compact Quick Prompt Chips when conversation already has messages */}
-          {currentMessages.length > 0 && (
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-              <span className="text-[11px] font-semibold text-slate-400 shrink-0 pr-1">
-                Шаблоны:
-              </span>
-              {modeConfig.quickPrompts.map((qp) => {
-                const isSelected = selectedQuickPromptId === qp.id;
-                return (
-                  <button
-                    key={qp.id}
-                    type="button"
-                    onClick={() => handleSelectQuickPrompt(qp.id, qp.getPrompt)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-medium whitespace-nowrap border transition-colors ${
-                      isSelected
-                        ? activeSchool === 'renderia'
-                          ? 'bg-[#84CC16]/20 border-[#84CC16] text-slate-950 font-semibold'
-                          : 'bg-[#F5B800]/20 border-[#F5B800] text-slate-950 font-semibold'
-                        : 'bg-slate-50 hover:bg-slate-100 border-slate-200/80 text-slate-600'
-                    }`}
-                  >
-                    {qp.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
 
           {attachmentNotice && (
             <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
@@ -2477,6 +2635,18 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0">
+                    {isDraftImage && (
+                      <button
+                        type="button"
+                        disabled={isGenerating}
+                        onClick={() => handleEvaluateImage(draftAttachment)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
+                        title="Отправить это изображение на оценку агенту «Дизайнер»"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                        <span>Оценить результат</span>
+                      </button>
+                    )}
                     {!isDraftImage && (
                       <button
                         type="button"
@@ -2552,8 +2722,60 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             );
           })()}
 
-          {/* Selective Context Controls (Knowledge Base + Explicit Document Selection) */}
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+          {/* Collapsible Accordion: Settings, Templates, Knowledge Base, School & Designer Controls */}
+          {isInputSettingsOpen && (
+            <div className="rounded-2xl border border-purple-200/90 bg-slate-50/95 p-3 space-y-3 shadow-xs animate-in fade-in duration-150 text-xs">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200/80">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded-md bg-purple-100 text-purple-700 flex items-center justify-center font-bold">
+                    <Sliders className="w-3 h-3" />
+                  </div>
+                  <span className="font-bold text-slate-900 text-xs">
+                    Параметры диалога и шаблоны специалиста
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsInputSettingsOpen(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
+                  title="Свернуть параметры"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Quick Prompt Chips */}
+              {modeConfig.quickPrompts && modeConfig.quickPrompts.length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    Готовые шаблоны задач:
+                  </span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {modeConfig.quickPrompts.map((qp) => {
+                      const isSelected = selectedQuickPromptId === qp.id;
+                      return (
+                        <button
+                          key={qp.id}
+                          type="button"
+                          onClick={() => handleSelectQuickPrompt(qp.id, qp.getPrompt)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors cursor-pointer ${
+                            isSelected
+                              ? activeSchool === 'renderia'
+                                ? 'bg-[#84CC16]/20 border-[#84CC16] text-slate-950 font-semibold'
+                                : 'bg-[#F5B800]/20 border-[#F5B800] text-slate-950 font-semibold'
+                              : 'bg-white hover:bg-slate-100 border-slate-200/80 text-slate-700'
+                          }`}
+                        >
+                          {qp.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Selective Context Controls (Knowledge Base + Explicit Document Selection) */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs pt-2 border-t border-slate-200/70">
             <div className="flex flex-wrap items-center gap-2">
               <label className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200/90 text-[11px] font-medium text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors">
                 <input
@@ -3188,6 +3410,8 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 </div>
               );
             })()}
+            </div>
+          )}
 
           {/* Composer Box */}
           <div className="rounded-2xl border border-slate-300/90 bg-white shadow-2xs focus-within:ring-2 focus-within:ring-[#00A8B5] focus-within:border-transparent transition-all p-2.5 space-y-2">
@@ -3258,6 +3482,25 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   )}
                 </button>
 
+                <button
+                  type="button"
+                  onClick={() => setIsInputSettingsOpen((prev) => !prev)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${
+                    isInputSettingsOpen
+                      ? 'bg-purple-100 border-purple-300 text-purple-900'
+                      : 'bg-slate-50 border-slate-200/80 text-slate-700 hover:bg-slate-100'
+                  }`}
+                  title="Параметры диалога, шаблоны задач и настройки ИИ-моделей"
+                >
+                  <Sliders className="w-4 h-4 text-purple-600" />
+                  <span>Настройки</span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 transition-transform ${
+                      isInputSettingsOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
                 <span className="text-[11px] text-slate-400 hidden md:inline">
                   Школа:{' '}
                   <strong className="text-slate-600">{schoolConfig.name}</strong>
@@ -3317,10 +3560,13 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         aria-valuemax={80}
         onPointerDown={handleSplitterPointerDown}
         onDoubleClick={() => {
-          setChatWidthPercent(45);
+          setChatWidthPercent(35);
+          try {
+            window.localStorage.setItem('kiber_renderia_flow_chat_split_v2', '35');
+          } catch {}
           setTimeout(updateFlowRect, 30);
         }}
-        title="Перетащите для изменения ширины колонок (двойной клик: 45%)"
+        title="Перетащите для изменения ширины колонок (двойной клик: 35% чат / 65% Flow)"
         className={`hidden lg:flex items-center justify-center w-2.5 -mx-1 z-20 cursor-col-resize group shrink-0 select-none ${
           isDraggingSplitter ? 'bg-purple-500/20' : 'hover:bg-purple-500/10'
         }`}
@@ -3349,7 +3595,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             ? { width: '100%' }
             : { width: `${100 - chatWidthPercent}%` }
         }
-        className={`hidden lg:flex flex-col bg-slate-900 min-w-0 relative ${
+        className={`hidden lg:flex flex-col bg-slate-900 min-w-0 relative h-full ${
           isFlowFullscreen ? 'w-full flex-1' : 'shrink-0'
         } ${isDraggingSplitter ? 'transition-none' : 'transition-[width] duration-150'}`}
       >
