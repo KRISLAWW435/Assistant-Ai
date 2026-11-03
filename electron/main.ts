@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  WebContentsView,
   ipcMain,
   Notification,
   safeStorage,
@@ -822,6 +823,192 @@ function registerIpcHandlers(): void {
       }
     }
   );
+
+  // --- Google Flow (Nano Banana) WebContentsView IPC Handlers ---
+  ipcMain.handle('flow:show', async (_event, bounds: { x: number; y: number; width: number; height: number }) => {
+    return showFlowView(bounds);
+  });
+
+  ipcMain.handle('flow:hide', async () => {
+    return hideFlowView();
+  });
+
+  ipcMain.handle('flow:updateBounds', async (_event, bounds: { x: number; y: number; width: number; height: number }) => {
+    return updateFlowBounds(bounds);
+  });
+
+  ipcMain.handle('flow:getState', async () => {
+    return { ...flowViewState };
+  });
+
+  ipcMain.handle('flow:reload', async () => {
+    if (flowView && !flowView.webContents.isDestroyed()) {
+      flowView.webContents.reload();
+    }
+  });
+}
+
+// ============================================================================
+// Google Flow (Nano Banana) Embedded WebContentsView Subsystem
+// ============================================================================
+let flowView: WebContentsView | null = null;
+let currentFlowBounds = { x: 0, y: 0, width: 0, height: 0 };
+let flowViewState = {
+  isVisible: false,
+  isLoading: false,
+  currentUrl: 'https://flow.google.com/',
+  error: null as string | null,
+};
+
+function notifyFlowStateChange(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('flow:stateChange', { ...flowViewState });
+  }
+}
+
+function getOrCreateFlowSession(): Electron.Session {
+  const sess = session.fromPartition('persist:google_flow', { cache: true });
+  // Strictly isolate Flow from system hardware permissions
+  sess.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+  sess.setPermissionCheckHandler(() => false);
+  return sess;
+}
+
+function ensureFlowView(): WebContentsView | null {
+  if (flowView) return flowView;
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+
+  try {
+    const flowSession = getOrCreateFlowSession();
+    const view = new WebContentsView({
+      webPreferences: {
+        session: flowSession,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+      },
+    });
+
+    view.webContents.on('did-start-loading', () => {
+      flowViewState.isLoading = true;
+      flowViewState.error = null;
+      notifyFlowStateChange();
+    });
+
+    view.webContents.on('did-finish-load', () => {
+      flowViewState.isLoading = false;
+      flowViewState.currentUrl = view.webContents.getURL();
+      notifyFlowStateChange();
+    });
+
+    view.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
+      if (errorCode === -3) return; // ERR_ABORTED is normal on navigation/redirect
+      flowViewState.isLoading = false;
+      flowViewState.error = `Ошибка загрузки (${errorCode}): ${errorDescription}`;
+      notifyFlowStateChange();
+    });
+
+    view.webContents.setWindowOpenHandler(({ url }) => {
+      if (url.includes('accounts.google.com') || url.includes('google.com')) {
+        void view.webContents.loadURL(url);
+        return { action: 'deny' };
+      }
+      shell.openExternal(url);
+      return { action: 'deny' };
+    });
+
+    void view.webContents.loadURL('https://flow.google.com/');
+    flowView = view;
+    return view;
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error('[Electron Flow] WebContentsView creation failed:', errMsg);
+    flowViewState.error = errMsg;
+    notifyFlowStateChange();
+    return null;
+  }
+}
+
+function showFlowView(bounds: { x: number; y: number; width: number; height: number }): { success: boolean; error?: string } {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { success: false, error: 'Главное окно недоступно' };
+  }
+  const view = ensureFlowView();
+  if (!view) {
+    return { success: false, error: flowViewState.error || 'Не удалось создать WebContentsView' };
+  }
+
+  currentFlowBounds = {
+    x: Math.max(0, Math.round(bounds.x)),
+    y: Math.max(0, Math.round(bounds.y)),
+    width: Math.max(100, Math.round(bounds.width)),
+    height: Math.max(100, Math.round(bounds.height)),
+  };
+
+  try {
+    const contentView = (mainWindow as any).contentView;
+    if (contentView && typeof contentView.addChildView === 'function') {
+      const children = contentView.children || [];
+      if (!children.includes(view)) {
+        contentView.addChildView(view);
+      }
+    }
+    view.setBounds(currentFlowBounds);
+    if (typeof (view as any).setVisible === 'function') {
+      (view as any).setVisible(true);
+    }
+    flowViewState.isVisible = true;
+    notifyFlowStateChange();
+    return { success: true };
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error('[Electron Flow] show error:', errMsg);
+    return { success: false, error: errMsg };
+  }
+}
+
+function hideFlowView(): { success: boolean } {
+  if (!flowView || !mainWindow || mainWindow.isDestroyed()) {
+    flowViewState.isVisible = false;
+    notifyFlowStateChange();
+    return { success: true };
+  }
+
+  try {
+    if (typeof (flowView as any).setVisible === 'function') {
+      (flowView as any).setVisible(false);
+    }
+    const contentView = (mainWindow as any).contentView;
+    if (contentView && typeof contentView.removeChildView === 'function') {
+      contentView.removeChildView(flowView);
+    }
+    flowViewState.isVisible = false;
+    notifyFlowStateChange();
+    return { success: true };
+  } catch (err: unknown) {
+    console.error('[Electron Flow] hide error:', err);
+    return { success: false };
+  }
+}
+
+function updateFlowBounds(bounds: { x: number; y: number; width: number; height: number }): { success: boolean } {
+  if (!flowView || !flowViewState.isVisible) return { success: false };
+  currentFlowBounds = {
+    x: Math.max(0, Math.round(bounds.x)),
+    y: Math.max(0, Math.round(bounds.y)),
+    width: Math.max(100, Math.round(bounds.width)),
+    height: Math.max(100, Math.round(bounds.height)),
+  };
+  try {
+    flowView.setBounds(currentFlowBounds);
+    return { success: true };
+  } catch (err) {
+    console.error('[Electron Flow] updateBounds error:', err);
+    return { success: false };
+  }
 }
 
 async function createMainWindow(port: number): Promise<void> {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRightLeft,
@@ -8,6 +8,7 @@ import {
   Clock,
   Copy,
   Eraser,
+  ExternalLink,
   Eye,
   FileText,
   FolderOpen,
@@ -16,6 +17,7 @@ import {
   Layers,
   Loader2,
   MessageSquarePlus,
+  Monitor,
   Palette,
   Paperclip,
   Pause,
@@ -23,6 +25,7 @@ import {
   Pin,
   PinOff,
   Play,
+  RefreshCw,
   RotateCcw,
   Send,
   ShieldAlert,
@@ -363,6 +366,98 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   const [sessionPendingDelete, setSessionPendingDelete] =
     useState<ChatSession | null>(null);
   const [isDeletingSession, setIsDeletingSession] = useState(false);
+
+  // Google Flow (Nano Banana) Integration State (Stage 1)
+  const isElectronFlowAvailable = Boolean(window.electronAPI?.flow?.isAvailable);
+  const [isFlowPanelOpen, setIsFlowPanelOpen] = useState(false);
+  const [isBrowserFlowModalOpen, setIsBrowserFlowModalOpen] = useState(false);
+  const [flowState, setFlowState] = useState<{
+    isVisible: boolean;
+    isLoading: boolean;
+    currentUrl?: string;
+    error?: string | null;
+  }>({
+    isVisible: false,
+    isLoading: false,
+    currentUrl: 'https://flow.google.com/',
+    error: null,
+  });
+
+  const flowTargetRef = useRef<HTMLDivElement | null>(null);
+
+  const updateFlowRect = useCallback(() => {
+    if (!flowTargetRef.current || !window.electronAPI?.flow) return;
+    const rect = flowTargetRef.current.getBoundingClientRect();
+    if (rect.width > 20 && rect.height > 20) {
+      window.electronAPI.flow.updateBounds({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      });
+    }
+  }, []);
+
+  const handleToggleFlow = useCallback(() => {
+    if (!isElectronFlowAvailable) {
+      setIsBrowserFlowModalOpen(true);
+      return;
+    }
+    setIsFlowPanelOpen((prev) => !prev);
+  }, [isElectronFlowAvailable]);
+
+  // Close Flow panel if mode changes away from designer
+  useEffect(() => {
+    if (activeMode !== 'designer' && isFlowPanelOpen) {
+      setIsFlowPanelOpen(false);
+      window.electronAPI?.flow?.hide();
+    }
+  }, [activeMode, isFlowPanelOpen]);
+
+  // Sync Flow WebContentsView with target container coordinates
+  useEffect(() => {
+    if (!isFlowPanelOpen) return;
+    const bridge = window.electronAPI?.flow;
+    if (!bridge || !bridge.isAvailable) return;
+
+    let resizeObserver: ResizeObserver | null = null;
+
+    const timer = setTimeout(() => {
+      if (flowTargetRef.current) {
+        const rect = flowTargetRef.current.getBoundingClientRect();
+        bridge.show({
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        });
+
+        resizeObserver = new ResizeObserver(() => {
+          updateFlowRect();
+        });
+        resizeObserver.observe(flowTargetRef.current);
+      }
+    }, 60);
+
+    const unsubscribe = bridge.onStateChange?.((state) => {
+      setFlowState(state);
+    });
+
+    const handleWindowResize = () => {
+      updateFlowRect();
+    };
+    window.addEventListener('resize', handleWindowResize);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('resize', handleWindowResize);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      unsubscribe?.();
+      bridge.hide();
+    };
+  }, [isFlowPanelOpen, updateFlowRect]);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -844,6 +939,34 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             })}
           </div>
 
+          {/* Google Flow (Nano Banana) Workspace Toggle (Designer Mode Only) */}
+          {activeMode === 'designer' && (
+            <button
+              type="button"
+              onClick={handleToggleFlow}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                isFlowPanelOpen
+                  ? 'bg-purple-600 text-white shadow-xs hover:bg-purple-700'
+                  : 'bg-purple-50 text-purple-700 border border-purple-200/90 hover:bg-purple-100/90'
+              }`}
+              title={
+                isElectronFlowAvailable
+                  ? isFlowPanelOpen
+                    ? 'Скрыть рабочую область Google Flow'
+                    : 'Показать рабочую область Google Flow (Nano Banana)'
+                  : 'Google Flow доступен в десктопном приложении Windows'
+              }
+            >
+              <Sparkles className={`w-3.5 h-3.5 ${isFlowPanelOpen ? 'text-amber-300' : 'text-purple-600'}`} />
+              <span>{isFlowPanelOpen ? 'Скрыть Flow' : 'Показать Flow'}</span>
+              {!isElectronFlowAvailable && (
+                <span className="px-1.5 py-0.2 rounded text-[10px] bg-purple-200/60 text-purple-900 font-bold">
+                  Desktop
+                </span>
+              )}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => onCreateNewSession(activeMode, activeSchool)}
@@ -1025,8 +1148,17 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         </div>
       )}
 
-      {/* 2. Messages Viewport (ChatGPT-Style Centered Stream) */}
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 pt-6 pb-20 bg-[#F9FAFB]/60">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        {/* Chat Stream + Composer Column */}
+        <div
+          className={`flex flex-col min-w-0 transition-all ${
+            isFlowPanelOpen
+              ? 'w-full lg:w-1/2 border-r border-slate-200/80'
+              : 'w-full'
+          }`}
+        >
+          {/* 2. Messages Viewport (ChatGPT-Style Centered Stream) */}
+          <div className="flex-1 overflow-y-auto px-4 sm:px-6 pt-6 pb-20 bg-[#F9FAFB]/60">
         <div className="max-w-3xl mx-auto">
           {currentMessages.length === 0 ? (
             /* Warm Personal Welcome Screen for Anna with Expressive Typographic School Badge */
@@ -3058,8 +3190,125 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
           </div>
         </form>
       </div>
+    </div>
 
-      {/* Confirmation Modal for Deleting Active Dialogue */}
+    {/* Embedded Google Flow Panel (Electron WebContentsView target) */}
+    {isFlowPanelOpen && (
+      <div className="hidden lg:flex w-1/2 flex-col bg-slate-900 min-w-0 relative">
+        {/* Flow Panel Header */}
+        <div className="px-4 py-2.5 bg-slate-800 border-b border-slate-700/80 flex items-center justify-between gap-3 text-xs shrink-0 select-none">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-purple-600 via-indigo-600 to-amber-400 flex items-center justify-center text-white font-bold text-xs shadow-xs shrink-0">
+              <Sparkles className="w-3.5 h-3.5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-slate-100 truncate">
+                  Google Flow
+                </span>
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  Nano Banana
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Status Indicator */}
+            {flowState.isLoading ? (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[11px]">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>Загрузка...</span>
+              </div>
+            ) : flowState.error ? (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-red-500/20 text-red-300 text-[11px]">
+                <AlertTriangle className="w-3 h-3 text-red-400" />
+                <span>Ошибка</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-[11px]">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Подключено</span>
+              </div>
+            )}
+
+            {/* Reload Button */}
+            <button
+              type="button"
+              onClick={() => window.electronAPI?.flow?.reload()}
+              title="Перезагрузить страницу Google Flow"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-700/70 transition-colors cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Open in external browser */}
+            <button
+              type="button"
+              onClick={() => {
+                const url = 'https://flow.google.com/';
+                if (window.electronAPI?.shell?.openExternal) {
+                  void window.electronAPI.shell.openExternal(url);
+                } else {
+                  window.open(url, '_blank');
+                }
+              }}
+              title="Открыть Google Flow в системном браузере"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-700/70 transition-colors cursor-pointer"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Close Flow View */}
+            <button
+              type="button"
+              onClick={handleToggleFlow}
+              title="Скрыть панель Google Flow"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-700/70 transition-colors cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Target Container for Electron WebContentsView */}
+        <div
+          ref={flowTargetRef}
+          className="flex-1 w-full bg-slate-950 relative overflow-hidden"
+        >
+          {/* Overlay on error */}
+          {flowState.error && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-6 text-center bg-slate-900 text-white space-y-3">
+              <AlertTriangle className="w-10 h-10 text-amber-400" />
+              <div className="font-semibold text-sm">Не удалось загрузить Google Flow</div>
+              <div className="text-xs text-slate-400 max-w-sm">{flowState.error}</div>
+              <button
+                type="button"
+                onClick={() => window.electronAPI?.flow?.reload()}
+                className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-xs font-semibold text-white transition-colors cursor-pointer"
+              >
+                Повторить попытку
+              </button>
+            </div>
+          )}
+
+          {flowState.isLoading && !flowState.error && (
+            <div className="absolute inset-0 z-0 flex flex-col items-center justify-center p-6 text-center bg-slate-950 text-white space-y-3 pointer-events-none">
+              <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
+              <div className="text-sm font-medium text-slate-200">
+                Загрузка Google Flow (flow.google.com)...
+              </div>
+              <div className="text-xs text-slate-500 max-w-xs">
+                Сессия сохраняется в изолированном профиле persist:google_flow.
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+  </div>
+
+  {/* Confirmation Modal for Deleting Active Dialogue */}
       {sessionPendingDelete && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs"
@@ -3305,6 +3554,87 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
               >
                 <ArrowRightLeft className="w-4 h-4" />
                 <span>Передать задачу и открыть чат Дизайнера</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Browser Preview Google Flow Fallback Modal */}
+      {isBrowserFlowModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden text-slate-900">
+            <div className="px-6 py-4 bg-gradient-to-r from-purple-700 to-indigo-800 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center">
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-base">
+                    Google Flow · Режим встроенного окна
+                  </h3>
+                  <p className="text-xs text-purple-200">
+                    Интеграция Nano Banana в рабочее пространство
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBrowserFlowModalOpen(false)}
+                className="p-1 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-xs text-slate-600 leading-relaxed">
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
+                  <Monitor className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Встроенный сплит-режим работает в приложении для Windows</span>
+                </div>
+                <p className="text-[11px] leading-relaxed">
+                  В веб-версии Preview сервис Google Flow блокирует встраивание через iframe
+                  (заголовки безопасности <code>X-Frame-Options: SAMEORIGIN</code> и <code>CSP frame-ancestors: 'self'</code>).
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <p className="font-semibold text-slate-800">
+                  В десктопном приложении (Electron) реализовано:
+                </p>
+                <ul className="list-disc pl-4 space-y-1 text-slate-600">
+                  <li>Нативное разделение экрана через <strong>WebContentsView</strong>.</li>
+                  <li>Постоянная сессия <code>persist:google_flow</code> — авторизация в Google не сбрасывается при перезапуске.</li>
+                  <li>Штатный интерфейс Flow и модели Nano Banana без сторонних прокси.</li>
+                  <li>Возможность работать в чате Дизайнера и во Flow в одном окне.</li>
+                </ul>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] font-mono text-slate-700">
+                <span className="text-slate-400 block font-sans font-medium mb-1">Команда для запуска на Windows:</span>
+                <code>npm run electron:dev</code>
+              </div>
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setIsBrowserFlowModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                Закрыть
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.open('https://flow.google.com/', '_blank');
+                  setIsBrowserFlowModalOpen(false);
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-purple-700 text-white hover:bg-purple-800 transition-colors shadow-xs cursor-pointer"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Открыть Google Flow в новой вкладке</span>
               </button>
             </div>
           </div>

@@ -96,11 +96,36 @@ export interface ElectronCompanionTasksBridge {
   delete(id: string): Promise<boolean>;
 }
 
+export interface FlowViewBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface FlowViewState {
+  isVisible: boolean;
+  isLoading: boolean;
+  currentUrl?: string;
+  error?: string | null;
+}
+
+export interface ElectronFlowBridge {
+  isAvailable: boolean;
+  show(bounds: FlowViewBounds): Promise<{ success: boolean; error?: string }>;
+  hide(): Promise<{ success: boolean }>;
+  updateBounds(bounds: FlowViewBounds): Promise<{ success: boolean }>;
+  getState(): Promise<FlowViewState>;
+  reload(): Promise<void>;
+  onStateChange?(callback: (state: FlowViewState) => void): () => void;
+}
+
 export interface ElectronAppApi {
   aiConnections?: ElectronAIConnectionsBridge;
   annaMemory?: ElectronAnnaMemoryBridge;
   notifications?: ElectronNotificationsBridge;
   companionTasks?: ElectronCompanionTasksBridge;
+  flow?: ElectronFlowBridge;
   safeStorage?: {
     isAvailable(): boolean;
   };

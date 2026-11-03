@@ -85,5 +85,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       message?: { content?: string };
     }> => ipcRenderer.invoke('ollama:chat', payload),
   },
+  flow: {
+    isAvailable: true,
+    show: (bounds: { x: number; y: number; width: number; height: number }): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('flow:show', bounds),
+    hide: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('flow:hide'),
+    updateBounds: (bounds: { x: number; y: number; width: number; height: number }): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('flow:updateBounds', bounds),
+    getState: (): Promise<{ isVisible: boolean; isLoading: boolean; currentUrl?: string; error?: string | null }> =>
+      ipcRenderer.invoke('flow:getState'),
+    reload: (): Promise<void> =>
+      ipcRenderer.invoke('flow:reload'),
+    onStateChange: (callback: (state: any) => void) => {
+      const listener = (_event: any, state: any) => callback(state);
+      ipcRenderer.on('flow:stateChange', listener);
+      return () => {
+        ipcRenderer.removeListener('flow:stateChange', listener);
+      };
+    },
+  },
 });
 
