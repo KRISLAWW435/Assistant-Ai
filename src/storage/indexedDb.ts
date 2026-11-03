@@ -51,6 +51,8 @@ export interface StoredSessionRecord {
   createdAtMs: number;
   updatedAtMs: number;
   attachments?: ChatAttachment[];
+  linkedHandoffPacket?: ChatSession['linkedHandoffPacket'];
+  designArtifacts?: ChatSession['designArtifacts'];
 }
 
 export interface StoredKnowledgeCategoryRecord {
@@ -112,6 +114,7 @@ const VALID_MODES = new Set<AgentMode>([
   'manager',
   'methodist',
   'analyst',
+  'designer',
 ]);
 const VALID_CATEGORIES = new Set<KnowledgeCategoryKey>(
   KNOWLEDGE_CATEGORIES.map((c) => c.key)
@@ -404,6 +407,8 @@ function toStoredSessionRecord(session: ChatSession): StoredSessionRecord {
     createdAtMs: session.createdAtMs ?? nowMs,
     updatedAtMs: session.updatedAtMs ?? nowMs,
     attachments: session.attachments || [],
+    linkedHandoffPacket: session.linkedHandoffPacket,
+    designArtifacts: Array.isArray(session.designArtifacts) ? session.designArtifacts : undefined,
   };
 }
 
@@ -491,6 +496,8 @@ function assembleLoadedWorkspaceData(
         updatedAtMs: s.updatedAtMs,
         messages: sessMessages,
         attachments: sessAttachments,
+        linkedHandoffPacket: s.linkedHandoffPacket,
+        designArtifacts: Array.isArray(s.designArtifacts) ? s.designArtifacts : undefined,
       };
     })
   );
@@ -1512,6 +1519,12 @@ export function validateBackupArchiveJson(
       createdAtMs: typeof s.createdAtMs === 'number' ? s.createdAtMs : nowMs,
       updatedAtMs: typeof s.updatedAtMs === 'number' ? s.updatedAtMs : nowMs,
       attachments: attachmentsList,
+      linkedHandoffPacket: isObjectRecord(s.linkedHandoffPacket)
+        ? (s.linkedHandoffPacket as unknown as ChatSession['linkedHandoffPacket'])
+        : undefined,
+      designArtifacts: Array.isArray(s.designArtifacts)
+        ? (s.designArtifacts as unknown as ChatSession['designArtifacts'])
+        : undefined,
     });
   }
 
@@ -1575,6 +1588,18 @@ export function validateBackupArchiveJson(
           : undefined,
       senderLabel:
         typeof m.senderLabel === 'string' ? m.senderLabel : undefined,
+      handoffPacket: isObjectRecord(m.handoffPacket)
+        ? (m.handoffPacket as unknown as ChatMessage['handoffPacket'])
+        : undefined,
+      handoffResult: isObjectRecord(m.handoffResult)
+        ? (m.handoffResult as unknown as ChatMessage['handoffResult'])
+        : undefined,
+      interactiveDesignerPrompt: isObjectRecord(m.interactiveDesignerPrompt)
+        ? (m.interactiveDesignerPrompt as unknown as ChatMessage['interactiveDesignerPrompt'])
+        : undefined,
+      designArtifact: isObjectRecord(m.designArtifact)
+        ? (m.designArtifact as unknown as ChatMessage['designArtifact'])
+        : undefined,
     });
   }
 

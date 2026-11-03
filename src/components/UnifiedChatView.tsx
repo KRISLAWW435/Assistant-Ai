@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowRightLeft,
   BookOpen,
   Check,
+  CheckCircle2,
   Clock,
   Copy,
   Eraser,
@@ -11,8 +13,10 @@ import {
   FolderOpen,
   Image as ImageIcon,
   Info,
+  Layers,
   Loader2,
   MessageSquarePlus,
+  Palette,
   Paperclip,
   Pause,
   PenLine,
@@ -28,6 +32,7 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  Wand2,
   X,
 } from 'lucide-react';
 import { voiceManager } from '../providers/voice/voiceManager';
@@ -39,9 +44,18 @@ import {
   ChatAttachment,
   ChatMessage,
   ChatSession,
+  DesignAspectRatio,
+  DesignArtifactRecord,
+  DesignerConceptOption,
+  DesignQualityMode,
+  DesignTemplatePresetId,
+  FreeDesignImageModelId,
+  ImageProviderId,
+  ImageProvidersRegistryState,
   KnowledgeBaseBySchool,
   NavSection,
   SchoolId,
+  SpecialistHandoffPacket,
   UploadedDocumentRecord,
 } from '../types/assistant';
 import {
@@ -127,6 +141,51 @@ interface UnifiedChatViewProps {
   isParsingFile?: boolean;
   parsingStatusLabel?: string | null;
   onOpenVoiceSettings?: () => void;
+  onHandoffTaskToSpecialist?: (params: {
+    fromSpecialist: AgentMode;
+    toSpecialist: AgentMode;
+    sourceSessionId: string;
+    sourceMessageId?: string;
+    schoolId: SchoolId;
+    originalTask: string;
+    goalAndAudience: string;
+    approvedOfferAndText: string;
+    additionalRequirements: string;
+    discussionContext: string;
+    attachments: ChatAttachment[];
+  }) => Promise<void>;
+  onReturnHandoffResult?: (params: {
+    handoffPacket: SpecialistHandoffPacket;
+    summary: string;
+    artifact?: DesignArtifactRecord;
+    navigateBack?: boolean;
+  }) => Promise<void>;
+  onUpdateDesignerInteractivePrompt?: (
+    sessionId: string,
+    messageId: string,
+    updater: (
+      prev: NonNullable<ChatMessage['interactiveDesignerPrompt']>
+    ) => NonNullable<ChatMessage['interactiveDesignerPrompt']>
+  ) => void;
+  onGenerateDesignArtifact?: (params: {
+    sessionId?: string;
+    schoolId: SchoolId;
+    title: string;
+    prompt: string;
+    aspectRatio: DesignAspectRatio;
+    qualityMode: DesignQualityMode;
+    templatePreset: DesignTemplatePresetId;
+    providerId?: ImageProviderId;
+    modelId?: FreeDesignImageModelId;
+    concept?: DesignerConceptOption;
+    referenceImageDataUrl?: string;
+    existingArtifactId?: string;
+  }) => Promise<void>;
+  isGeneratingDesignImage?: boolean;
+  imageProvidersState?: ImageProvidersRegistryState | null;
+  isCheckingImageProviders?: boolean;
+  onCheckImageProviders?: (providerId?: ImageProviderId) => Promise<void>;
+  onInspectDesignArtifactInRightPanel?: (artifactId: string) => void;
 }
 
 const STAGE_ORDER: GenerationStage[] = [
@@ -134,6 +193,60 @@ const STAGE_ORDER: GenerationStage[] = [
   'waiting_model',
   'generating',
   'finishing',
+];
+
+const DESIGN_ASPECT_RATIOS: Array<{ id: DesignAspectRatio; label: string }> = [
+  { id: '3:4', label: '3:4 (Пост ВК)' },
+  { id: '9:16', label: '9:16 (Stories)' },
+  { id: '1:1', label: '1:1 (Квадрат)' },
+  { id: '16:9', label: '16:9 (Широкий)' },
+  { id: '4:3', label: '4:3 (Презентация)' },
+];
+
+const FREE_DESIGN_IMAGE_MODELS: Array<{
+  id: FreeDesignImageModelId;
+  providerId: ImageProviderId;
+  label: string;
+  shortLabel: string;
+  estimatedNeurons: number;
+  supportsReferenceImage: boolean;
+  supportsRegionalEdit: boolean;
+  constraintsNoteRu: string;
+}> = [
+  {
+    id: '@cf/black-forest-labs/flux-1-schnell',
+    providerId: 'cloudflare',
+    label: 'FLUX.1 Schnell (Быстрая, ~55 Neurons)',
+    shortLabel: 'FLUX.1 Schnell',
+    estimatedNeurons: 55,
+    supportsReferenceImage: false,
+    supportsRegionalEdit: false,
+    constraintsNoteRu:
+      'До 1024×1024 (4 шага, JSON). Только генерация с нуля по тексту (без входных референсов и региональных правок).',
+  },
+  {
+    id: '@cf/black-forest-labs/flux-2-klein-9b',
+    providerId: 'cloudflare',
+    label: 'FLUX.2 Klein 9B (Детальная + Референсы, ~160 Neurons)',
+    shortLabel: 'FLUX.2 Klein 9B',
+    estimatedNeurons: 160,
+    supportsReferenceImage: true,
+    supportsRegionalEdit: true,
+    constraintsNoteRu:
+      'До 1024×1024 (multipart/form-data). Поддерживает генерацию по тексту, референс-изображения (до 4 шт., 512×512) и точечные AI-правки.',
+  },
+];
+
+const DESIGN_TEMPLATE_PRESETS: Array<{
+  id: DesignTemplatePresetId;
+  label: string;
+  defaultRatio: DesignAspectRatio;
+}> = [
+  { id: 'promo_banner', label: 'Рекламный баннер', defaultRatio: '3:4' },
+  { id: 'story_vertical', label: 'Stories 9:16', defaultRatio: '9:16' },
+  { id: 'vk_post', label: 'Карточка ВК', defaultRatio: '3:4' },
+  { id: 'event_poster', label: 'Афиша мастер-класса', defaultRatio: '3:4' },
+  { id: 'free_concept', label: 'Свободный концепт', defaultRatio: '1:1' },
 ];
 
 export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
@@ -178,6 +291,15 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   isParsingFile = false,
   parsingStatusLabel = null,
   onOpenVoiceSettings,
+  onHandoffTaskToSpecialist,
+  onReturnHandoffResult,
+  onUpdateDesignerInteractivePrompt,
+  onGenerateDesignArtifact,
+  isGeneratingDesignImage = false,
+  imageProvidersState = null,
+  isCheckingImageProviders = false,
+  onCheckImageProviders,
+  onInspectDesignArtifactInRightPanel,
 }) => {
   const [draftPrompt, setDraftPrompt] = useState('');
   const [selectedQuickPromptId, setSelectedQuickPromptId] = useState<
@@ -185,6 +307,30 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   >(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
+
+  // Designer Composer Toolbar State (Stage 2: Free Image API Provider & Model Selection)
+  const [designAspectRatio, setDesignAspectRatio] =
+    useState<DesignAspectRatio>('3:4');
+  const [designQualityMode] = useState<DesignQualityMode>('standard');
+  const [designProviderId, setDesignProviderId] =
+    useState<ImageProviderId>('cloudflare');
+  const [designModelId, setDesignModelId] = useState<FreeDesignImageModelId>(
+    '@cf/black-forest-labs/flux-1-schnell'
+  );
+  const [designTemplatePreset, setDesignTemplatePreset] =
+    useState<DesignTemplatePresetId>('promo_banner');
+
+  // Inter-Specialist Task Handoff Modal State (Stage 1)
+  const [handoffModalState, setHandoffModalState] = useState<{
+    isOpen: boolean;
+    toSpecialist: AgentMode;
+    sourceMessageId?: string;
+    originalTask: string;
+    goalAndAudience: string;
+    approvedOfferAndText: string;
+    additionalRequirements: string;
+    discussionContext: string;
+  } | null>(null);
 
   // Playback state for specialist and assistant messages
   const [playbackState, setPlaybackState] = useState<MessagePlaybackState>(() =>
@@ -774,6 +920,112 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         </div>
       )}
 
+      {/* Linked Inter-Specialist Handoff Banner (Stage 1) */}
+      {currentSession?.linkedHandoffPacket && (
+        <div className="px-4 sm:px-6 py-2.5 bg-purple-50/90 border-b border-purple-200 text-xs text-purple-950 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <ArrowRightLeft className="w-4 h-4 text-purple-700 shrink-0" />
+            <div className="truncate">
+              {activeMode === currentSession.linkedHandoffPacket.toSpecialist ? (
+                <>
+                  <strong>
+                    Поручение от специалиста «
+                    {
+                      AGENT_MODES[
+                        currentSession.linkedHandoffPacket.fromSpecialist
+                      ].title
+                    }
+                    »:
+                  </strong>{' '}
+                  {currentSession.linkedHandoffPacket.originalTask}
+                </>
+              ) : (
+                <>
+                  <strong>
+                    Передано специалисту «
+                    {
+                      AGENT_MODES[
+                        currentSession.linkedHandoffPacket.toSpecialist
+                      ].title
+                    }
+                    » (статус:{' '}
+                    {currentSession.linkedHandoffPacket.status === 'completed'
+                      ? 'Выполнено'
+                      : 'В работе'}
+                    ):
+                  </strong>{' '}
+                  {currentSession.linkedHandoffPacket.originalTask}
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {activeMode === currentSession.linkedHandoffPacket.toSpecialist &&
+              currentSession.linkedHandoffPacket.status !== 'completed' &&
+              onReturnHandoffResult && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const latestAssistant = [...currentMessages]
+                      .reverse()
+                      .find((m) => m.role === 'assistant' && m.content.trim());
+                    const latestArtifact =
+                      currentSession.designArtifacts?.[0] ||
+                      [...currentMessages]
+                        .reverse()
+                        .find((m) => m.designArtifact)?.designArtifact;
+                    void onReturnHandoffResult({
+                      handoffPacket: currentSession.linkedHandoffPacket!,
+                      summary:
+                        latestAssistant?.content.slice(0, 600) ||
+                        'Визуальная концепция и макет подготовлены по заданию.',
+                      artifact: latestArtifact,
+                      navigateBack: true,
+                    });
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-purple-700 text-white font-semibold hover:bg-purple-800 transition-colors shadow-2xs cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>
+                    Вернуть результат в чат «
+                    {
+                      AGENT_MODES[
+                        currentSession.linkedHandoffPacket.fromSpecialist
+                      ].shortTitle
+                    }
+                    »
+                  </span>
+                </button>
+              )}
+
+            {activeMode === currentSession.linkedHandoffPacket.fromSpecialist &&
+              onSelectSession && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const pkt = currentSession.linkedHandoffPacket!;
+                    onChangeMode(pkt.toSpecialist);
+                    onSelectSession(pkt.targetSessionId);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white border border-purple-300 text-purple-900 font-semibold hover:bg-purple-100 transition-colors cursor-pointer"
+                >
+                  <Palette className="w-3.5 h-3.5 text-purple-700" />
+                  <span>
+                    Открыть чат «
+                    {
+                      AGENT_MODES[
+                        currentSession.linkedHandoffPacket.toSpecialist
+                      ].shortTitle
+                    }
+                    »
+                  </span>
+                </button>
+              )}
+          </div>
+        </div>
+      )}
+
       {/* 2. Messages Viewport (ChatGPT-Style Centered Stream) */}
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 pt-6 pb-20 bg-[#F9FAFB]/60">
         <div className="max-w-3xl mx-auto">
@@ -1163,6 +1415,463 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                         </div>
                       )}
 
+                      {/* Inter-Specialist Handoff Result Card if returned */}
+                      {msg.handoffResult && (
+                        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 space-y-2 text-xs text-emerald-950">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold flex items-center gap-1.5">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                              <span>
+                                Результат от специалиста «
+                                {
+                                  AGENT_MODES[msg.handoffResult.toSpecialist]
+                                    .title
+                                }
+                                »
+                              </span>
+                            </span>
+                            <span className="text-[10px] font-mono-tabular px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">
+                              Выполнено · {msg.handoffResult.completedAt}
+                            </span>
+                          </div>
+                          {msg.handoffResult.layersSummary && (
+                            <div className="text-[11px] text-emerald-900 bg-white/80 rounded-lg p-2 border border-emerald-200/70">
+                              <strong>Слои макета:</strong>{' '}
+                              {msg.handoffResult.layersSummary}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Interactive Designer Concept & Clarifying Questions Cards (Stage 1 & 2) */}
+                      {!isUser &&
+                        !msg.isStreaming &&
+                        msg.interactiveDesignerPrompt && (
+                          <div className="mt-4 pt-3 border-t border-purple-100 space-y-3.5">
+                            {msg.interactiveDesignerPrompt.concepts.length >
+                              0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                                    <Palette className="w-4 h-4 text-purple-600" />
+                                    <span>
+                                      Предложенные визуальные концепции (выберите
+                                      для генерации макета):
+                                    </span>
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-1 gap-2.5">
+                                  {msg.interactiveDesignerPrompt.concepts.map(
+                                    (concept, cIdx) => {
+                                      const isSelectedConcept =
+                                        msg.interactiveDesignerPrompt
+                                          ?.selectedConceptId === concept.id;
+                                      return (
+                                        <div
+                                          key={concept.id || cIdx}
+                                          onClick={() => {
+                                            if (
+                                              currentSession &&
+                                              onUpdateDesignerInteractivePrompt
+                                            ) {
+                                              onUpdateDesignerInteractivePrompt(
+                                                currentSession.id,
+                                                msg.id,
+                                                (prev) => ({
+                                                  ...prev,
+                                                  selectedConceptId: concept.id,
+                                                })
+                                              );
+                                            }
+                                            setDesignAspectRatio(
+                                              concept.recommendedAspectRatio ||
+                                                '3:4'
+                                            );
+                                          }}
+                                          className={`rounded-xl p-3 border transition-all cursor-pointer space-y-2 ${
+                                            isSelectedConcept
+                                              ? 'bg-purple-50/90 border-purple-400 shadow-xs'
+                                              : 'bg-slate-50/70 hover:bg-slate-100/80 border-slate-200'
+                                          }`}
+                                        >
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <div className="flex items-center gap-2">
+                                              <span className="px-2 py-0.5 rounded-md bg-purple-700 text-white text-[10px] font-bold">
+                                                Концепция {cIdx + 1}
+                                              </span>
+                                              <span className="font-bold text-xs text-slate-900">
+                                                {concept.title}
+                                              </span>
+                                            </div>
+                                            <span className="text-[10px] font-mono-tabular px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-700 font-semibold">
+                                              Формат:{' '}
+                                              {concept.recommendedAspectRatio}
+                                            </span>
+                                          </div>
+
+                                          <p className="text-xs text-slate-700 leading-relaxed">
+                                            {concept.visualDirection}
+                                          </p>
+
+                                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 pt-1 text-[11px]">
+                                            <div className="rounded-lg bg-white p-2 border border-slate-200/80">
+                                              <span className="text-[10px] font-semibold text-slate-400 block">
+                                                Слой «Заголовок»:
+                                              </span>
+                                              <span className="font-bold text-slate-900">
+                                                {concept.suggestedHeadline ||
+                                                  '—'}
+                                              </span>
+                                            </div>
+                                            <div className="rounded-lg bg-white p-2 border border-slate-200/80">
+                                              <span className="text-[10px] font-semibold text-slate-400 block">
+                                                Слой «Оффер»:
+                                              </span>
+                                              <span className="text-slate-800">
+                                                {concept.suggestedOffer || '—'}
+                                              </span>
+                                            </div>
+                                            <div className="rounded-lg bg-white p-2 border border-slate-200/80">
+                                              <span className="text-[10px] font-semibold text-slate-400 block">
+                                                Слой «Кнопка CTA»:
+                                              </span>
+                                              <span className="font-semibold text-purple-800">
+                                                {concept.suggestedCta || '—'}
+                                              </span>
+                                            </div>
+                                          </div>
+
+                                          {onGenerateDesignArtifact && (
+                                            <div className="pt-1 flex flex-wrap items-center justify-end gap-2">
+                                              <button
+                                                type="button"
+                                                disabled={isGeneratingDesignImage}
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  const effectiveModelId: FreeDesignImageModelId =
+                                                    draftAttachment?.dataUrl &&
+                                                    designModelId ===
+                                                      '@cf/black-forest-labs/flux-1-schnell'
+                                                      ? '@cf/black-forest-labs/flux-2-klein-9b'
+                                                      : designModelId;
+                                                  void onGenerateDesignArtifact({
+                                                    sessionId:
+                                                      currentSession?.id,
+                                                    schoolId: activeSchool,
+                                                    title: concept.title,
+                                                    prompt:
+                                                      concept.imageGenerationPrompt ||
+                                                      concept.visualDirection,
+                                                    aspectRatio:
+                                                      concept.recommendedAspectRatio ||
+                                                      designAspectRatio,
+                                                    qualityMode:
+                                                      designQualityMode,
+                                                    templatePreset:
+                                                      designTemplatePreset,
+                                                    providerId:
+                                                      designProviderId,
+                                                    modelId: effectiveModelId,
+                                                    concept,
+                                                    referenceImageDataUrl:
+                                                      draftAttachment?.dataUrl,
+                                                  });
+                                                }}
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold disabled:opacity-50 transition-colors shadow-2xs cursor-pointer"
+                                              >
+                                                {isGeneratingDesignImage ? (
+                                                  <>
+                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                    <span>
+                                                      Генерация макета...
+                                                    </span>
+                                                  </>
+                                                ) : (
+                                                  <>
+                                                    <Wand2 className="w-3.5 h-3.5" />
+                                                    <span>
+                                                      Сгенерировать макет по
+                                                      концепции {cIdx + 1}
+                                                    </span>
+                                                  </>
+                                                )}
+                                              </button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    }
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Interactive Clarifying Questions */}
+                            {msg.interactiveDesignerPrompt.questions.length >
+                              0 && (
+                              <div className="rounded-xl bg-purple-50/60 border border-purple-200/80 p-3 space-y-2.5">
+                                <div className="text-xs font-bold text-purple-950">
+                                  Уточняющие вопросы Дизайнера (нажмите на
+                                  вариант, чтобы выбрать):
+                                </div>
+                                {msg.interactiveDesignerPrompt.questions.map(
+                                  (q) => (
+                                    <div key={q.id} className="space-y-1.5">
+                                      <div className="text-xs font-semibold text-slate-800">
+                                        {q.question}
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        {q.options.map((opt) => {
+                                          const isChosen =
+                                            q.selectedOption === opt;
+                                          return (
+                                            <button
+                                              key={opt}
+                                              type="button"
+                                              onClick={() => {
+                                                if (
+                                                  currentSession &&
+                                                  onUpdateDesignerInteractivePrompt
+                                                ) {
+                                                  onUpdateDesignerInteractivePrompt(
+                                                    currentSession.id,
+                                                    msg.id,
+                                                    (prev) => ({
+                                                      ...prev,
+                                                      questions:
+                                                        prev.questions.map(
+                                                          (item) =>
+                                                            item.id === q.id
+                                                              ? {
+                                                                  ...item,
+                                                                  selectedOption:
+                                                                    opt,
+                                                                }
+                                                              : item
+                                                        ),
+                                                    })
+                                                  );
+                                                }
+                                              }}
+                                              className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                                                isChosen
+                                                  ? 'bg-purple-700 text-white border-purple-700 font-semibold'
+                                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-purple-100/60'
+                                              }`}
+                                            >
+                                              {opt}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )
+                                )}
+                                <div className="pt-1 flex justify-end">
+                                  <button
+                                    type="button"
+                                    disabled={isGenerating}
+                                    onClick={() => {
+                                      const promptData =
+                                        msg.interactiveDesignerPrompt!;
+                                      const chosenConcept =
+                                        promptData.concepts.find(
+                                          (c) =>
+                                            c.id ===
+                                            promptData.selectedConceptId
+                                        ) || promptData.concepts[0];
+                                      const answersText = promptData.questions
+                                        .filter((q) => q.selectedOption)
+                                        .map(
+                                          (q) =>
+                                            `- ${q.question}: **${q.selectedOption}**`
+                                        )
+                                        .join('\n');
+                                      const replyText = [
+                                        chosenConcept
+                                          ? `Выбираю концепцию: «${chosenConcept.title}» (формат ${chosenConcept.recommendedAspectRatio}).`
+                                          : '',
+                                        answersText
+                                          ? `Мои ответы на уточнения:\n${answersText}`
+                                          : '',
+                                      ]
+                                        .filter(Boolean)
+                                        .join('\n\n');
+                                      if (replyText.trim()) {
+                                        onSendMessage(replyText, null, {
+                                          includeKnowledgeBase,
+                                          selectedDialogueAttachmentIds,
+                                          selectedSchoolDocumentIds,
+                                          externalApiConsentConfirmed: true,
+                                        });
+                                      }
+                                    }}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition-colors cursor-pointer"
+                                  >
+                                    <Check className="w-3.5 h-3.5 text-[#FFD700]" />
+                                    <span>Подтвердить выбор и ответы</span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                      {/* In-Chat Generated Design Artifact Preview Card with Live Editable Overlay Layers (Stage 2) */}
+                      {msg.designArtifact && (() => {
+                        const art = msg.designArtifact;
+                        const displayVer =
+                          art.pendingVersion ||
+                          art.versions.find(
+                            (v) => v.id === art.activeVersionId
+                          ) ||
+                          art.versions[art.versions.length - 1];
+                        if (!displayVer) return null;
+
+                        return (
+                          <div className="mt-3.5 rounded-2xl border border-purple-200 bg-slate-950/95 text-white overflow-hidden shadow-md">
+                            <div className="px-3.5 py-2.5 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <div className="flex items-center gap-2">
+                                <Layers className="w-4 h-4 text-purple-400" />
+                                <span className="font-bold">{art.title}</span>
+                                <span className="px-2 py-0.5 rounded bg-purple-900/70 text-purple-200 text-[10px] font-mono-tabular">
+                                  {displayVer.aspectRatio} ·{' '}
+                                  {displayVer.modelUsed.includes('flux-2-klein')
+                                    ? 'FLUX.2 Klein 9B'
+                                    : displayVer.modelUsed.includes(
+                                          'flux-1-schnell'
+                                        )
+                                      ? 'FLUX.1 Schnell'
+                                      : displayVer.modelUsed}
+                                </span>
+                                {art.pendingVersion && (
+                                  <span className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] font-bold">
+                                    Ожидает подтверждения
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[11px] text-slate-400">
+                                Версий: {art.versions.length}
+                              </span>
+                            </div>
+
+                            {/* Composite Preview (Clean Background + Editable Overlay Layers) */}
+                            <div className="relative w-full max-h-[420px] flex items-center justify-center bg-slate-950 p-3 overflow-hidden">
+                              <div className="relative inline-block max-w-full">
+                                <img
+                                  src={displayVer.backgroundImageDataUrl}
+                                  alt={art.title}
+                                  className="max-h-[380px] w-auto rounded-xl object-contain block mx-auto"
+                                />
+                                {/* Live Editable Overlay Layers */}
+                                {displayVer.layers
+                                  .filter((l) => l.visible && l.text.trim())
+                                  .map((layer) => (
+                                    <div
+                                      key={layer.id}
+                                      style={{
+                                        left: `${layer.xPercent}%`,
+                                        top: `${layer.yPercent}%`,
+                                        color: layer.textColor,
+                                        backgroundColor:
+                                          layer.backgroundColor ||
+                                          'rgba(15,23,42,0.75)',
+                                        textAlign: layer.align || 'left',
+                                        fontSize: `${Math.max(10, Math.round((layer.fontSizePx || 14) * 0.65))}px`,
+                                      }}
+                                      className={`absolute max-w-[84%] px-2.5 py-1 rounded-lg shadow-sm backdrop-blur-xs pointer-events-none ${
+                                        layer.type === 'headline'
+                                          ? 'font-display font-extrabold leading-tight'
+                                          : layer.type === 'cta'
+                                            ? 'font-bold px-3 py-1.5 rounded-xl shadow-md'
+                                            : layer.type === 'school_badge'
+                                              ? 'font-extrabold uppercase tracking-wider'
+                                              : 'leading-snug'
+                                      }`}
+                                    >
+                                      {layer.text}
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+
+                            <div className="px-3.5 py-2.5 bg-slate-900 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {onInspectDesignArtifactInRightPanel && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onInspectDesignArtifactInRightPanel(art.id)
+                                    }
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors cursor-pointer"
+                                  >
+                                    <Layers className="w-3.5 h-3.5" />
+                                    <span>
+                                      Редактировать слои и области в правой
+                                      панели
+                                    </span>
+                                  </button>
+                                )}
+
+                                {onGenerateDesignArtifact && (
+                                  <button
+                                    type="button"
+                                    disabled={isGeneratingDesignImage}
+                                    onClick={() =>
+                                      void onGenerateDesignArtifact({
+                                        sessionId: currentSession?.id,
+                                        schoolId: art.schoolId,
+                                        title: art.title,
+                                        prompt: displayVer.promptUsed,
+                                        aspectRatio: displayVer.aspectRatio,
+                                        qualityMode: displayVer.qualityMode,
+                                        templatePreset: art.templatePreset,
+                                        existingArtifactId: art.id,
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors cursor-pointer disabled:opacity-50"
+                                  >
+                                    <Wand2 className="w-3.5 h-3.5 text-purple-400" />
+                                    <span>Ещё вариант</span>
+                                  </button>
+                                )}
+                              </div>
+
+                              {currentSession?.linkedHandoffPacket &&
+                                currentSession.linkedHandoffPacket.status !==
+                                  'completed' &&
+                                onReturnHandoffResult && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void onReturnHandoffResult({
+                                        handoffPacket:
+                                          currentSession.linkedHandoffPacket!,
+                                        summary: `Утверждён макет «${art.title}» (${displayVer.label}).`,
+                                        artifact: art,
+                                        navigateBack: true,
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors cursor-pointer"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>
+                                      Вернуть макет специалисту «
+                                      {
+                                        AGENT_MODES[
+                                          currentSession.linkedHandoffPacket
+                                            .fromSpecialist
+                                        ].shortTitle
+                                      }
+                                      »
+                                    </span>
+                                  </button>
+                                )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       {!isUser && !msg.isStreaming && (
                         <div className="mt-2.5 pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                           <span className="text-[10px] text-slate-400 font-mono-tabular">
@@ -1172,7 +1881,48 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                               geminiStatus?.model
                             )}
                           </span>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {/* Inter-Specialist Handoff Button (Stage 1) */}
+                            {onHandoffTaskToSpecialist &&
+                              activeMode !== 'designer' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const firstUserMsg = currentMessages.find(
+                                      (m) => m.role === 'user'
+                                    );
+                                    setHandoffModalState({
+                                      isOpen: true,
+                                      toSpecialist: 'designer',
+                                      sourceMessageId: msg.id,
+                                      originalTask:
+                                        firstUserMsg?.content.slice(0, 300) ||
+                                        currentSession?.title ||
+                                        'Разработка визуального креатива по задаче',
+                                      goalAndAudience: `${schoolConfig.name}: ${schoolConfig.focusDescription}`,
+                                      approvedOfferAndText: msg.content.slice(
+                                        0,
+                                        800
+                                      ),
+                                      additionalRequirements:
+                                        'Соблюдать брендбук школы, разделить фоновое изображение и редактируемые слои заголовка, оффера и кнопки CTA.',
+                                      discussionContext: currentMessages
+                                        .slice(-4)
+                                        .map(
+                                          (m) =>
+                                            `${m.role === 'user' ? 'Анна' : modeConfig.shortTitle}: ${m.content.slice(0, 220)}`
+                                        )
+                                        .join('\n'),
+                                    });
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-50 text-purple-800 border border-purple-200 hover:bg-purple-100 transition-colors cursor-pointer"
+                                  title="Передать задачу, утверждённый оффер и контекст Дизайнеру"
+                                >
+                                  <Palette className="w-3.5 h-3.5 text-purple-600" />
+                                  <span>Передать Дизайнеру</span>
+                                </button>
+                              )}
+
                             {(msg.isError ||
                               msg.content.includes('[Генерация')) &&
                               onRetryLastMessage && (
@@ -2027,6 +2777,324 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             </div>
           )}
 
+          {/* Designer Mode Visual Parameters & Free Image API Toolbar */}
+          {activeMode === 'designer' &&
+            (() => {
+              const activeProviderDesc =
+                imageProvidersState?.providers.find(
+                  (p) => p.id === designProviderId
+                ) ||
+                imageProvidersState?.providers[0] ||
+                null;
+              const selectedModelMeta =
+                FREE_DESIGN_IMAGE_MODELS.find(
+                  (m) => m.id === designModelId
+                ) || FREE_DESIGN_IMAGE_MODELS[0];
+              const providerStatus =
+                activeProviderDesc?.status || 'not_configured';
+              const quota = activeProviderDesc?.quota;
+              const hasReferenceDraft = Boolean(
+                draftAttachment?.dataUrl &&
+                  draftAttachment.dataUrl.startsWith('data:image/')
+              );
+
+              return (
+                <div className="rounded-2xl border border-purple-200/90 bg-purple-50/50 p-2.5 space-y-2 text-xs">
+                  {/* Top Row: School, Template, Aspect Ratio, Free Provider & Model */}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-bold text-purple-950 flex items-center gap-1">
+                        <Palette className="w-3.5 h-3.5 text-purple-700" />
+                        <span>Бесплатный генератор:</span>
+                      </span>
+
+                      {/* School Selector */}
+                      <div className="inline-flex rounded-lg bg-white border border-purple-200 p-0.5">
+                        {(['kiberone', 'renderia'] as SchoolId[]).map((sch) => (
+                          <button
+                            key={sch}
+                            type="button"
+                            onClick={() => onChangeSchool(sch)}
+                            className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                              activeSchool === sch
+                                ? sch === 'kiberone'
+                                  ? 'bg-[#FFD700] text-slate-950'
+                                  : 'bg-[#84CC16] text-slate-950'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            {SCHOOLS[sch].name}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Free Image API Provider Selector */}
+                      <select
+                        aria-label="Бесплатный провайдер генерации изображений"
+                        value={designProviderId}
+                        onChange={(e) =>
+                          setDesignProviderId(
+                            e.target.value as ImageProviderId
+                          )
+                        }
+                        className="rounded-lg border border-purple-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                      >
+                        <option value="cloudflare">
+                          API: Cloudflare Workers AI (Free)
+                        </option>
+                      </select>
+
+                      {/* Free Image Model Selector */}
+                      <select
+                        aria-label="Бесплатная AI-модель генерации"
+                        value={designModelId}
+                        onChange={(e) =>
+                          setDesignModelId(
+                            e.target.value as FreeDesignImageModelId
+                          )
+                        }
+                        className="rounded-lg border border-purple-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                      >
+                        {FREE_DESIGN_IMAGE_MODELS.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            Модель: {m.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Template Preset Selector */}
+                      <select
+                        aria-label="Шаблон макета"
+                        value={designTemplatePreset}
+                        onChange={(e) => {
+                          const nextPreset = e.target
+                            .value as DesignTemplatePresetId;
+                          setDesignTemplatePreset(nextPreset);
+                          const found = DESIGN_TEMPLATE_PRESETS.find(
+                            (p) => p.id === nextPreset
+                          );
+                          if (found) setDesignAspectRatio(found.defaultRatio);
+                        }}
+                        className="rounded-lg border border-purple-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                      >
+                        {DESIGN_TEMPLATE_PRESETS.map((preset) => (
+                          <option key={preset.id} value={preset.id}>
+                            Шаблон: {preset.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Aspect Ratio Selector */}
+                      <select
+                        aria-label="Соотношение сторон"
+                        value={designAspectRatio}
+                        onChange={(e) =>
+                          setDesignAspectRatio(
+                            e.target.value as DesignAspectRatio
+                          )
+                        }
+                        className="rounded-lg border border-purple-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                      >
+                        {DESIGN_ASPECT_RATIOS.map((ar) => (
+                          <option key={ar.id} value={ar.id}>
+                            Формат: {ar.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {onCheckImageProviders && (
+                        <button
+                          type="button"
+                          disabled={isCheckingImageProviders}
+                          onClick={() =>
+                            void onCheckImageProviders(designProviderId)
+                          }
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border border-purple-200 bg-white hover:bg-purple-100/70 text-purple-900 text-[11px] font-semibold disabled:opacity-50 transition-colors cursor-pointer"
+                          title="Проверить доступность бесплатного API и статус квоты"
+                        >
+                          {isCheckingImageProviders ? (
+                            <Loader2 className="w-3 h-3 animate-spin text-purple-700" />
+                          ) : (
+                            <RotateCcw className="w-3 h-3 text-purple-700" />
+                          )}
+                          <span>Проверить API</span>
+                        </button>
+                      )}
+
+                      {onGenerateDesignArtifact && (
+                        <button
+                          type="button"
+                          disabled={
+                            isGeneratingDesignImage ||
+                            isGenerating ||
+                            !draftPrompt.trim() ||
+                            providerStatus === 'quota_exceeded'
+                          }
+                          onClick={() => {
+                            if (!draftPrompt.trim()) return;
+                            const effectiveModelId: FreeDesignImageModelId =
+                              hasReferenceDraft &&
+                              designModelId ===
+                                '@cf/black-forest-labs/flux-1-schnell'
+                                ? '@cf/black-forest-labs/flux-2-klein-9b'
+                                : designModelId;
+                            if (effectiveModelId !== designModelId) {
+                              setDesignModelId(effectiveModelId);
+                            }
+                            void onGenerateDesignArtifact({
+                              sessionId: currentSession?.id,
+                              schoolId: activeSchool,
+                              title: draftPrompt.slice(0, 42),
+                              prompt: draftPrompt,
+                              aspectRatio: designAspectRatio,
+                              qualityMode: designQualityMode,
+                              templatePreset: designTemplatePreset,
+                              providerId: designProviderId,
+                              modelId: effectiveModelId,
+                              referenceImageDataUrl: draftAttachment?.dataUrl,
+                            });
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-purple-700 hover:bg-purple-800 text-white text-[11px] font-semibold disabled:opacity-40 transition-colors shadow-2xs cursor-pointer"
+                          title="Сразу сгенерировать визуальную основу и редактируемые слои через выбранную бесплатную модель"
+                        >
+                          {isGeneratingDesignImage ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Генерация...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Wand2 className="w-3.5 h-3.5" />
+                              <span>Сгенерировать макет сразу</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Second Row: Live Availability Status, Free Quota Telemetry & Model Constraints */}
+                  <div className="rounded-xl bg-white/90 border border-purple-200/80 px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-700">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Provider & Model Availability Badge */}
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] ${
+                          providerStatus === 'available'
+                            ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                            : providerStatus === 'quota_exceeded'
+                              ? 'bg-red-100 text-red-900 border border-red-300'
+                              : providerStatus === 'error'
+                                ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                : 'bg-slate-100 text-slate-700 border border-slate-300'
+                        }`}
+                      >
+                        {providerStatus === 'available'
+                          ? '● API и модель доступны'
+                          : providerStatus === 'quota_exceeded'
+                            ? '● Бесплатная квота исчерпана'
+                            : providerStatus === 'error'
+                              ? '● Ошибка доступа к API'
+                              : '● Требуется настройка ключей'}
+                      </span>
+
+                      <span className="text-slate-400">·</span>
+                      <span>
+                        <strong>Модель:</strong>{' '}
+                        <code className="text-[10px] bg-purple-50 text-purple-900 px-1 py-0.5 rounded border border-purple-200">
+                          {selectedModelMeta.id}
+                        </code>
+                      </span>
+
+                      <span className="text-slate-400">·</span>
+                      <span>
+                        <strong>Ограничения:</strong>{' '}
+                        {selectedModelMeta.constraintsNoteRu}
+                      </span>
+                    </div>
+
+                    {/* Free Quota Telemetry */}
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] font-medium text-slate-600">
+                      <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
+                        Квота:{' '}
+                        <strong>
+                          {quota?.dailyLimitLabel ||
+                            '10 000 Neurons / сутки (00:00 UTC)'}
+                        </strong>
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
+                        Запросов сегодня:{' '}
+                        <strong>{quota?.requestsTodayCount ?? 0}</strong> ·
+                        Оценка расхода:{' '}
+                        <strong>
+                          ~{quota?.estimatedNeuronsUsedToday ?? 0} Neurons
+                        </strong>
+                      </span>
+                      <span
+                        className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-900"
+                        title={
+                          quota?.remainingQuotaLabelRu ||
+                          'Cloudflare REST API не возвращает точный остаток Neurons в заголовках ответа'
+                        }
+                      >
+                        Точный остаток:{' '}
+                        <strong>
+                          {quota?.remainingQuotaStatus === 'unknown' || !quota
+                            ? 'неизвестен'
+                            : 'известен'}
+                        </strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Reference image compatibility notice for FLUX.1 Schnell */}
+                  {hasReferenceDraft &&
+                    !selectedModelMeta.supportsReferenceImage && (
+                      <div className="rounded-xl bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-[11px] text-amber-900 flex items-center justify-between gap-2">
+                        <span>
+                          К сообщению прикреплён референс, но модель{' '}
+                          <strong>FLUX.1 Schnell</strong> поддерживает только
+                          генерацию по тексту. При запуске генерации будет
+                          автоматически использована бесплатная модель{' '}
+                          <strong>FLUX.2 Klein 9B</strong>.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDesignModelId(
+                              '@cf/black-forest-labs/flux-2-klein-9b'
+                            )
+                          }
+                          className="px-2 py-0.5 rounded-lg bg-amber-200/80 hover:bg-amber-300 text-amber-950 font-bold text-[10px] shrink-0 cursor-pointer"
+                        >
+                          Переключить на FLUX.2 Klein 9B
+                        </button>
+                      </div>
+                    )}
+
+                  {/* Status / Error / Quota Exhausted Alert (Strictly Free, No Billing Prompts) */}
+                  {providerStatus !== 'available' &&
+                    (activeProviderDesc?.quota.lastError ||
+                      activeProviderDesc?.statusLabelRu) && (
+                      <div
+                        className={`rounded-xl px-2.5 py-1.5 text-[11px] flex items-start gap-2 ${
+                          providerStatus === 'quota_exceeded'
+                            ? 'bg-red-50 border border-red-200 text-red-900'
+                            : 'bg-amber-50 border border-amber-200 text-amber-900'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          {activeProviderDesc.quota.lastError ||
+                            activeProviderDesc.statusLabelRu}
+                        </span>
+                      </div>
+                    )}
+                </div>
+              );
+            })()}
+
           {/* Composer Box */}
           <div className="rounded-2xl border border-slate-300/90 bg-white shadow-2xs focus-within:ring-2 focus-within:ring-[#00A8B5] focus-within:border-transparent transition-all p-2.5 space-y-2">
             <textarea
@@ -2228,6 +3296,167 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 <span>
                   {isDeletingSession ? 'Удаление...' : 'Удалить диалог'}
                 </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inter-Specialist Task Handoff Modal (Stage 1) */}
+      {handoffModalState?.isOpen && currentSession && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
+          onClick={() => setHandoffModalState(null)}
+        >
+          <div
+            className="w-full max-w-xl rounded-2xl bg-white border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-slate-200 bg-purple-50/70 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-700 text-white flex items-center justify-center shrink-0">
+                  <Palette className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-base text-slate-900">
+                    Передать задачу специалисту «
+                    {AGENT_MODES[handoffModalState.toSpecialist].title}»
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    Школа: <strong>{schoolConfig.name}</strong> · Из чата:{' '}
+                    {modeConfig.title} (история чата сохранится)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHandoffModalState(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-3.5 text-xs">
+              <div>
+                <label className="block font-bold text-slate-800 mb-1">
+                  1. Исходная задача
+                </label>
+                <input
+                  type="text"
+                  value={handoffModalState.originalTask}
+                  onChange={(e) =>
+                    setHandoffModalState((prev) =>
+                      prev ? { ...prev, originalTask: e.target.value } : null
+                    )
+                  }
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-600"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-800 mb-1">
+                  2. Цель и целевая аудитория ({schoolConfig.name})
+                </label>
+                <input
+                  type="text"
+                  value={handoffModalState.goalAndAudience}
+                  onChange={(e) =>
+                    setHandoffModalState((prev) =>
+                      prev ? { ...prev, goalAndAudience: e.target.value } : null
+                    )
+                  }
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-600"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-800 mb-1">
+                  3. Текст и утверждённый оффер
+                </label>
+                <textarea
+                  rows={4}
+                  value={handoffModalState.approvedOfferAndText}
+                  onChange={(e) =>
+                    setHandoffModalState((prev) =>
+                      prev
+                        ? { ...prev, approvedOfferAndText: e.target.value }
+                        : null
+                    )
+                  }
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-600"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-800 mb-1">
+                  4. Дополнительные требования к визуалу и слоям
+                </label>
+                <textarea
+                  rows={2}
+                  value={handoffModalState.additionalRequirements}
+                  onChange={(e) =>
+                    setHandoffModalState((prev) =>
+                      prev
+                        ? { ...prev, additionalRequirements: e.target.value }
+                        : null
+                    )
+                  }
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-600"
+                />
+              </div>
+
+              {dialogueAttachments.length > 0 && (
+                <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
+                  <span className="font-bold text-slate-800 block mb-1">
+                    Приложенные файлы и изображения (будут переданы Дизайнеру):
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {dialogueAttachments.map((att) => (
+                      <span
+                        key={att.id}
+                        className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[11px] text-slate-700 font-medium"
+                      >
+                        {att.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setHandoffModalState(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!onHandoffTaskToSpecialist || !currentSession) return;
+                  const st = handoffModalState;
+                  setHandoffModalState(null);
+                  void onHandoffTaskToSpecialist({
+                    fromSpecialist: activeMode,
+                    toSpecialist: st.toSpecialist,
+                    sourceSessionId: currentSession.id,
+                    sourceMessageId: st.sourceMessageId,
+                    schoolId: activeSchool,
+                    originalTask: st.originalTask,
+                    goalAndAudience: st.goalAndAudience,
+                    approvedOfferAndText: st.approvedOfferAndText,
+                    additionalRequirements: st.additionalRequirements,
+                    discussionContext: st.discussionContext,
+                    attachments: dialogueAttachments,
+                  });
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-purple-700 text-white hover:bg-purple-800 transition-colors shadow-xs cursor-pointer"
+              >
+                <ArrowRightLeft className="w-4 h-4" />
+                <span>Передать задачу и открыть чат Дизайнера</span>
               </button>
             </div>
           </div>

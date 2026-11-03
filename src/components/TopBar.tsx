@@ -38,6 +38,7 @@ const SECTION_TITLES: Record<NavSection, string> = {
   manager: 'Менеджер по работе с родителями',
   methodist: 'Методист',
   analyst: 'Бизнес-аналитик',
+  designer: 'Дизайнер',
   knowledge: 'База знаний двух школ',
   backups: 'Резервные копии',
   connections: 'Настройки и ИИ',

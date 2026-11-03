@@ -22,6 +22,7 @@ import {
   Megaphone,
   MessageSquare,
   MessageSquareHeart,
+  Palette,
   Pencil,
   Plus,
   RefreshCw,
@@ -145,6 +146,7 @@ export function getTaskTypeInfo(task: CompanionTaskRecord): {
     else if (specMode === 'manager') icon = MessageSquareHeart;
     else if (specMode === 'methodist') icon = GraduationCap;
     else if (specMode === 'analyst') icon = BarChart3;
+    else if (specMode === 'designer') icon = Palette;
 
     const specTitle = specMode ? AGENT_MODES[specMode].shortTitle : 'Специалисту';
     return {

@@ -14,6 +14,7 @@ import {
   startServer,
   setServerGeminiKey,
   setServerOpenRouterKey,
+  setServerCloudflareCredentials,
   RunningAssistantServer,
 } from '../server';
 import type {
@@ -173,6 +174,7 @@ interface VaultData {
   profiles: StoredVaultItem[];
   specialistAssignments?: SpecialistModelAssignments;
   failoverSettings?: FailoverSequenceSettings;
+  cloudflareImageCredentialsEncryptedBase64?: string;
 }
 
 const VAULT_FILE_PATH = path.join(userDataDir, 'ai-connections-vault.json');
@@ -249,6 +251,19 @@ function syncVaultKeysToServer(): void {
         } else if (item.providerId === 'openrouter') {
           setServerOpenRouterKey(rawKey);
         }
+      }
+    }
+  }
+  if (vault.cloudflareImageCredentialsEncryptedBase64) {
+    const rawCf = decryptSecret(
+      vault.cloudflareImageCredentialsEncryptedBase64
+    );
+    const sepIdx = rawCf.indexOf(':');
+    if (sepIdx > 0) {
+      const accountId = rawCf.slice(0, sepIdx).trim();
+      const apiToken = rawCf.slice(sepIdx + 1).trim();
+      if (accountId && apiToken) {
+        setServerCloudflareCredentials(accountId, apiToken);
       }
     }
   }

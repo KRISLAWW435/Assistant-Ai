@@ -2,6 +2,17 @@ import {
   AgentMode,
   AIProviderId,
   AIProviderSelectionMode,
+  DesignAspectRatio,
+  DesignerInteractivePrompt,
+  DesignImageModelId,
+  DesignOverlayLayer,
+  DesignQualityMode,
+  DesignSelectionBox,
+  DesignTemplatePresetId,
+  FreeDesignImageModelId,
+  ImageProviderId,
+  ImageProviderQuotaState,
+  ImageProvidersRegistryState,
   PixelRelevantContextBundle,
   SchoolId,
 } from '../types/assistant';
@@ -120,7 +131,40 @@ export class ProviderDocumentConsentRequiredError extends Error {
 
 export interface IGeminiProvider {
   getStatus(): Promise<GeminiServerStatus>;
+  getDesignImageProviders(): Promise<ImageProvidersRegistryState>;
+  checkDesignImageProviders(
+    providerId?: ImageProviderId
+  ): Promise<ImageProvidersRegistryState>;
   streamChat(options: GeminiStreamRequestOptions): Promise<GeminiChatResult>;
+  generateDesignImage(params: {
+    schoolId: SchoolId;
+    providerId?: ImageProviderId;
+    modelId?: FreeDesignImageModelId;
+    prompt: string;
+    aspectRatio: DesignAspectRatio;
+    qualityMode: DesignQualityMode;
+    templatePreset: DesignTemplatePresetId;
+    suggestedHeadline?: string;
+    suggestedOffer?: string;
+    suggestedCta?: string;
+    sourceImageBase64?: string;
+    sourceImageMimeType?: string;
+    selectionBox?: DesignSelectionBox;
+    editInstruction?: string;
+    referenceImageBase64?: string;
+    referenceImageMimeType?: string;
+  }): Promise<{
+    providerId: ImageProviderId;
+    modelUsed: DesignImageModelId;
+    aspectRatio: DesignAspectRatio;
+    qualityMode: DesignQualityMode;
+    backgroundImageDataUrl: string;
+    defaultLayers?: DesignOverlayLayer[];
+    estimatedNeuronsUsed?: number;
+    quotaSnapshot?: ImageProviderQuotaState;
+    registryState?: ImageProvidersRegistryState;
+    modelComment?: string;
+  }>;
 }
 
 const activeRequestLocks = new Set<string>();
@@ -140,6 +184,38 @@ export const geminiProvider: IGeminiProvider = {
       );
     }
     return (await res.json()) as GeminiServerStatus;
+  },
+
+  async getDesignImageProviders(): Promise<ImageProvidersRegistryState> {
+    const res = await fetch('/api/design/providers', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      throw new Error(
+        'Не удалось получить статус бесплатных генераторов изображений.'
+      );
+    }
+    return (await res.json()) as ImageProvidersRegistryState;
+  },
+
+  async checkDesignImageProviders(
+    providerId?: ImageProviderId
+  ): Promise<ImageProvidersRegistryState> {
+    const res = await fetch('/api/design/providers/check', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(providerId ? { providerId } : {}),
+    });
+    if (!res.ok) {
+      throw new Error(
+        'Не удалось выполнить проверку подключения к генератору изображений.'
+      );
+    }
+    return (await res.json()) as ImageProvidersRegistryState;
   },
 
   async streamChat(
@@ -542,4 +618,137 @@ export const geminiProvider: IGeminiProvider = {
       activeRequestLocks.delete(lockKey);
     }
   },
+
+  async generateDesignImage(params: {
+    schoolId: SchoolId;
+    providerId?: ImageProviderId;
+    modelId?: FreeDesignImageModelId;
+    prompt: string;
+    aspectRatio: DesignAspectRatio;
+    qualityMode: DesignQualityMode;
+    templatePreset: DesignTemplatePresetId;
+    suggestedHeadline?: string;
+    suggestedOffer?: string;
+    suggestedCta?: string;
+    sourceImageBase64?: string;
+    sourceImageMimeType?: string;
+    selectionBox?: DesignSelectionBox;
+    editInstruction?: string;
+    referenceImageBase64?: string;
+    referenceImageMimeType?: string;
+  }): Promise<{
+    providerId: ImageProviderId;
+    modelUsed: DesignImageModelId;
+    aspectRatio: DesignAspectRatio;
+    qualityMode: DesignQualityMode;
+    backgroundImageDataUrl: string;
+    defaultLayers?: DesignOverlayLayer[];
+    estimatedNeuronsUsed?: number;
+    quotaSnapshot?: ImageProviderQuotaState;
+    registryState?: ImageProvidersRegistryState;
+    modelComment?: string;
+  }> {
+    const res = await fetch('/api/gemini/design/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.ok || !data?.backgroundImageDataUrl) {
+      throw new Error(
+        data?.error || 'Не удалось сгенерировать визуальный макет.'
+      );
+    }
+    return {
+      providerId: data.providerId || 'cloudflare',
+      modelUsed: data.modelUsed,
+      aspectRatio: data.aspectRatio,
+      qualityMode: data.qualityMode,
+      backgroundImageDataUrl: data.backgroundImageDataUrl,
+      defaultLayers: Array.isArray(data.defaultLayers)
+        ? data.defaultLayers
+        : undefined,
+      estimatedNeuronsUsed: data.estimatedNeuronsUsed,
+      quotaSnapshot: data.quotaSnapshot,
+      registryState: data.registryState,
+      modelComment: data.modelComment,
+    };
+  },
 };
+
+/**
+ * Extracts structured `designer-concepts` JSON block from Designer's markdown response
+ * and returns clean markdown + parsed DesignerInteractivePrompt.
+ */
+export function parseDesignerConceptsFromMarkdown(rawText: string): {
+  cleanText: string;
+  interactivePrompt?: DesignerInteractivePrompt;
+} {
+  if (!rawText) return { cleanText: '' };
+  const fenceRegex = /```designer-concepts\s*([\s\S]*?)```/i;
+  const match = rawText.match(fenceRegex);
+  if (!match || !match[1]) {
+    return { cleanText: rawText };
+  }
+
+  try {
+    const parsed = JSON.parse(match[1].trim());
+    const validRatios = new Set<DesignAspectRatio>([
+      '3:4',
+      '9:16',
+      '1:1',
+      '16:9',
+      '4:3',
+    ]);
+    const concepts = Array.isArray(parsed?.concepts)
+      ? parsed.concepts
+          .filter((c: Record<string, unknown>) => c && typeof c.title === 'string')
+          .map((c: Record<string, unknown>, idx: number) => ({
+            id: typeof c.id === 'string' && c.id ? c.id : `concept-${idx + 1}`,
+            title: String(c.title || `Концепция ${idx + 1}`),
+            visualDirection: String(c.visualDirection || ''),
+            compositionAndStyle: String(c.compositionAndStyle || ''),
+            suggestedHeadline: String(c.suggestedHeadline || ''),
+            suggestedOffer: String(c.suggestedOffer || ''),
+            suggestedCta: String(c.suggestedCta || 'Записаться на пробный урок'),
+            recommendedAspectRatio: validRatios.has(
+              c.recommendedAspectRatio as DesignAspectRatio
+            )
+              ? (c.recommendedAspectRatio as DesignAspectRatio)
+              : '3:4',
+            imageGenerationPrompt: String(
+              c.imageGenerationPrompt || c.visualDirection || c.title || ''
+            ),
+          }))
+      : [];
+
+    const questions = Array.isArray(parsed?.questions)
+      ? parsed.questions
+          .filter(
+            (q: Record<string, unknown>) =>
+              q && typeof q.question === 'string' && Array.isArray(q.options)
+          )
+          .map((q: Record<string, unknown>, idx: number) => ({
+            id: typeof q.id === 'string' && q.id ? q.id : `q-${idx + 1}`,
+            question: String(q.question),
+            options: (q.options as unknown[]).map((o) => String(o)),
+          }))
+      : [];
+
+    if (concepts.length === 0 && questions.length === 0) {
+      return { cleanText: rawText };
+    }
+
+    const cleanText = rawText.replace(fenceRegex, '').trim();
+    return {
+      cleanText: cleanText || 'Я подготовил визуальные концепции по вашей задаче:',
+      interactivePrompt: {
+        concepts,
+        selectedConceptId: concepts[0]?.id,
+        questions,
+      },
+    };
+  } catch {
+    return { cleanText: rawText };
+  }
+}

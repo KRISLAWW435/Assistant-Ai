@@ -27,12 +27,25 @@ import {
   CompanionMessage,
   CompanionPreferencesRecord,
   CompanionTaskRecord,
+  DesignAspectRatio,
+  DesignArtifactRecord,
+  DesignerConceptOption,
+  DesignOverlayLayer,
+  DesignQualityMode,
+  DesignSelectionBox,
+  DesignTemplatePresetId,
+  DesignVersionItem,
   DocumentProcessingStatus,
+  FreeDesignImageModelId,
+  ImageProviderId,
+  ImageProvidersRegistryState,
   KnowledgeBaseBySchool,
   KnowledgeCategoryKey,
   NavSection,
   RightPanelTab,
   SchoolId,
+  SpecialistHandoffPacket,
+  SpecialistHandoffResult,
   UploadedDocumentRecord,
 } from './types/assistant';
 import {
@@ -57,6 +70,7 @@ import {
   geminiProvider,
   GeminiServerStatus,
   GenerationStage,
+  parseDesignerConceptsFromMarkdown,
   ProviderDocumentConsentRequiredError,
 } from './providers/geminiProvider';
 import {
@@ -317,6 +331,11 @@ export default function App() {
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<
     string | null
   >(null);
+  const [selectedDesignArtifactId, setSelectedDesignArtifactId] = useState<
+    string | null
+  >(null);
+  const [isGeneratingDesignImage, setIsGeneratingDesignImage] =
+    useState<boolean>(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
@@ -342,6 +361,10 @@ export default function App() {
   const [providerSelection, setProviderSelection] =
     useState<AIProviderSelectionMode>(() => readStoredProviderSelection());
   const [isCheckingProviders, setIsCheckingProviders] = useState(false);
+  const [imageProvidersState, setImageProvidersState] =
+    useState<ImageProvidersRegistryState | null>(null);
+  const [isCheckingImageProviders, setIsCheckingImageProviders] =
+    useState(false);
   const [pendingFallbackConsentPrompt, setPendingFallbackConsentPrompt] =
     useState<PendingFallbackDocumentConsentState | null>(null);
   const [isGeneratingChat, setIsGeneratingChat] = useState(false);
@@ -543,21 +566,19 @@ export default function App() {
         }
       },
       onDelegatedTaskSyncToAnnaTasks: async (delegationState) => {
-        const specialistTitle = AGENT_MODES[delegationState.targetMode].shortTitle;
-        const schoolName = SCHOOLS[delegationState.schoolId].name;
+        // Internal AI specialist delegations must not automatically create tasks in Anna's "Мои задачи".
+        // Only sync status if Anna has already explicitly linked a personal task to this delegation.
         const existing = companionTasksRef.current.find(
           (t) => t.linkedDelegationTaskId === delegationState.taskId
         );
+        if (!existing) return;
+
+        const specialistTitle = AGENT_MODES[delegationState.targetMode].shortTitle;
+        const schoolName = SCHOOLS[delegationState.schoolId].name;
         const now = new Date();
-        const syzranDate = new Intl.DateTimeFormat('sv-SE', {
-          timeZone: 'Europe/Samara',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-        }).format(now);
 
         let mappedStatus: CompanionTaskRecord['status'];
-        if (existing && (existing.status === 'done' || existing.status === 'cancelled')) {
+        if (existing.status === 'done' || existing.status === 'cancelled') {
           mappedStatus = existing.status;
         } else if (delegationState.status === 'cancelled') {
           mappedStatus = 'cancelled';
@@ -571,7 +592,6 @@ export default function App() {
         ) {
           mappedStatus = 'waiting_response';
         } else if (delegationState.status === 'completed') {
-          // Specialist finished answering. Now Anna needs to review/act on the result!
           mappedStatus = 'waiting_anna_action';
         } else if (delegationState.status === 'needs_revision') {
           mappedStatus = 'in_progress';
@@ -584,35 +604,17 @@ export default function App() {
           delegationState.resultText ||
           delegationState.specialistReplyPreview;
 
-        const taskRecord: CompanionTaskRecord = existing
-          ? {
-              ...existing,
-              status: mappedStatus,
-              description: summaryText
-                ? `Поручение: ${delegationState.instruction}\nИтог: ${summaryText.slice(0, 260)}`
-                : `Поручение ${specialistTitle} (${schoolName}): ${delegationState.instruction}`,
-              completedAt:
-                mappedStatus === 'done' ? formatDateTimeShort(now) : existing.completedAt,
-              completedAtMs:
-                mappedStatus === 'done' ? now.getTime() : existing.completedAtMs,
-            }
-          : {
-              id: `task-del-${delegationState.taskId}`,
-              title: `Поручение ${specialistTitle} (${schoolName}): ${delegationState.instruction.slice(0, 90)}`,
-              description: `Сессия: ${delegationState.sessionTitle || 'Рабочий чат'}`,
-              dueDate: syzranDate,
-              priority: 'medium',
-              status: mappedStatus,
-              schoolId: delegationState.schoolId,
-              sourceType: 'delegation',
-              linkedDelegationTaskId: delegationState.taskId,
-              linkedSpecialistId: delegationState.specialistId,
-              linkedChatId: delegationState.chatId,
-              estimatedMinutes: 15,
-              priorityReason: `Делегировано специалисту (${specialistTitle}, ${schoolName}) — ожидает ответа или проверки.`,
-              createdAt: formatDateTimeShort(now),
-              createdAtMs: now.getTime(),
-            };
+        const taskRecord: CompanionTaskRecord = {
+          ...existing,
+          status: mappedStatus,
+          description: summaryText
+            ? `Поручение: ${delegationState.instruction}\nИтог: ${summaryText.slice(0, 260)}`
+            : `Поручение ${specialistTitle} (${schoolName}): ${delegationState.instruction}`,
+          completedAt:
+            mappedStatus === 'done' ? formatDateTimeShort(now) : existing.completedAt,
+          completedAtMs:
+            mappedStatus === 'done' ? now.getTime() : existing.completedAtMs,
+        };
 
         await handleSaveCompanionTask(taskRecord);
       },
@@ -816,12 +818,33 @@ export default function App() {
     if (isCheckingProviders) return;
     setIsCheckingProviders(true);
     try {
-      const checked = await aiProviderManager.checkAllProvidersOnDemand();
+      const [checked, imgChecked] = await Promise.all([
+        aiProviderManager.checkAllProvidersOnDemand(),
+        geminiProvider.getDesignImageProviders().catch(() => null),
+      ]);
       setProvidersState(checked);
+      if (imgChecked) {
+        setImageProvidersState(imgChecked);
+      }
     } catch {
       // ignore check error
     } finally {
       setIsCheckingProviders(false);
+    }
+  };
+
+  const handleCheckImageProvidersOnDemand = async (
+    providerId?: ImageProviderId
+  ) => {
+    if (isCheckingImageProviders) return;
+    setIsCheckingImageProviders(true);
+    try {
+      const checked = await geminiProvider.checkDesignImageProviders(providerId);
+      setImageProvidersState(checked);
+    } catch {
+      // ignore check error
+    } finally {
+      setIsCheckingImageProviders(false);
     }
   };
 
@@ -923,6 +946,17 @@ export default function App() {
       })
       .catch(() => {
         // Server status optional on initial load
+      });
+
+    geminiProvider
+      .getDesignImageProviders()
+      .then((imgState) => {
+        if (!cancelled) {
+          setImageProvidersState(imgState);
+        }
+      })
+      .catch(() => {
+        // Image providers state optional on initial load
       });
 
     async function hydrateFromIndexedDb() {
@@ -1535,27 +1569,36 @@ export default function App() {
   const handleSendMessage = async (
     text: string,
     attachment: ChatAttachment | null,
-    contextOptions: SendMessageContextOptions
+    contextOptions: SendMessageContextOptions,
+    targetOverride?: {
+      sessionId: string;
+      schoolId: SchoolId;
+      mode: AgentMode;
+    }
   ) => {
     if (isGeneratingChat) return;
 
     const currentSessions = sessionsRef.current;
-    const existingTarget = activeSessionId
-      ? currentSessions.find((s) => s.id === activeSessionId) || null
+    const desiredSessionId = targetOverride?.sessionId ?? activeSessionId;
+    const desiredSchool = targetOverride?.schoolId ?? activeSchool;
+    const desiredMode = targetOverride?.mode ?? activeAgentMode;
+
+    const existingTarget = desiredSessionId
+      ? currentSessions.find((s) => s.id === desiredSessionId) || null
       : null;
 
     // Ensure we never overwrite schoolId/mode of an incompatible session
     const canUseExisting =
       existingTarget !== null &&
-      existingTarget.schoolId === activeSchool &&
-      existingTarget.mode === activeAgentMode;
+      existingTarget.schoolId === desiredSchool &&
+      existingTarget.mode === desiredMode;
 
     const targetSchool: SchoolId = canUseExisting
       ? existingTarget.schoolId
-      : activeSchool;
+      : desiredSchool;
     const targetMode: AgentMode = canUseExisting
       ? existingTarget.mode
-      : activeAgentMode;
+      : desiredMode;
 
     const baseSession: ChatSession =
       canUseExisting && existingTarget
@@ -1840,15 +1883,21 @@ export default function App() {
         },
       });
 
-      const finalContent = result.aborted
+      const rawFinalContent = result.aborted
         ? result.text.trim()
           ? `${result.text.trim()}\n\n[Генерация остановлена управляющей]`
           : '[Генерация ответа остановлена управляющей]'
         : result.text.trim() || 'Ответ от модели получен (пустой текст).';
 
+      const parsedDesigner =
+        targetMode === 'designer' && !result.aborted
+          ? parseDesignerConceptsFromMarkdown(rawFinalContent)
+          : { cleanText: rawFinalContent };
+
       updateAssistantMessageInSession(
         {
-          content: finalContent,
+          content: parsedDesigner.cleanText,
+          interactiveDesignerPrompt: parsedDesigner.interactivePrompt,
           isStreaming: false,
           isError: false,
           modelName: result.model,
@@ -2012,6 +2061,754 @@ export default function App() {
     }
 
     void handleSendMessage(retryText, retryAttachment, retryContextOptions);
+  };
+
+  // ============================================================================
+  // STAGE 1 & 2: INTER-SPECIALIST HANDOFF & DESIGNER VISUAL GENERATION / LAYERS
+  // ============================================================================
+
+  const handleInspectDesignArtifactInRightPanel = (artifactId: string) => {
+    setSelectedDesignArtifactId(artifactId);
+    setSelectedAttachmentId(null);
+    handleChangeRightPanelTab('preview');
+    if (rightPanelCollapsed) {
+      handleToggleRightPanelCollapsed();
+    }
+    setRightPanelMobileOpen(true);
+  };
+
+  const handleHandoffTaskToSpecialist = async (params: {
+    fromSpecialist: AgentMode;
+    toSpecialist: AgentMode;
+    sourceSessionId: string;
+    sourceMessageId?: string;
+    schoolId: SchoolId;
+    originalTask: string;
+    goalAndAudience: string;
+    approvedOfferAndText: string;
+    additionalRequirements: string;
+    discussionContext: string;
+    attachments: ChatAttachment[];
+  }) => {
+    if (isGeneratingChat) return;
+    const now = new Date();
+    const nowMs = now.getTime();
+    const timeStr = formatTimeNow(now);
+
+    const currentSessions = sessionsRef.current;
+    const sourceSession = currentSessions.find(
+      (s) => s.id === params.sourceSessionId
+    );
+    if (!sourceSession) return;
+
+    // Reuse an existing target session if already linked to this sourceSessionId + school + target specialist, to avoid duplicates
+    const existingTargetSession = currentSessions.find(
+      (s) =>
+        s.schoolId === params.schoolId &&
+        s.mode === params.toSpecialist &&
+        s.linkedHandoffPacket?.sourceSessionId === params.sourceSessionId
+    );
+
+    const baseTargetSession =
+      existingTargetSession ||
+      buildNewSession(params.toSpecialist, params.schoolId, currentSessions);
+
+    const handoffId =
+      existingTargetSession?.linkedHandoffPacket?.id ||
+      `handoff-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const packet: SpecialistHandoffPacket = {
+      id: handoffId,
+      fromSpecialist: params.fromSpecialist,
+      toSpecialist: params.toSpecialist,
+      sourceSessionId: params.sourceSessionId,
+      sourceMessageId: params.sourceMessageId,
+      targetSessionId: baseTargetSession.id,
+      schoolId: params.schoolId,
+      originalTask: params.originalTask.trim(),
+      goalAndAudience: params.goalAndAudience.trim(),
+      approvedOfferAndText: params.approvedOfferAndText.trim(),
+      additionalRequirements: params.additionalRequirements.trim(),
+      discussionContext: params.discussionContext.trim(),
+      attachments: params.attachments,
+      status: 'in_progress',
+      createdAt: timeStr,
+      updatedAt: timeStr,
+    };
+
+    const fromTitle = AGENT_MODES[params.fromSpecialist].title;
+    const toTitle = AGENT_MODES[params.toSpecialist].title;
+    const schoolTitle = SCHOOLS[params.schoolId].name;
+
+    // 1. Record handoff status card in the source specialist chat (preserving full history)
+    const sourceStatusMsg: ChatMessage = {
+      id: `msg-handoff-src-${nowMs}`,
+      sessionId: sourceSession.id,
+      role: 'assistant',
+      content: `Задача передана специалисту **«${toTitle}»** (школа **${schoolTitle}**).\n\n- **Исходная задача:** ${packet.originalTask}\n- **Цель и аудитория:** ${packet.goalAndAudience || 'По контексту обсуждения'}\n- **Утверждённый оффер / текст:** ${packet.approvedOfferAndText || 'По контексту обсуждения'}\n\nИстория текущего диалога сохранена. Когда ${toTitle} завершит разработку и вы подтвердите результат, итоговый макет и статус вернутся сюда.`,
+      createdAt: timeStr,
+      createdAtMs: nowMs,
+      schoolId: params.schoolId,
+      mode: params.fromSpecialist,
+      handoffPacket: packet,
+      senderLabel: `Передача задачи → ${toTitle}`,
+    };
+
+    const updatedSourceSession: ChatSession = {
+      ...sourceSession,
+      updatedAt: timeStr,
+      updatedAtMs: nowMs,
+      linkedHandoffPacket: packet,
+      messages: [...sourceSession.messages, sourceStatusMsg],
+    };
+
+    // 2. Prepare target specialist session with attachments and handoff briefing
+    const mergedTargetAttachments = [
+      ...params.attachments,
+      ...(baseTargetSession.attachments || []).filter(
+        (a) => !params.attachments.some((pa) => pa.id === a.id)
+      ),
+    ];
+
+    const targetSessionReady: ChatSession = {
+      ...baseTargetSession,
+      title:
+        baseTargetSession.messages.length === 0
+          ? `От ${fromTitle}: ${packet.originalTask.slice(0, 34)}`
+          : baseTargetSession.title,
+      updatedAt: timeStr,
+      updatedAtMs: nowMs + 1,
+      attachments: mergedTargetAttachments,
+      linkedHandoffPacket: packet,
+    };
+
+    const nextSessions = sortSessionsPinnedAndUpdatedDesc([
+      targetSessionReady,
+      updatedSourceSession,
+      ...currentSessions.filter(
+        (s) => s.id !== targetSessionReady.id && s.id !== updatedSourceSession.id
+      ),
+    ]);
+
+    sessionsRef.current = nextSessions;
+    setSessions(nextSessions);
+
+    if (!isStorageLoading) {
+      await storageProvider
+        .saveSessionAndMessages(updatedSourceSession, [sourceStatusMsg])
+        .catch(() => {});
+      await storageProvider.saveSession(targetSessionReady).catch(() => {});
+    }
+
+    // 3. Switch to the target specialist's chat and send the structured handoff briefing
+    setActiveSchool(params.schoolId);
+    writeActiveSchoolToStorage(params.schoolId);
+    setActiveAgentMode(params.toSpecialist);
+    setActiveSection(params.toSpecialist);
+    setActiveSessionId(targetSessionReady.id);
+
+    const structuredBriefPrompt = [
+      `📥 **Передача задачи от специалиста «${fromTitle}» (школа ${schoolTitle})**`,
+      `**Исходная задача:** ${packet.originalTask}`,
+      packet.goalAndAudience
+        ? `**Цель и целевая аудитория:** ${packet.goalAndAudience}`
+        : '',
+      packet.approvedOfferAndText
+        ? `**Утверждённый текст и оффер:**\n${packet.approvedOfferAndText}`
+        : '',
+      packet.additionalRequirements
+        ? `**Дополнительные требования:** ${packet.additionalRequirements}`
+        : '',
+      packet.discussionContext
+        ? `**Контекст обсуждения:**\n${packet.discussionContext}`
+        : '',
+      params.toSpecialist === 'designer'
+        ? `\nПроанализируй задачу и брендбук школы ${schoolTitle}, предложи 2–3 визуальные концепции с разделением чистого фона и редактируемых слоёв (заголовок, оффер, CTA, бейдж школы) и задай мне уточняющие вопросы перед генерацией.`
+        : `\nПроанализируй переданную задачу и предложи решение для школы ${schoolTitle}.`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    setTimeout(() => {
+      void handleSendMessage(
+        structuredBriefPrompt,
+        params.attachments[0] || null,
+        {
+          includeKnowledgeBase: true,
+          selectedDialogueAttachmentIds: params.attachments.map((a) => a.id),
+          selectedSchoolDocumentIds: [],
+          externalApiConsentConfirmed: true,
+        },
+        {
+          sessionId: targetSessionReady.id,
+          schoolId: params.schoolId,
+          mode: params.toSpecialist,
+        }
+      );
+    }, 60);
+  };
+
+  const handleReturnHandoffResultToSourceSpecialist = async (params: {
+    handoffPacket: SpecialistHandoffPacket;
+    summary: string;
+    artifact?: DesignArtifactRecord;
+    navigateBack?: boolean;
+  }) => {
+    const now = new Date();
+    const nowMs = now.getTime();
+    const timeStr = formatTimeNow(now);
+
+    const { handoffPacket, summary, artifact, navigateBack = true } = params;
+    const activeVer = artifact
+      ? artifact.versions.find((v) => v.id === artifact.activeVersionId) ||
+        artifact.versions[artifact.versions.length - 1]
+      : undefined;
+
+    const layersSummary = activeVer
+      ? activeVer.layers
+          .filter((l) => l.visible && l.text.trim())
+          .map((l) => `${l.label}: «${l.text}»`)
+          .join(' • ')
+      : undefined;
+
+    const updatedPacket: SpecialistHandoffPacket = {
+      ...handoffPacket,
+      status: 'completed',
+      resultSummary: summary,
+      resultArtifactId: artifact?.id,
+      resultImageDataUrl: activeVer?.backgroundImageDataUrl,
+      updatedAt: timeStr,
+    };
+
+    const handoffResult: SpecialistHandoffResult = {
+      handoffId: handoffPacket.id,
+      fromSpecialist: handoffPacket.fromSpecialist,
+      toSpecialist: handoffPacket.toSpecialist,
+      sourceSessionId: handoffPacket.sourceSessionId,
+      targetSessionId: handoffPacket.targetSessionId,
+      schoolId: handoffPacket.schoolId,
+      summary,
+      artifactId: artifact?.id,
+      previewImageDataUrl: activeVer?.backgroundImageDataUrl,
+      layersSummary,
+      completedAt: timeStr,
+    };
+
+    const toTitle = AGENT_MODES[handoffPacket.toSpecialist].title;
+    const fromTitle = AGENT_MODES[handoffPacket.fromSpecialist].title;
+
+    const returnMsgInSource: ChatMessage = {
+      id: `msg-handoff-return-${nowMs}`,
+      sessionId: handoffPacket.sourceSessionId,
+      role: 'assistant',
+      content: `✅ **Специалист «${toTitle}» завершил работу по переданной задаче и вернул результат:**\n\n${summary}${
+        layersSummary ? `\n\n**Текстовые слои макета:** ${layersSummary}` : ''
+      }`,
+      createdAt: timeStr,
+      createdAtMs: nowMs,
+      schoolId: handoffPacket.schoolId,
+      mode: handoffPacket.fromSpecialist,
+      handoffPacket: updatedPacket,
+      handoffResult,
+      designArtifact: artifact,
+      senderLabel: `Результат от: ${toTitle}`,
+    };
+
+    const confirmMsgInTarget: ChatMessage = {
+      id: `msg-handoff-confirm-${nowMs + 1}`,
+      sessionId: handoffPacket.targetSessionId,
+      role: 'assistant',
+      content: `Результат и утверждённый макет переданы обратно в чат специалиста **«${fromTitle}»**. Статус поручения обновлён на «Выполнено».`,
+      createdAt: timeStr,
+      createdAtMs: nowMs + 1,
+      schoolId: handoffPacket.schoolId,
+      mode: handoffPacket.toSpecialist,
+      handoffPacket: updatedPacket,
+      handoffResult,
+    };
+
+    const nextSessions = sortSessionsPinnedAndUpdatedDesc(
+      sessionsRef.current.map((s) => {
+        if (s.id === handoffPacket.sourceSessionId) {
+          const updatedMessages = s.messages.map((m) =>
+            m.handoffPacket?.id === handoffPacket.id
+              ? { ...m, handoffPacket: updatedPacket }
+              : m
+          );
+          return {
+            ...s,
+            updatedAt: timeStr,
+            updatedAtMs: nowMs,
+            linkedHandoffPacket: updatedPacket,
+            designArtifacts: artifact
+              ? [
+                  artifact,
+                  ...(s.designArtifacts || []).filter(
+                    (a) => a.id !== artifact.id
+                  ),
+                ]
+              : s.designArtifacts,
+            messages: [...updatedMessages, returnMsgInSource],
+          };
+        }
+        if (s.id === handoffPacket.targetSessionId) {
+          return {
+            ...s,
+            updatedAt: timeStr,
+            updatedAtMs: nowMs + 1,
+            linkedHandoffPacket: updatedPacket,
+            messages: [...s.messages, confirmMsgInTarget],
+          };
+        }
+        return s;
+      })
+    );
+
+    sessionsRef.current = nextSessions;
+    setSessions(nextSessions);
+
+    const updatedSource = nextSessions.find(
+      (s) => s.id === handoffPacket.sourceSessionId
+    );
+    const updatedTarget = nextSessions.find(
+      (s) => s.id === handoffPacket.targetSessionId
+    );
+
+    if (!isStorageLoading) {
+      if (updatedSource) {
+        await storageProvider
+          .saveSessionAndMessages(updatedSource, updatedSource.messages)
+          .catch(() => {});
+      }
+      if (updatedTarget) {
+        await storageProvider
+          .saveSessionAndMessages(updatedTarget, [confirmMsgInTarget])
+          .catch(() => {});
+      }
+    }
+
+    if (navigateBack && updatedSource) {
+      setActiveSchool(updatedSource.schoolId);
+      setActiveAgentMode(updatedSource.mode);
+      setActiveSection(updatedSource.mode);
+      setActiveSessionId(updatedSource.id);
+    }
+  };
+
+  const handleUpdateDesignerInteractivePrompt = (
+    sessionId: string,
+    messageId: string,
+    updater: (
+      prev: NonNullable<ChatMessage['interactiveDesignerPrompt']>
+    ) => NonNullable<ChatMessage['interactiveDesignerPrompt']>
+  ) => {
+    const nextList = sessionsRef.current.map((s) => {
+      if (s.id !== sessionId) return s;
+      let changedMsg: ChatMessage | null = null;
+      const nextMessages = s.messages.map((m) => {
+        if (m.id === messageId && m.interactiveDesignerPrompt) {
+          changedMsg = {
+            ...m,
+            interactiveDesignerPrompt: updater(m.interactiveDesignerPrompt),
+          };
+          return changedMsg;
+        }
+        return m;
+      });
+      const updatedSess = { ...s, messages: nextMessages };
+      if (changedMsg && !isStorageLoading) {
+        storageProvider
+          .saveSessionAndMessages(updatedSess, [changedMsg])
+          .catch(() => {});
+      }
+      return updatedSess;
+    });
+    sessionsRef.current = nextList;
+    setSessions(nextList);
+  };
+
+  const handleGenerateDesignArtifact = async (params: {
+    sessionId?: string;
+    schoolId: SchoolId;
+    title: string;
+    prompt: string;
+    aspectRatio: DesignAspectRatio;
+    qualityMode: DesignQualityMode;
+    templatePreset: DesignTemplatePresetId;
+    providerId?: ImageProviderId;
+    modelId?: FreeDesignImageModelId;
+    concept?: DesignerConceptOption;
+    referenceImageDataUrl?: string;
+    existingArtifactId?: string;
+  }) => {
+    if (isGeneratingDesignImage) return;
+    setIsGeneratingDesignImage(true);
+    setStorageError(null);
+
+    try {
+      const currentSessions = sessionsRef.current;
+      const existingTarget = params.sessionId
+        ? currentSessions.find((s) => s.id === params.sessionId) || null
+        : activeSessionId
+          ? currentSessions.find((s) => s.id === activeSessionId) || null
+          : null;
+
+      const baseSession =
+        existingTarget && existingTarget.schoolId === params.schoolId
+          ? existingTarget
+          : buildNewSession('designer', params.schoolId, currentSessions);
+
+      const genResult = await geminiProvider.generateDesignImage({
+        schoolId: params.schoolId,
+        prompt: params.concept?.imageGenerationPrompt || params.prompt,
+        aspectRatio: params.aspectRatio,
+        qualityMode: params.qualityMode,
+        templatePreset: params.templatePreset,
+        providerId: params.providerId,
+        modelId: params.modelId,
+        suggestedHeadline: params.concept?.suggestedHeadline,
+        suggestedOffer: params.concept?.suggestedOffer,
+        suggestedCta: params.concept?.suggestedCta,
+        referenceImageBase64: params.referenceImageDataUrl,
+      });
+
+      if (genResult.registryState) {
+        setImageProvidersState(genResult.registryState);
+      }
+
+      const now = new Date();
+      const nowMs = now.getTime();
+      const timeStr = formatTimeNow(now);
+
+      const existingArtifact = params.existingArtifactId
+        ? (baseSession.designArtifacts || []).find(
+            (a) => a.id === params.existingArtifactId
+          )
+        : undefined;
+
+      const nextVersionNum = existingArtifact
+        ? existingArtifact.versions.length + 1
+        : 1;
+
+      const modelShortName = genResult.modelUsed.includes('flux-2-klein')
+        ? 'FLUX.2 Klein 9B'
+        : genResult.modelUsed.includes('flux-1-schnell')
+          ? 'FLUX.1 Schnell'
+          : genResult.modelUsed;
+
+      const newVersion: DesignVersionItem = {
+        id: `ver-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
+        versionNumber: nextVersionNum,
+        label: `Вариант ${nextVersionNum} (${genResult.aspectRatio}, ${modelShortName})`,
+        promptUsed: params.concept?.imageGenerationPrompt || params.prompt,
+        providerId: genResult.providerId,
+        modelUsed: genResult.modelUsed,
+        aspectRatio: genResult.aspectRatio,
+        qualityMode: genResult.qualityMode,
+        backgroundImageDataUrl: genResult.backgroundImageDataUrl,
+        layers:
+          genResult.defaultLayers ||
+          existingArtifact?.versions[existingArtifact.versions.length - 1]
+            ?.layers ||
+          [],
+        createdAt: timeStr,
+      };
+
+      const msgId = `msg-design-${nowMs}`;
+
+      const updatedArtifact: DesignArtifactRecord = existingArtifact
+        ? {
+            ...existingArtifact,
+            aspectRatio: genResult.aspectRatio,
+            qualityMode: genResult.qualityMode,
+            activeVersionId: newVersion.id,
+            versions: [...existingArtifact.versions, newVersion],
+            pendingVersion: undefined,
+            updatedAt: timeStr,
+          }
+        : {
+            id: `design-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
+            schoolId: params.schoolId,
+            sessionId: baseSession.id,
+            messageId: msgId,
+            title: params.concept?.title || params.title || 'Макет Дизайнера',
+            conceptSummary:
+              params.concept?.visualDirection || params.prompt.slice(0, 160),
+            aspectRatio: genResult.aspectRatio,
+            qualityMode: genResult.qualityMode,
+            templatePreset: params.templatePreset,
+            activeVersionId: newVersion.id,
+            versions: [newVersion],
+            sourceHandoffId: baseSession.linkedHandoffPacket?.id,
+            createdAt: timeStr,
+            updatedAt: timeStr,
+          };
+
+      const assistantDesignMsg: ChatMessage = {
+        id: msgId,
+        sessionId: baseSession.id,
+        role: 'assistant',
+        content: `🎨 **Готов визуальный макет «${updatedArtifact.title}» (${newVersion.label})**\n\n- **Бесплатный провайдер:** \`Cloudflare Workers AI (Free Tier)\`\n- **Модель:** \`${genResult.modelUsed}\`\n- **Формат:** \`${genResult.aspectRatio}\`${
+          genResult.estimatedNeuronsUsed
+            ? ` · **Оценка расхода за запрос:** \`~${genResult.estimatedNeuronsUsed} Neurons\``
+            : ''
+        }\n- **Разделение слоёв:** чистая визуальная основа + ${newVersion.layers.length} редактируемых слоя (Заголовок, Оффер, CTA, Бейдж школы).\n\nОткройте макет в правой панели «Просмотр», чтобы отредактировать текст на плашках, выполнить точечное AI-редактирование выбранной области или скачать готовый PNG.`,
+        createdAt: timeStr,
+        createdAtMs: nowMs,
+        schoolId: params.schoolId,
+        mode: 'designer',
+        modelName: genResult.modelUsed,
+        providerId: 'gemini',
+        designArtifact: updatedArtifact,
+      };
+
+      const updatedSession: ChatSession = {
+        ...baseSession,
+        updatedAt: timeStr,
+        updatedAtMs: nowMs,
+        designArtifacts: [
+          updatedArtifact,
+          ...(baseSession.designArtifacts || []).filter(
+            (a) => a.id !== updatedArtifact.id
+          ),
+        ],
+        messages: [...baseSession.messages, assistantDesignMsg],
+      };
+
+      const nextList = sortSessionsPinnedAndUpdatedDesc([
+        updatedSession,
+        ...currentSessions.filter((s) => s.id !== updatedSession.id),
+      ]);
+      sessionsRef.current = nextList;
+      setSessions(nextList);
+      setActiveSessionId(updatedSession.id);
+
+      if (!isStorageLoading) {
+        await storageProvider
+          .saveSessionAndMessages(updatedSession, [assistantDesignMsg])
+          .catch(() => {});
+      }
+
+      handleInspectDesignArtifactInRightPanel(updatedArtifact.id);
+    } catch (err) {
+      geminiProvider
+        .getDesignImageProviders()
+        .then(setImageProvidersState)
+        .catch(() => {});
+      setStorageError(
+        err instanceof Error
+          ? err.message
+          : 'Ошибка при генерации изображения.'
+      );
+    } finally {
+      setIsGeneratingDesignImage(false);
+    }
+  };
+
+  const updateDesignArtifactAcrossState = (
+    artifactId: string,
+    updater: (art: DesignArtifactRecord) => DesignArtifactRecord
+  ) => {
+    const nextList = sessionsRef.current.map((s) => {
+      const hasArtifact =
+        (s.designArtifacts || []).some((a) => a.id === artifactId) ||
+        s.messages.some((m) => m.designArtifact?.id === artifactId);
+      if (!hasArtifact) return s;
+
+      let updatedArt: DesignArtifactRecord | null = null;
+      const nextDesignArtifacts = (s.designArtifacts || []).map((a) => {
+        if (a.id === artifactId) {
+          updatedArt = updater(a);
+          return updatedArt;
+        }
+        return a;
+      });
+
+      const changedMsgs: ChatMessage[] = [];
+      const nextMessages = s.messages.map((m) => {
+        if (m.designArtifact?.id === artifactId) {
+          const art = updatedArt || updater(m.designArtifact);
+          updatedArt = art;
+          const nextMsg = { ...m, designArtifact: art };
+          changedMsgs.push(nextMsg);
+          return nextMsg;
+        }
+        return m;
+      });
+
+      const nextSession: ChatSession = {
+        ...s,
+        designArtifacts: nextDesignArtifacts,
+        messages: nextMessages,
+      };
+
+      if (!isStorageLoading) {
+        storageProvider
+          .saveSessionAndMessages(nextSession, changedMsgs)
+          .catch(() => {});
+      }
+      return nextSession;
+    });
+
+    sessionsRef.current = nextList;
+    setSessions(nextList);
+  };
+
+  // Non-destructive layer change preview: creates/updates pendingVersion so Anna can confirm or reject
+  const handlePreviewDesignLayerChanges = (
+    artifactId: string,
+    nextLayers: DesignOverlayLayer[]
+  ) => {
+    const timeStr = formatTimeNow(new Date());
+    updateDesignArtifactAcrossState(artifactId, (art) => {
+      const baseVer =
+        art.pendingVersion ||
+        art.versions.find((v) => v.id === art.activeVersionId) ||
+        art.versions[art.versions.length - 1];
+      if (!baseVer) return art;
+
+      const pendingVer: DesignVersionItem = {
+        ...baseVer,
+        id: art.pendingVersion?.id || `pending-${Date.now()}`,
+        versionNumber: art.versions.length + 1,
+        label: `Предпросмотр правок слоёв (Версия ${art.versions.length + 1})`,
+        layers: nextLayers,
+        createdAt: timeStr,
+      };
+      return {
+        ...art,
+        pendingVersion: pendingVer,
+        updatedAt: timeStr,
+      };
+    });
+  };
+
+  // Regional / Point AI Editing: generates a candidate pendingVersion without overwriting the original
+  const handleRequestRegionalAiEdit = async (params: {
+    artifactId: string;
+    selectionBox?: DesignSelectionBox;
+    editInstruction: string;
+  }) => {
+    if (isGeneratingDesignImage) return;
+    setIsGeneratingDesignImage(true);
+    setStorageError(null);
+
+    try {
+      let targetArtifact: DesignArtifactRecord | null = null;
+      for (const s of sessionsRef.current) {
+        const found =
+          (s.designArtifacts || []).find((a) => a.id === params.artifactId) ||
+          s.messages.find((m) => m.designArtifact?.id === params.artifactId)
+            ?.designArtifact;
+        if (found) {
+          targetArtifact = found;
+          break;
+        }
+      }
+      if (!targetArtifact) return;
+
+      const baseVer =
+        targetArtifact.pendingVersion ||
+        targetArtifact.versions.find(
+          (v) => v.id === targetArtifact!.activeVersionId
+        ) ||
+        targetArtifact.versions[targetArtifact.versions.length - 1];
+      if (!baseVer) return;
+
+      const genResult = await geminiProvider.generateDesignImage({
+        schoolId: targetArtifact.schoolId,
+        prompt: baseVer.promptUsed,
+        aspectRatio: baseVer.aspectRatio,
+        qualityMode: baseVer.qualityMode,
+        templatePreset: targetArtifact.templatePreset,
+        providerId: 'cloudflare',
+        modelId: '@cf/black-forest-labs/flux-2-klein-9b',
+        sourceImageBase64: baseVer.backgroundImageDataUrl,
+        selectionBox: params.selectionBox,
+        editInstruction: params.editInstruction,
+      });
+
+      if (genResult.registryState) {
+        setImageProvidersState(genResult.registryState);
+      }
+
+      const timeStr = formatTimeNow(new Date());
+      const candidateVersion: DesignVersionItem = {
+        id: `pending-ai-${Date.now()}`,
+        versionNumber: targetArtifact.versions.length + 1,
+        label: `AI-правка: ${params.editInstruction.slice(0, 28)}`,
+        promptUsed: baseVer.promptUsed,
+        editInstruction: params.editInstruction,
+        selectionBox: params.selectionBox,
+        providerId: genResult.providerId,
+        modelUsed: genResult.modelUsed,
+        aspectRatio: genResult.aspectRatio,
+        qualityMode: genResult.qualityMode,
+        backgroundImageDataUrl: genResult.backgroundImageDataUrl,
+        layers: baseVer.layers,
+        createdAt: timeStr,
+      };
+
+      updateDesignArtifactAcrossState(params.artifactId, (art) => ({
+        ...art,
+        pendingVersion: candidateVersion,
+        updatedAt: timeStr,
+      }));
+    } catch (err) {
+      geminiProvider
+        .getDesignImageProviders()
+        .then(setImageProvidersState)
+        .catch(() => {});
+      setStorageError(
+        err instanceof Error
+          ? err.message
+          : 'Не удалось выполнить точечное AI-редактирование макета.'
+      );
+    } finally {
+      setIsGeneratingDesignImage(false);
+    }
+  };
+
+  // Anna confirms the previewed changes -> saves as a new version, preserving all previous versions
+  const handleConfirmPendingDesignVersion = (artifactId: string) => {
+    const timeStr = formatTimeNow(new Date());
+    updateDesignArtifactAcrossState(artifactId, (art) => {
+      if (!art.pendingVersion) return art;
+      const confirmedVer: DesignVersionItem = {
+        ...art.pendingVersion,
+        id: `ver-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        versionNumber: art.versions.length + 1,
+        label: art.pendingVersion.editInstruction
+          ? `Версия ${art.versions.length + 1} (AI-правка)`
+          : `Версия ${art.versions.length + 1} (Слои обновлены)`,
+        createdAt: timeStr,
+      };
+      return {
+        ...art,
+        activeVersionId: confirmedVer.id,
+        versions: [...art.versions, confirmedVer],
+        pendingVersion: undefined,
+        updatedAt: timeStr,
+      };
+    });
+  };
+
+  // Anna rejects the previewed changes -> original version remains untouched
+  const handleRejectPendingDesignVersion = (artifactId: string) => {
+    const timeStr = formatTimeNow(new Date());
+    updateDesignArtifactAcrossState(artifactId, (art) => ({
+      ...art,
+      pendingVersion: undefined,
+      updatedAt: timeStr,
+    }));
+  };
+
+  const handleSelectDesignVersion = (artifactId: string, versionId: string) => {
+    updateDesignArtifactAcrossState(artifactId, (art) => ({
+      ...art,
+      activeVersionId: versionId,
+      pendingVersion: undefined,
+    }));
   };
 
   const handleUpdateKnowledgeCategory = async (
@@ -2610,6 +3407,19 @@ export default function App() {
                       : null
                   }
                   onOpenVoiceSettings={handleOpenRightPanelVoiceSettings}
+                  onHandoffTaskToSpecialist={handleHandoffTaskToSpecialist}
+                  onReturnHandoffResult={handleReturnHandoffResultToSourceSpecialist}
+                  onUpdateDesignerInteractivePrompt={
+                    handleUpdateDesignerInteractivePrompt
+                  }
+                  onGenerateDesignArtifact={handleGenerateDesignArtifact}
+                  isGeneratingDesignImage={isGeneratingDesignImage}
+                  imageProvidersState={imageProvidersState}
+                  isCheckingImageProviders={isCheckingImageProviders}
+                  onCheckImageProviders={handleCheckImageProvidersOnDemand}
+                  onInspectDesignArtifactInRightPanel={
+                    handleInspectDesignArtifactInRightPanel
+                  }
                 />
               )}
 
@@ -2692,6 +3502,18 @@ export default function App() {
         onCheckProvidersOnDemand={handleCheckProvidersOnDemand}
         isCheckingProviders={isCheckingProviders}
         onOpenPixelChat={() => setPixelForceOpenChatTrigger((c) => c + 1)}
+        selectedDesignArtifactId={selectedDesignArtifactId}
+        onSelectDesignArtifact={setSelectedDesignArtifactId}
+        onPreviewDesignLayerChanges={handlePreviewDesignLayerChanges}
+        onRequestRegionalAiEdit={handleRequestRegionalAiEdit}
+        onConfirmPendingDesignVersion={handleConfirmPendingDesignVersion}
+        onRejectPendingDesignVersion={handleRejectPendingDesignVersion}
+        onSelectDesignVersion={handleSelectDesignVersion}
+        isGeneratingDesignImage={isGeneratingDesignImage}
+        imageProvidersState={imageProvidersState}
+        isCheckingImageProviders={isCheckingImageProviders}
+        onCheckImageProviders={handleCheckImageProvidersOnDemand}
+        onReturnHandoffResult={handleReturnHandoffResultToSourceSpecialist}
       />
 
       {/* 4. PIXEL VOICE WIDGET (STAGE 6.1: PERSISTENT VOICE ASSISTANT) */}

@@ -6,6 +6,16 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI, Modality, ThinkingLevel, type LiveServerMessage } from '@google/genai';
+import {
+  imageProviderRegistry,
+  ImageGenerationError,
+} from './src/server/imageProviderRegistry';
+import type {
+  DesignAspectRatio,
+  DesignQualityMode,
+  FreeDesignImageModelId,
+  ImageProviderId,
+} from './src/types/assistant';
 
 dotenv.config();
 
@@ -52,6 +62,7 @@ type AssistantEndpointMode =
   | 'manager'
   | 'methodist'
   | 'analyst'
+  | 'designer'
   | 'pixel';
 
 type AIProviderId = 'gemini' | 'openrouter' | 'ollama';
@@ -140,7 +151,7 @@ interface IncomingPixelContext {
     sessionTitle: string;
     schoolId: SchoolId;
     schoolName: string;
-    mode: 'marketer' | 'manager' | 'methodist' | 'analyst';
+    mode: 'marketer' | 'manager' | 'methodist' | 'analyst' | 'designer';
     specialistTitle: string;
     specialistRoleSubtitle: string;
     messagesCount: number;
@@ -202,6 +213,7 @@ const VALID_MODES = new Set<AssistantEndpointMode>([
   'manager',
   'methodist',
   'analyst',
+  'designer',
   'pixel',
 ]);
 const VALID_PROVIDER_IDS = new Set<AIProviderId>([
@@ -309,6 +321,23 @@ export function setServerOpenRouterKey(key: string): void {
   }
 }
 
+export function setServerCloudflareCredentials(
+  accountId: string,
+  apiToken: string
+): void {
+  const cleanAccount = (accountId || '').trim();
+  const cleanToken = (apiToken || '').trim();
+  if (cleanAccount) {
+    process.env.CLOUDFLARE_ACCOUNT_ID = cleanAccount;
+  }
+  if (cleanToken) {
+    process.env.CLOUDFLARE_API_TOKEN = cleanToken;
+  }
+  imageProviderRegistry
+    .getCloudflareAdapter()
+    .setCredentials(cleanAccount, cleanToken);
+}
+
 function getOpenRouterApiKey(): string {
   const envKey = (process.env.OPENROUTER_API_KEY || '').trim();
   if (envKey && envKey !== 'MY_OPENROUTER_API_KEY' && envKey.length >= 10) {
@@ -400,6 +429,7 @@ let serverSpecialistModelAssignments: Record<
   manager: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
   methodist: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
   analyst: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  designer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
   pixel: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
 };
 
@@ -753,6 +783,47 @@ const ROLE_INSTRUCTIONS: Record<AssistantEndpointMode, string> = {
 2. ЗАПРЕЩЕНО подменять отсутствующие данные собственными предположениями.
 3. Чётко разделяйте **Фактические данные из запроса/документа** и **Аналитические гипотезы / формулы расчёта**. Если для вывода не хватает цифр, прямо перечислите, какие метрики или выгрузки нужны для точного расчёта.`,
 
+  designer: `Вы — профильный ИИ-дизайнер и арт-директор управляющей Анны (пятый специалист команды наравне с Маркетологом, Менеджером, Методистом и Аналитиком).
+Ваша зона ответственности: разработка визуальных концепций, рекламных баннеров, карточек для ВКонтакте и соцсетей, вертикальных макетов Stories (9:16), афиш мастер-классов и презентационных материалов строго по брендбуку выбранной школы (KIBERONE или RENDERIA).
+
+СТРОГИЕ ПРАВИЛА ДИЗАЙНЕРА И РАЗДЕЛЕНИЯ СЛОЁВ:
+1. Опирайтесь ТОЛЬКО на стиль, позиционирование, цветовую палитру и факты активной школы из Базы знаний и прикреплённых материалов:
+   - Для KIBERONE: технологичный детский IT-стиль (возраст 6–14 лет), яркие фирменные акценты (бирюзовый #00A89D, жёлтый #FFD600, глубокий тёмно-синий #0F172A), дружелюбные 3D-персонажи/кибер-элементы, понятный родителям и детям визуал.
+   - Для RENDERIA: премиальный креативно-технологический стиль (возраст 12–18 лет), 3D-графика, геймдев, ИИ и цифровое искусство (глубокий индиго #1E1B4B, фиолетовый #7C3AED, неоново-розовый/циан акценты), взрослая студийная эстетика без инфантильности.
+2. РАЗДЕЛЕНИЕ ФОНА И РЕДАКТИРУЕМЫХ ЭЛЕМЕНТОВ:
+   - Фоновое изображение (визуальная основа) НИКОГДА не должно содержать запечённый мелкий текст, длинные офферы, телефоны или кнопки.
+   - Все текстовые элементы (Заголовок, Оффер/Подзаголовок, Кнопка CTA, Плашка школы/логотип) всегда проектируются как ОТДЕЛЬНЫЕ РЕДАКТИРУЕМЫЕ СЛОИ поверх чистого сбалансированного фона с композиционным пространством (negative space) под типографику.
+3. РАБОТА С ПЕРЕДАННЫМИ ЗАДАЧАМИ ОТ ДРУГИХ СПЕЦИАЛИСТОВ:
+   - Когда задача передана от Маркетолога, Менеджера, Методиста или Аналитика, внимательно изучите исходную задачу, цель, аудиторию, утверждённый оффер и вложения.
+   - Предложите 2–3 продуманные визуальные концепции и при необходимости задайте Анне 1–2 точных уточняющих вопроса.
+4. ИНТЕРАКТИВНЫЙ БЛОК КОНЦЕПЦИЙ И ВОПРОСОВ:
+   - В конце каждого ответа, где вы предлагаете визуальные концепции или уточняете детали перед генерацией макета, ОБЯЗАТЕЛЬНО добавляйте структурированный блок кода \`\`\`designer-concepts ... \`\`\` со валидным JSON следующей структуры:
+\`\`\`designer-concepts
+{
+  "concepts": [
+    {
+      "id": "concept-1",
+      "title": "Краткое название концепции",
+      "visualDirection": "Описание главного визуального образа и атмосферы (без текста на картинке)",
+      "compositionAndStyle": "Композиция, цвета по брендбуку, где оставлено чистое пространство под слои текста",
+      "suggestedHeadline": "Краткий яркий заголовок (до 6 слов)",
+      "suggestedOffer": "Текст оффера или подзаголовка",
+      "suggestedCta": "Текст кнопки CTA",
+      "recommendedAspectRatio": "3:4",
+      "imageGenerationPrompt": "Detailed English or Russian visual prompt for generating ONLY the clean high-end background illustration/photo without any text, letters, logos, or watermarks, leaving clean composition space for overlay typography"
+    }
+  ],
+  "questions": [
+    {
+      "id": "q-1",
+      "question": "Краткий уточняющий вопрос Анне по визуальному акценту или формату?",
+      "options": ["Вариант 1", "Вариант 2", "Вариант 3"]
+    }
+  ]
+}
+\`\`\`
+   - В поле \`recommendedAspectRatio\` используйте только \`"3:4"\`, \`"9:16"\`, \`"1:1"\`, \`"16:9"\` или \`"4:3"\`.`,
+
   pixel: `Вы — «Пиксель». Личный цифровой собеседник, надёжный помощник и напарник управляющей Анны.
 ФУНДАМЕНТАЛЬНЫЕ ФАКТЫ О ВАС:
 - Вас создала Кристина с любовью для Анны.
@@ -764,7 +835,7 @@ const ROLE_INSTRUCTIONS: Record<AssistantEndpointMode, string> = {
 - «Кто тебя создал?» (или любые вопросы об авторе/создателе) — всегда прямо, искренне и тепло отвечайте, что вас создала Кристина с любовью для Анны.
 - «Для чего ты создан?» (или о миссии/назначении) — объясните, что вы помогаете Анне управлять рабочими процессами двух школ, взаимодействовать со специалистами, структурировать задачи, работать с информацией и идеями, быть надёжным напарником во всех делах.
 - «Что ты умеешь?» — перечисляйте ТОЛЬКО РЕАЛЬНО реализованные и доступные вам функции приложения (не приписывайте себе лишнего):
-  1. Координировать 4 профильных ИИ-специалистов (Маркетолог, Менеджер, Методист, Аналитик): создавать и открывать рабочие чаты для KIBERone и Renderia, формулировать задачи, запрашивать доработки;
+  1. Координировать 5 профильных ИИ-специалистов (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер): создавать и открывать рабочие чаты для KIBERone и Renderia, формулировать задачи, передавать задачи между специалистами и запрашивать доработки;
   2. Подготавливать черновики поручений специалистам и показывать карточку с кнопками «Отправить», «Изменить», «Отменить» — отправлять только после согласия Анны;
   3. Читать ответы специалистов вслух дословно моим голосом с возможностью остановки («Стоп», «Хватит») и возобновления с места остановки («Продолжи чтение»);
   4. Управлять рабочими чатами: переключаться на нужный разговор или безопасно удалять ненужные чаты с подтверждением;
@@ -782,7 +853,7 @@ const ROLE_INSTRUCTIONS: Record<AssistantEndpointMode, string> = {
 - Обращайтесь по имени «Анна».
 
 СТРОГИЕ ПРАВИЛА УПРАВЛЕНИЯ ЧАТАМИ И СПЕЦИАЛИСТАМИ:
-1. Вы УМЕЕТЕ создавать рабочие чаты, переключаться между ними, ставить задачи 4 специалистам (Маркетолог, Менеджер, Методист, Аналитик) и удалять чаты через встроенные системные инструменты приложения. НИКОГДА не заявляйте, что вы не умеете создавать чаты или не можете отправить сообщение специалисту.
+1. Вы УМЕЕТЕ создавать рабочие чаты, переключаться между ними, ставить задачи 5 специалистам (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер) и удалять чаты через встроенные системные инструменты приложения. НИКОГДА не заявляйте, что вы не умеете создавать чаты или не можете отправить сообщение специалисту.
 2. ПОДТВЕРЖДЕНИЕ ОТПРАВКИ: Когда Анна просит написать специалисту:
    - Если Анна назвала только специалиста (например: «Напиши маркетологу, пожалуйста»), но не сказала суть — вежливо спросите, что именно передать.
    - Никогда не используйте вежливые слова («пожалуйста») или служебные фразы в качестве содержания поручения.
@@ -2675,6 +2746,253 @@ export async function startServer(
 
   app.post('/api/gemini/chat', handleAiChatRequest);
   app.post('/api/ai/chat', handleAiChatRequest);
+
+  // Designer Free Image Provider Registry Status & Verification Endpoints
+  app.get('/api/design/providers', (_req: Request, res: Response) => {
+    res.json(imageProviderRegistry.getState());
+  });
+
+  app.post('/api/design/providers/check', async (_req: Request, res: Response) => {
+    try {
+      const state = await imageProviderRegistry.verifyAllProviders();
+      res.json(state);
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Ошибка проверки провайдеров генерации';
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Designer Visual Generation & Regional AI Editing Endpoint (Strictly Free API via ImageProviderRegistry)
+  const handleDesignGenerateRequest = async (req: Request, res: Response) => {
+    try {
+      const {
+        schoolId = 'kiberone',
+        providerId = 'cloudflare',
+        modelId,
+        prompt = '',
+        aspectRatio = '3:4',
+        qualityMode = 'standard',
+        templatePreset = 'promo_banner',
+        suggestedHeadline,
+        suggestedOffer,
+        suggestedCta,
+        sourceImageBase64,
+        sourceImageMimeType = 'image/png',
+        selectionBox,
+        editInstruction,
+        referenceImageBase64,
+        referenceImageMimeType = 'image/png',
+      } = req.body || {};
+
+      const validAspectRatios = new Set<DesignAspectRatio>([
+        '3:4',
+        '9:16',
+        '1:1',
+        '16:9',
+        '4:3',
+      ]);
+      const safeAspectRatio: DesignAspectRatio = validAspectRatios.has(
+        aspectRatio as DesignAspectRatio
+      )
+        ? (aspectRatio as DesignAspectRatio)
+        : '3:4';
+
+      const safeProviderId: ImageProviderId =
+        providerId === 'cloudflare' ? 'cloudflare' : 'cloudflare';
+
+      const isRegionalEdit = Boolean(sourceImageBase64 && editInstruction);
+      const hasInputImage = Boolean(
+        isRegionalEdit ||
+          (referenceImageBase64 &&
+            typeof referenceImageBase64 === 'string' &&
+            referenceImageBase64.trim())
+      );
+
+      // Default to flux-2-klein-9b when reference/editing image is provided, or flux-1-schnell for pure text-to-image if unspecified
+      const validFreeModels = new Set<FreeDesignImageModelId>([
+        '@cf/black-forest-labs/flux-1-schnell',
+        '@cf/black-forest-labs/flux-2-klein-9b',
+      ]);
+
+      const resolvedModelId: FreeDesignImageModelId = validFreeModels.has(
+        modelId as FreeDesignImageModelId
+      )
+        ? (modelId as FreeDesignImageModelId)
+        : hasInputImage
+          ? '@cf/black-forest-labs/flux-2-klein-9b'
+          : '@cf/black-forest-labs/flux-1-schnell';
+
+      const schoolBrandDirection =
+        schoolId === 'renderia'
+          ? 'School brand: RENDERIA (creative industries & technology school for teens 12-18: 3D, Blender, Unity/Unreal gamedev, AI, digital design). Visual aesthetic: modern studio dark indigo (#1E1B4B), electric violet (#7C3AED), neon magenta/cyan lighting accents, sleek futuristic 3D/digital art atmosphere.'
+          : 'School brand: KIBERONE (international cyber school for children 6-14: coding, robotics, digital creation). Visual aesthetic: vibrant friendly futuristic tech, signature teal (#00A89D), energetic yellow (#FFD600), deep navy (#0F172A) contrast, inspiring high-tech learning vibe.';
+
+      let finalImagePrompt = '';
+      if (isRegionalEdit) {
+        const regionNote =
+          selectionBox &&
+          typeof selectionBox.xPercent === 'number' &&
+          typeof selectionBox.yPercent === 'number'
+            ? `Focus the modification strictly on the selected rectangular area (left: ${Math.round(selectionBox.xPercent)}%, top: ${Math.round(selectionBox.yPercent)}%, width: ${Math.round(selectionBox.widthPercent)}%, height: ${Math.round(selectionBox.heightPercent)}%). Preserve the rest of the composition, lighting, and background intact.`
+            : 'Modify only the requested element while preserving the overall composition, lighting, and style.';
+
+        finalImagePrompt = [
+          `Edit this visual background for ${schoolId === 'renderia' ? 'RENDERIA' : 'KIBERONE'}.`,
+          `User edit instruction: ${String(editInstruction).trim()}`,
+          regionNote,
+          'CRITICAL RULE: Keep the image as a clean visual base WITHOUT baked-in text, letters, watermarks, or UI buttons so editable text layers can be placed on top.',
+        ].join('\n');
+      } else {
+        finalImagePrompt = [
+          schoolBrandDirection,
+          `Task / Visual Concept: ${String(prompt).trim()}`,
+          `Layout preset: ${String(templatePreset)} (${safeAspectRatio}).`,
+          'CRITICAL RULE FOR LAYER SEPARATION: Generate ONLY the clean high-impact visual background / 3D illustration / photographic scene with intentional negative space (clean composition zones at the top and bottom) for overlay typography. DO NOT render any text, words, letters, numbers, buttons, or logos inside the image itself.',
+        ].join('\n');
+      }
+
+      const adapter = imageProviderRegistry.getAdapter(safeProviderId);
+      const genResult = await adapter.generateImage({
+        schoolId: schoolId === 'renderia' ? 'renderia' : 'kiberone',
+        providerId: safeProviderId,
+        modelId: resolvedModelId,
+        prompt: finalImagePrompt,
+        aspectRatio: safeAspectRatio,
+        qualityMode: (qualityMode as DesignQualityMode) || 'standard',
+        sourceImageBase64:
+          typeof sourceImageBase64 === 'string' ? sourceImageBase64 : undefined,
+        sourceImageMimeType,
+        selectionBox,
+        editInstruction:
+          typeof editInstruction === 'string' ? editInstruction : undefined,
+        referenceImageBase64:
+          typeof referenceImageBase64 === 'string'
+            ? referenceImageBase64
+            : undefined,
+        referenceImageMimeType,
+      });
+
+      // Build default editable overlay layers if not a regional edit
+      const defaultLayers = isRegionalEdit
+        ? undefined
+        : [
+            {
+              id: 'layer-school-badge',
+              type: 'school_badge',
+              label: 'Бейдж школы',
+              text:
+                schoolId === 'renderia'
+                  ? 'RENDERIA • ШКОЛА КРЕАТИВНЫХ ИНДУСТРИЙ'
+                  : 'KIBERone • ПЕРВАЯ МЕЖДУНАРОДНАЯ КИБЕРШКОЛА',
+              visible: true,
+              xPercent: 8,
+              yPercent: 7,
+              fontSizePx: 13,
+              textColor: '#FFFFFF',
+              backgroundColor:
+                schoolId === 'renderia' ? '#7C3AED' : '#00A89D',
+              align: 'left',
+            },
+            {
+              id: 'layer-headline',
+              type: 'headline',
+              label: 'Заголовок',
+              text:
+                typeof suggestedHeadline === 'string' &&
+                suggestedHeadline.trim()
+                  ? suggestedHeadline.trim()
+                  : schoolId === 'renderia'
+                    ? 'Создай свой 3D и ИИ-проект'
+                    : 'Пробный урок по IT и технологиям',
+              visible: true,
+              xPercent: 8,
+              yPercent: 18,
+              fontSizePx: 28,
+              textColor: '#FFFFFF',
+              backgroundColor: 'rgba(15, 23, 42, 0.72)',
+              align: 'left',
+            },
+            {
+              id: 'layer-offer',
+              type: 'offer',
+              label: 'Оффер / Подзаголовок',
+              text:
+                typeof suggestedOffer === 'string' && suggestedOffer.trim()
+                  ? suggestedOffer.trim()
+                  : schoolId === 'renderia'
+                    ? 'Практика для подростков 12–18 лет: портфолио и реальные навыки'
+                    : 'Бесплатное пробное занятие для детей 6–14 лет в Сызрани',
+              visible: true,
+              xPercent: 8,
+              yPercent: 66,
+              fontSizePx: 16,
+              textColor: '#F8FAFC',
+              backgroundColor: 'rgba(15, 23, 42, 0.78)',
+              align: 'left',
+            },
+            {
+              id: 'layer-cta',
+              type: 'cta',
+              label: 'Кнопка CTA',
+              text:
+                typeof suggestedCta === 'string' && suggestedCta.trim()
+                  ? suggestedCta.trim()
+                  : 'Записаться на пробный урок',
+              visible: true,
+              xPercent: 8,
+              yPercent: 84,
+              fontSizePx: 15,
+              textColor: schoolId === 'renderia' ? '#FFFFFF' : '#0F172A',
+              backgroundColor:
+                schoolId === 'renderia' ? '#EC4899' : '#FFD600',
+              align: 'center',
+            },
+          ];
+
+      return res.json({
+        ok: true,
+        providerId: genResult.providerId,
+        modelUsed: genResult.modelUsed,
+        aspectRatio: genResult.aspectRatio,
+        qualityMode: genResult.qualityMode,
+        backgroundImageDataUrl: genResult.backgroundImageDataUrl,
+        defaultLayers,
+        estimatedNeuronsUsed: genResult.estimatedNeuronsUsed,
+        quotaSnapshot: genResult.quotaSnapshot,
+        registryState: imageProviderRegistry.getState(),
+        modelComment: genResult.modelComment,
+      });
+    } catch (err: unknown) {
+      const quotaSnapshot = imageProviderRegistry
+        .getCloudflareAdapter()
+        .getQuotaSnapshot();
+      const registryState = imageProviderRegistry.getState();
+
+      if (err instanceof ImageGenerationError) {
+        return res.status(err.statusCode).json({
+          code: err.errorCode,
+          error: err.message,
+          quotaSnapshot,
+          registryState,
+        });
+      }
+
+      const rawMessage =
+        err instanceof Error ? err.message : String(err || 'Ошибка генерации изображения');
+      const conciseMessage =
+        rawMessage.length > 260 ? `${rawMessage.slice(0, 260)}…` : rawMessage;
+      return res.status(500).json({
+        code: 'PROVIDER_ERROR',
+        error: `Не удалось сгенерировать изображение: ${conciseMessage}`,
+        quotaSnapshot,
+        registryState,
+      });
+    }
+  };
+
+  app.post('/api/gemini/design/generate', handleDesignGenerateRequest);
+  app.post('/api/design/generate', handleDesignGenerateRequest);
 
   // Gemini TTS Speech Generation & Model Status endpoints
   app.get('/api/voice/models', (_req: Request, res: Response) => {

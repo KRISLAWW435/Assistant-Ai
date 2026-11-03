@@ -2,11 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BookOpen,
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ChevronsRight,
   Clock,
+  Crop,
+  Download,
   Eye,
   FileSpreadsheet,
   FileText,
@@ -18,9 +21,12 @@ import {
   MessageCircleHeart,
   Mic,
   MicOff,
+  Palette,
   Paperclip,
+  Plus,
   PowerOff,
   Radio,
+  RotateCcw,
   Search,
   Sliders,
   Sparkles,
@@ -28,7 +34,10 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  Wand2,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import {
   AgentMode,
@@ -36,10 +45,16 @@ import {
   AIProviderSelectionMode,
   ChatAttachment,
   ChatSession,
+  DesignArtifactRecord,
+  DesignOverlayLayer,
+  DesignSelectionBox,
+  ImageProviderId,
+  ImageProvidersRegistryState,
   KnowledgeBaseBySchool,
   NavSection,
   RightPanelTab,
   SchoolId,
+  SpecialistHandoffPacket,
   UploadedDocumentRecord,
 } from '../types/assistant';
 import {
@@ -96,6 +111,30 @@ interface RightWorkspacePanelProps {
   onCheckProvidersOnDemand?: () => Promise<void>;
   isCheckingProviders?: boolean;
   onOpenPixelChat?: () => void;
+  selectedDesignArtifactId?: string | null;
+  onSelectDesignArtifact?: (artifactId: string | null) => void;
+  onPreviewDesignLayerChanges?: (
+    artifactId: string,
+    nextLayers: DesignOverlayLayer[]
+  ) => void;
+  onRequestRegionalAiEdit?: (params: {
+    artifactId: string;
+    selectionBox?: DesignSelectionBox;
+    editInstruction: string;
+  }) => Promise<void>;
+  onConfirmPendingDesignVersion?: (artifactId: string) => void;
+  onRejectPendingDesignVersion?: (artifactId: string) => void;
+  onSelectDesignVersion?: (artifactId: string, versionId: string) => void;
+  isGeneratingDesignImage?: boolean;
+  imageProvidersState?: ImageProvidersRegistryState | null;
+  isCheckingImageProviders?: boolean;
+  onCheckImageProviders?: (providerId?: ImageProviderId) => Promise<void>;
+  onReturnHandoffResult?: (params: {
+    handoffPacket: SpecialistHandoffPacket;
+    summary: string;
+    artifact?: DesignArtifactRecord;
+    navigateBack?: boolean;
+  }) => Promise<void>;
 }
 
 interface SearchHit {
@@ -158,12 +197,169 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
   onCheckProvidersOnDemand,
   isCheckingProviders = false,
   onOpenPixelChat,
+  selectedDesignArtifactId = null,
+  onSelectDesignArtifact,
+  onPreviewDesignLayerChanges,
+  onRequestRegionalAiEdit,
+  onConfirmPendingDesignVersion,
+  onRejectPendingDesignVersion,
+  onSelectDesignVersion,
+  isGeneratingDesignImage = false,
+  imageProvidersState = null,
+  isCheckingImageProviders = false,
+  onCheckImageProviders,
+  onReturnHandoffResult,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [attachmentPendingDelete, setAttachmentPendingDelete] =
     useState<ChatAttachment | null>(null);
   const [isDeletingAttachment, setIsDeletingAttachment] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Stage 2: Design Preview, Zoom, Layer Editor & Regional AI Selection State
+  const [designZoomPercent, setDesignZoomPercent] = useState<number>(100);
+  const [designEditorSubMode, setDesignEditorSubMode] = useState<
+    'layers' | 'regional_ai'
+  >('layers');
+  const [selectionBox, setSelectionBox] = useState<DesignSelectionBox>({
+    xPercent: 15,
+    yPercent: 20,
+    widthPercent: 70,
+    heightPercent: 50,
+  });
+  const [regionalEditPrompt, setRegionalEditPrompt] = useState<string>('');
+  const [isExportingPng, setIsExportingPng] = useState<boolean>(false);
+
+  const sessionDesignArtifacts = useMemo(() => {
+    const map = new Map<string, DesignArtifactRecord>();
+    for (const a of currentSession?.designArtifacts || []) {
+      map.set(a.id, a);
+    }
+    for (const m of currentSession?.messages || []) {
+      if (m.designArtifact) {
+        map.set(m.designArtifact.id, m.designArtifact);
+      }
+    }
+    return Array.from(map.values());
+  }, [currentSession]);
+
+  const activeDesignArtifact: DesignArtifactRecord | null = useMemo(() => {
+    if (selectedDesignArtifactId) {
+      for (const s of sessions) {
+        const inSession = (s.designArtifacts || []).find(
+          (a) => a.id === selectedDesignArtifactId
+        );
+        if (inSession) return inSession;
+        const inMsg = s.messages.find(
+          (m) => m.designArtifact?.id === selectedDesignArtifactId
+        )?.designArtifact;
+        if (inMsg) return inMsg;
+      }
+    }
+    return sessionDesignArtifacts[0] || null;
+  }, [selectedDesignArtifactId, sessions, sessionDesignArtifacts]);
+
+  const handleDownloadDesignPng = async (
+    artifact: DesignArtifactRecord,
+    includeOverlayLayers: boolean
+  ) => {
+    const targetVer =
+      artifact.pendingVersion ||
+      artifact.versions.find((v) => v.id === artifact.activeVersionId) ||
+      artifact.versions[artifact.versions.length - 1];
+    if (!targetVer) return;
+
+    if (!includeOverlayLayers) {
+      const a = document.createElement('a');
+      a.href = targetVer.backgroundImageDataUrl;
+      a.download = `${artifact.schoolId}-${artifact.id}-clean-bg.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+
+    setIsExportingPng(true);
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Image load failed'));
+        img.src = targetVer.backgroundImageDataUrl;
+      });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || 1024;
+      canvas.height = img.naturalHeight || 1365;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      const scaleFactor = canvas.width / 420;
+      for (const layer of targetVer.layers) {
+        if (!layer.visible || !layer.text.trim()) continue;
+        const x = (layer.xPercent / 100) * canvas.width;
+        const y = (layer.yPercent / 100) * canvas.height;
+        const fontPx = Math.max(12, Math.round(layer.fontSizePx * scaleFactor));
+        ctx.font = `${layer.type === 'headline' || layer.type === 'cta' || layer.type === 'school_badge' ? 'bold' : '600'} ${fontPx}px Inter, system-ui, sans-serif`;
+
+        const maxTextWidth = canvas.width * 0.82;
+        const words = layer.text.split(/\s+/);
+        const lines: string[] = [];
+        let currentLine = '';
+        for (const word of words) {
+          const testLine = currentLine ? `${currentLine} ${word}` : word;
+          if (ctx.measureText(testLine).width > maxTextWidth && currentLine) {
+            lines.push(currentLine);
+            currentLine = word;
+          } else {
+            currentLine = testLine;
+          }
+        }
+        if (currentLine) lines.push(currentLine);
+
+        const padX = Math.round(12 * scaleFactor);
+        const padY = Math.round(8 * scaleFactor);
+        const lineHeight = Math.round(fontPx * 1.28);
+        const boxWidth =
+          Math.max(...lines.map((l) => ctx.measureText(l).width)) + padX * 2;
+        const boxHeight = lines.length * lineHeight + padY * 2;
+
+        if (layer.backgroundColor) {
+          ctx.fillStyle = layer.backgroundColor;
+          ctx.beginPath();
+          ctx.roundRect(x, y, boxWidth, boxHeight, Math.round(10 * scaleFactor));
+          ctx.fill();
+        }
+
+        ctx.fillStyle = layer.textColor || '#FFFFFF';
+        ctx.textBaseline = 'top';
+        const alignMode = layer.align || 'left';
+        lines.forEach((lineText, idx) => {
+          const lineWidth = ctx.measureText(lineText).width;
+          let textX = x + padX;
+          if (alignMode === 'center') {
+            textX = x + (boxWidth - lineWidth) / 2;
+          } else if (alignMode === 'right') {
+            textX = x + boxWidth - padX - lineWidth;
+          }
+          ctx.fillText(lineText, textX, y + padY + idx * lineHeight);
+        });
+      }
+
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = `${artifact.schoolId}-${artifact.id}-v${targetVer.versionNumber}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      setIsExportingPng(false);
+    }
+  };
 
   // Unified Pixel Voice State in Right Panel
   const [voiceSettings, setVoiceSettings] = useState<PixelVoiceSettings>(() =>
@@ -1364,18 +1560,737 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
           </div>
         )}
 
-        {/* TAB 2: ПРОСМОТР (Extracted Text & Status of Selected Dialogue File) */}
+        {/* TAB 2: ПРОСМОТР (Stage 2 Design Studio Preview + Editable Layers + Regional AI Edit OR Extracted Document Text) */}
         {activeTab === 'preview' && (
           <div className="space-y-4">
-            {!selectedAttachment ? (
+            {/* Switcher between Design Artifacts and Document Attachments when both exist */}
+            {sessionDesignArtifacts.length > 0 && (
+              <div className="rounded-xl bg-purple-50/80 border border-purple-200 p-2.5 space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-purple-950 flex items-center gap-1.5">
+                    <Palette className="w-3.5 h-3.5 text-purple-700" />
+                    <span>Макеты Дизайнера ({sessionDesignArtifacts.length})</span>
+                  </span>
+                  {selectedAttachment && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectAttachment(null)}
+                      className="text-[11px] font-semibold text-purple-700 hover:underline cursor-pointer"
+                    >
+                      Показать макет
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sessionDesignArtifacts.map((art) => {
+                    const isSelected =
+                      !selectedAttachment &&
+                      activeDesignArtifact?.id === art.id;
+                    return (
+                      <button
+                        key={art.id}
+                        type="button"
+                        onClick={() => {
+                          onSelectAttachment(null);
+                          onSelectDesignArtifact?.(art.id);
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer truncate max-w-full ${
+                          isSelected
+                            ? 'bg-purple-700 text-white border-purple-700'
+                            : 'bg-white text-slate-700 border-purple-200 hover:bg-purple-100/60'
+                        }`}
+                      >
+                        {art.title} (v{art.versions.length})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* CASE A: Active Design Artifact Preview, Layer Editor & Point AI Editing */}
+            {!selectedAttachment && activeDesignArtifact ? (() => {
+              const art = activeDesignArtifact;
+              const activeVer =
+                art.versions.find((v) => v.id === art.activeVersionId) ||
+                art.versions[art.versions.length - 1];
+              const displayVer = art.pendingVersion || activeVer;
+              if (!displayVer) return null;
+
+              const hasPendingChanges = Boolean(art.pendingVersion);
+
+              return (
+                <div className="space-y-3.5">
+                  {/* Non-Destructive Confirmation Banner (Requirement #3: Preview first, Confirm or Reject, preserve original) */}
+                  {hasPendingChanges && (
+                    <div className="rounded-xl p-3 bg-amber-50 border-2 border-amber-300 text-xs text-amber-950 space-y-2 shadow-xs">
+                      <div className="flex items-start gap-2">
+                        <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="leading-snug">
+                          <strong className="block">
+                            Предпросмотр изменений макета
+                          </strong>
+                          Исходная версия (Версия {activeVer?.versionNumber || 1})
+                          сохранена. Подтвердите изменения, чтобы сохранить их как
+                          новую версию, или отклоните.
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onConfirmPendingDesignVersion?.(art.id)
+                          }
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Подтвердить как новую версию</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onRejectPendingDesignVersion?.(art.id)}
+                          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 font-semibold text-xs transition-colors cursor-pointer"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Отклонить</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Version Switcher & Zoom Controls */}
+                  <div className="rounded-xl bg-slate-50 border border-slate-200/90 p-2.5 space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-800 truncate">
+                        {art.title}
+                      </span>
+                      <div className="inline-flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-1.5 py-0.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDesignZoomPercent((z) => Math.max(50, z - 25))
+                          }
+                          className="p-0.5 text-slate-600 hover:text-slate-900 cursor-pointer"
+                          title="Уменьшить масштаб"
+                        >
+                          <ZoomOut className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="text-[10px] font-mono-tabular font-bold px-1">
+                          {designZoomPercent}%
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDesignZoomPercent((z) => Math.min(200, z + 25))
+                          }
+                          className="p-0.5 text-slate-600 hover:text-slate-900 cursor-pointer"
+                          title="Увеличить масштаб"
+                        >
+                          <ZoomIn className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Version Pills */}
+                    <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+                      {art.versions.map((ver) => {
+                        const isCurrent =
+                          !art.pendingVersion && art.activeVersionId === ver.id;
+                        return (
+                          <button
+                            key={ver.id}
+                            type="button"
+                            onClick={() =>
+                              onSelectDesignVersion?.(art.id, ver.id)
+                            }
+                            className={`px-2 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap border transition-colors cursor-pointer ${
+                              isCurrent
+                                ? 'bg-slate-900 text-white border-slate-900'
+                                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            Версия {ver.versionNumber} ({ver.aspectRatio})
+                          </button>
+                        );
+                      })}
+                      {art.pendingVersion && (
+                        <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-amber-500 text-slate-950 whitespace-nowrap">
+                          Черновик v{art.pendingVersion.versionNumber}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Interactive Canvas Preview (Clean Base Image + Live Editable Overlay Layers + Regional Selection Box) */}
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950 p-3 overflow-auto max-h-[420px] flex items-center justify-center">
+                    <div
+                      style={{
+                        width: `${designZoomPercent}%`,
+                        transition: 'width 150ms ease',
+                      }}
+                      className="relative inline-block mx-auto select-none"
+                    >
+                      <img
+                        src={displayVer.backgroundImageDataUrl}
+                        alt={art.title}
+                        className="w-full h-auto rounded-xl block"
+                      />
+
+                      {/* Editable Text/Logo/CTA Overlay Layers */}
+                      {displayVer.layers
+                        .filter((l) => l.visible && l.text.trim())
+                        .map((layer) => (
+                          <div
+                            key={layer.id}
+                            style={{
+                              left: `${layer.xPercent}%`,
+                              top: `${layer.yPercent}%`,
+                              color: layer.textColor,
+                              backgroundColor:
+                                layer.backgroundColor || 'rgba(15,23,42,0.75)',
+                              textAlign: layer.align || 'left',
+                              fontSize: `${Math.max(9, Math.round((layer.fontSizePx || 14) * 0.58))}px`,
+                            }}
+                            className={`absolute max-w-[84%] px-2.5 py-1 rounded-lg shadow-sm backdrop-blur-xs ${
+                              layer.type === 'headline'
+                                ? 'font-display font-extrabold leading-tight'
+                                : layer.type === 'cta'
+                                  ? 'font-bold px-3 py-1.5 rounded-xl shadow-md'
+                                  : layer.type === 'school_badge'
+                                    ? 'font-extrabold uppercase tracking-wider'
+                                    : 'leading-snug'
+                            }`}
+                          >
+                            {layer.text}
+                          </div>
+                        ))}
+
+                      {/* Regional Selection Box Overlay when in 'regional_ai' submode */}
+                      {designEditorSubMode === 'regional_ai' && (
+                        <div
+                          style={{
+                            left: `${selectionBox.xPercent}%`,
+                            top: `${selectionBox.yPercent}%`,
+                            width: `${selectionBox.widthPercent}%`,
+                            height: `${selectionBox.heightPercent}%`,
+                          }}
+                          className="absolute border-2 border-dashed border-[#FFD700] bg-purple-500/20 rounded-lg pointer-events-none flex items-start justify-start p-1"
+                        >
+                          <span className="px-1.5 py-0.5 rounded bg-slate-950/90 text-[#FFD700] text-[9px] font-mono-tabular font-bold">
+                            Область AI-правки
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Mode Switcher: Editable Layers vs Regional AI Edit */}
+                  <div className="grid grid-cols-2 gap-1 p-1 bg-slate-200/70 rounded-xl text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setDesignEditorSubMode('layers')}
+                      className={`py-1.5 px-2 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        designEditorSubMode === 'layers'
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Редактируемые слои</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDesignEditorSubMode('regional_ai')}
+                      className={`py-1.5 px-2 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        designEditorSubMode === 'regional_ai'
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <Crop className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Точечная AI-правка</span>
+                    </button>
+                  </div>
+
+                  {/* SUBMODE 1: Editable Overlay Layers Inspector (Headline, Offer, CTA, School Badge, Custom Plates) */}
+                  {designEditorSubMode === 'layers' && (
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-slate-700">
+                          Слои поверх визуальной основы ({displayVer.layers.length})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextLayer: DesignOverlayLayer = {
+                              id: `layer-plate-${Date.now()}`,
+                              type: 'plate',
+                              label: `Плашка ${displayVer.layers.length + 1}`,
+                              text: 'Дополнительная плашка',
+                              visible: true,
+                              xPercent: 10,
+                              yPercent: 50,
+                              fontSizePx: 14,
+                              textColor: '#FFFFFF',
+                              backgroundColor: 'rgba(124, 58, 237, 0.85)',
+                              align: 'left',
+                            };
+                            onPreviewDesignLayerChanges?.(art.id, [
+                              ...displayVer.layers,
+                              nextLayer,
+                            ]);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-800 border border-purple-200 text-[11px] font-semibold hover:bg-purple-100 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Добавить плашку</span>
+                        </button>
+                      </div>
+
+                      <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
+                        {displayVer.layers.map((layer) => (
+                          <div
+                            key={layer.id}
+                            className="rounded-xl border border-slate-200 bg-white p-2.5 space-y-2 text-xs"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <label className="inline-flex items-center gap-1.5 font-bold text-slate-800 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={layer.visible}
+                                  onChange={(e) => {
+                                    const nextLayers = displayVer.layers.map(
+                                      (l) =>
+                                        l.id === layer.id
+                                          ? { ...l, visible: e.target.checked }
+                                          : l
+                                    );
+                                    onPreviewDesignLayerChanges?.(
+                                      art.id,
+                                      nextLayers
+                                    );
+                                  }}
+                                  className="rounded border-slate-300 text-purple-700 focus:ring-purple-600"
+                                />
+                                <span>{layer.label}</span>
+                              </label>
+                              <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                                <span>X:{layer.xPercent}%</span>
+                                <span>Y:{layer.yPercent}%</span>
+                              </div>
+                            </div>
+
+                            <input
+                              type="text"
+                              value={layer.text}
+                              onChange={(e) => {
+                                const nextLayers = displayVer.layers.map((l) =>
+                                  l.id === layer.id
+                                    ? { ...l, text: e.target.value }
+                                    : l
+                                );
+                                onPreviewDesignLayerChanges?.(
+                                  art.id,
+                                  nextLayers
+                                );
+                              }}
+                              className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                              placeholder={`Текст слоя «${layer.label}»...`}
+                            />
+
+                            <div className="grid grid-cols-2 gap-2 pt-0.5">
+                              <div>
+                                <span className="text-[10px] text-slate-400 block">
+                                  Горизонталь (X %)
+                                </span>
+                                <input
+                                  type="range"
+                                  min={2}
+                                  max={75}
+                                  value={layer.xPercent}
+                                  onChange={(e) => {
+                                    const nextLayers = displayVer.layers.map(
+                                      (l) =>
+                                        l.id === layer.id
+                                          ? {
+                                              ...l,
+                                              xPercent: Number(e.target.value),
+                                            }
+                                          : l
+                                    );
+                                    onPreviewDesignLayerChanges?.(
+                                      art.id,
+                                      nextLayers
+                                    );
+                                  }}
+                                  className="w-full accent-purple-600"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-slate-400 block">
+                                  Вертикаль (Y %)
+                                </span>
+                                <input
+                                  type="range"
+                                  min={2}
+                                  max={90}
+                                  value={layer.yPercent}
+                                  onChange={(e) => {
+                                    const nextLayers = displayVer.layers.map(
+                                      (l) =>
+                                        l.id === layer.id
+                                          ? {
+                                              ...l,
+                                              yPercent: Number(e.target.value),
+                                            }
+                                          : l
+                                    );
+                                    onPreviewDesignLayerChanges?.(
+                                      art.id,
+                                      nextLayers
+                                    );
+                                  }}
+                                  className="w-full accent-purple-600"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 pt-0.5 items-center">
+                              <div>
+                                <span className="text-[10px] text-slate-400 block">
+                                  Размер текста ({layer.fontSizePx} px)
+                                </span>
+                                <input
+                                  type="range"
+                                  min={10}
+                                  max={42}
+                                  value={layer.fontSizePx}
+                                  onChange={(e) => {
+                                    const nextLayers = displayVer.layers.map(
+                                      (l) =>
+                                        l.id === layer.id
+                                          ? {
+                                              ...l,
+                                              fontSizePx: Number(
+                                                e.target.value
+                                              ),
+                                            }
+                                          : l
+                                    );
+                                    onPreviewDesignLayerChanges?.(
+                                      art.id,
+                                      nextLayers
+                                    );
+                                  }}
+                                  className="w-full accent-purple-600"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-slate-400 block mb-0.5">
+                                  Выравнивание
+                                </span>
+                                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 w-full">
+                                  {(
+                                    [
+                                      { id: 'left', label: 'Слева' },
+                                      { id: 'center', label: 'Центр' },
+                                      { id: 'right', label: 'Справа' },
+                                    ] as const
+                                  ).map((al) => (
+                                    <button
+                                      key={al.id}
+                                      type="button"
+                                      onClick={() => {
+                                        const nextLayers =
+                                          displayVer.layers.map((l) =>
+                                            l.id === layer.id
+                                              ? { ...l, align: al.id }
+                                              : l
+                                          );
+                                        onPreviewDesignLayerChanges?.(
+                                          art.id,
+                                          nextLayers
+                                        );
+                                      }}
+                                      className={`flex-1 py-0.5 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
+                                        (layer.align || 'left') === al.id
+                                          ? 'bg-purple-600 text-white'
+                                          : 'text-slate-600 hover:text-slate-900'
+                                      }`}
+                                    >
+                                      {al.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUBMODE 2: Regional / Point AI Editing of Selected Area */}
+                  {designEditorSubMode === 'regional_ai' && (
+                    <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-3 space-y-2.5 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <div className="font-bold text-purple-950 flex items-center gap-1.5">
+                          <Crop className="w-3.5 h-3.5 text-purple-700" />
+                          <span>Выделите область фонового изображения</span>
+                        </div>
+                        {onCheckImageProviders && (
+                          <button
+                            type="button"
+                            disabled={isCheckingImageProviders}
+                            onClick={() =>
+                              void onCheckImageProviders('cloudflare')
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-purple-200 bg-white hover:bg-purple-100 text-[10px] font-semibold text-purple-900 disabled:opacity-50 cursor-pointer"
+                          >
+                            {isCheckingImageProviders ? (
+                              <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            ) : (
+                              <RotateCcw className="w-2.5 h-2.5" />
+                            )}
+                            <span>Проверить API</span>
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-600 leading-snug">
+                        Настройте рамку области и напишите, что именно изменить
+                        на фоне. Текстовые слои останутся отдельными, а
+                        результат сначала откроется в предпросмотре.
+                      </p>
+                      <div className="rounded-lg bg-white/90 border border-purple-200/80 px-2.5 py-1.5 text-[10px] text-slate-700 space-y-1">
+                        <div>
+                          <strong>Бесплатная модель правок:</strong>{' '}
+                          <code>@cf/black-forest-labs/flux-2-klein-9b</code>{' '}
+                          (Cloudflare Workers AI Free, ~160 Neurons / запрос).
+                        </div>
+                        {(() => {
+                          const cfProv =
+                            imageProvidersState?.providers.find(
+                              (p) => p.id === 'cloudflare'
+                            ) || null;
+                          if (!cfProv) return null;
+                          return (
+                            <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-600">
+                              <span
+                                className={`font-bold ${
+                                  cfProv.status === 'available'
+                                    ? 'text-emerald-700'
+                                    : cfProv.status === 'quota_exceeded'
+                                      ? 'text-red-700'
+                                      : 'text-amber-700'
+                                }`}
+                              >
+                                {cfProv.status === 'available'
+                                  ? '● Доступна'
+                                  : cfProv.status === 'quota_exceeded'
+                                    ? '● Бесплатная квота исчерпана'
+                                    : '● Не настроена'}
+                              </span>
+                              <span>·</span>
+                              <span>
+                                Запросов сегодня:{' '}
+                                <strong>
+                                  {cfProv.quota.requestsTodayCount}
+                                </strong>{' '}
+                                (~{cfProv.quota.estimatedNeuronsUsedToday}{' '}
+                                Neurons из 10 000)
+                              </span>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <span className="text-[10px] text-slate-500 block">
+                            Отступ слева ({selectionBox.xPercent}%)
+                          </span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={80}
+                            value={selectionBox.xPercent}
+                            onChange={(e) =>
+                              setSelectionBox((b) => ({
+                                ...b,
+                                xPercent: Number(e.target.value),
+                              }))
+                            }
+                            className="w-full accent-purple-600"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-500 block">
+                            Отступ сверху ({selectionBox.yPercent}%)
+                          </span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={80}
+                            value={selectionBox.yPercent}
+                            onChange={(e) =>
+                              setSelectionBox((b) => ({
+                                ...b,
+                                yPercent: Number(e.target.value),
+                              }))
+                            }
+                            className="w-full accent-purple-600"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-500 block">
+                            Ширина области ({selectionBox.widthPercent}%)
+                          </span>
+                          <input
+                            type="range"
+                            min={15}
+                            max={100 - selectionBox.xPercent}
+                            value={selectionBox.widthPercent}
+                            onChange={(e) =>
+                              setSelectionBox((b) => ({
+                                ...b,
+                                widthPercent: Number(e.target.value),
+                              }))
+                            }
+                            className="w-full accent-purple-600"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-500 block">
+                            Высота области ({selectionBox.heightPercent}%)
+                          </span>
+                          <input
+                            type="range"
+                            min={15}
+                            max={100 - selectionBox.yPercent}
+                            value={selectionBox.heightPercent}
+                            onChange={(e) =>
+                              setSelectionBox((b) => ({
+                                ...b,
+                                heightPercent: Number(e.target.value),
+                              }))
+                            }
+                            className="w-full accent-purple-600"
+                          />
+                        </div>
+                      </div>
+
+                      <textarea
+                        rows={2}
+                        value={regionalEditPrompt}
+                        onChange={(e) => setRegionalEditPrompt(e.target.value)}
+                        placeholder="Например: замени центральный 3D-объект на неонового робота KIBERone, сохранив освещение..."
+                        className="w-full rounded-xl border border-purple-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                      />
+
+                      <button
+                        type="button"
+                        disabled={
+                          isGeneratingDesignImage || !regionalEditPrompt.trim()
+                        }
+                        onClick={() => {
+                          if (
+                            !onRequestRegionalAiEdit ||
+                            !regionalEditPrompt.trim()
+                          )
+                            return;
+                          void onRequestRegionalAiEdit({
+                            artifactId: art.id,
+                            selectionBox,
+                            editInstruction: regionalEditPrompt.trim(),
+                          });
+                        }}
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-semibold text-xs disabled:opacity-40 transition-colors cursor-pointer"
+                      >
+                        {isGeneratingDesignImage ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Выполняется точечная AI-правка...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 className="w-3.5 h-3.5" />
+                            <span>Применить к выделенной области (в предпросмотр)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Download & Handoff Return Actions */}
+                  <div className="pt-1 space-y-2">
+                    <div className="grid grid-cols-1 gap-1.5">
+                      <button
+                        type="button"
+                        disabled={isExportingPng}
+                        onClick={() => void handleDownloadDesignPng(art, true)}
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-[#FFD700]" />
+                        <span>
+                          {isExportingPng
+                            ? 'Сборка PNG...'
+                            : 'Скачать готовый PNG (фон + текстовые слои)'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleDownloadDesignPng(art, false)}
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-[11px] font-semibold transition-colors cursor-pointer"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Скачать чистый фон PNG (без текста)</span>
+                      </button>
+                    </div>
+
+                    {currentSession?.linkedHandoffPacket &&
+                      currentSession.linkedHandoffPacket.status !==
+                        'completed' &&
+                      onReturnHandoffResult && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void onReturnHandoffResult({
+                              handoffPacket:
+                                currentSession.linkedHandoffPacket!,
+                              summary: `Утверждён макет «${art.title}» (${displayVer.label}).`,
+                              artifact: art,
+                              navigateBack: true,
+                            })
+                          }
+                          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>
+                            Утвердить и вернуть специалисту «
+                            {
+                              AGENT_MODES[
+                                currentSession.linkedHandoffPacket
+                                  .fromSpecialist
+                              ].shortTitle
+                            }
+                            »
+                          </span>
+                        </button>
+                      )}
+                  </div>
+                </div>
+              );
+            })() : !selectedAttachment ? (
               <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center space-y-2 bg-slate-50/50">
                 <Eye className="w-6 h-6 text-slate-400 mx-auto" />
                 <div className="text-xs font-semibold text-slate-800">
-                  Документ для просмотра не выбран
+                  Документ или макет для просмотра не выбран
                 </div>
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Прикрепите документ к текущему диалогу или выберите его на
-                  вкладке «Материалы», чтобы проверить извлечённый текст.
+                  Прикрепите документ к диалогу, выберите его на вкладке
+                  «Материалы» или сгенерируйте макет в чате «Дизайнер», чтобы
+                  редактировать слои и области здесь.
                 </p>
               </div>
             ) : (

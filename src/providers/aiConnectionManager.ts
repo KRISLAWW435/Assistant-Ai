@@ -39,6 +39,10 @@ export function getDefaultSpecialistAssignments(): SpecialistModelAssignments {
       providerSelection: 'auto',
       specificModel: 'gemini-3.8-flash',
     },
+    designer: {
+      providerSelection: 'auto',
+      specificModel: 'gemini-3.8-flash',
+    },
     pixel: {
       providerSelection: 'auto',
       specificModel: 'gemini-3.8-flash',

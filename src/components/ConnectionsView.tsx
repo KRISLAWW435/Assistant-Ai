@@ -26,6 +26,7 @@ import {
   Megaphone,
   MessageSquareHeart,
   Mic,
+  Palette,
   Play,
   Edit3,
   FolderOpen,
@@ -165,6 +166,13 @@ const SPECIALIST_CONFIGS: Array<{
     label: 'Бизнес-аналитик',
     tagline: 'Воронка заявок, конверсии, удержание и разбор отчётов',
     icon: BarChart3,
+    defaultModel: 'gemini-3.8-flash',
+  },
+  {
+    key: 'designer',
+    label: 'Дизайнер',
+    tagline: 'Визуальные концепции, баннеры, креативы и макеты по брендбуку',
+    icon: Palette,
     defaultModel: 'gemini-3.8-flash',
   },
   {

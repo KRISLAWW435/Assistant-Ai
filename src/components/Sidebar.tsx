@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Archive,
   BarChart3,
+  Palette,
   BookOpen,
   Check,
   CheckSquare,
@@ -99,6 +100,12 @@ const SPECIALIST_ITEMS: SpecialistItem[] = [
     label: 'Аналитик',
     sublabel: 'Заявки, конверсия, отчёты',
     icon: BarChart3,
+  },
+  {
+    id: 'designer',
+    label: 'Дизайнер',
+    sublabel: 'Концепции, баннеры, креативы',
+    icon: Palette,
   },
 ];
 
@@ -1045,6 +1052,7 @@ export function isAgentModeSection(section: NavSection): section is AgentMode {
     section === 'marketer' ||
     section === 'manager' ||
     section === 'methodist' ||
-    section === 'analyst'
+    section === 'analyst' ||
+    section === 'designer'
   );
 }

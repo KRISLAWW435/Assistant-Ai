@@ -1,6 +1,6 @@
 export type SchoolId = 'kiberone' | 'renderia';
 
-export type AgentMode = 'marketer' | 'manager' | 'methodist' | 'analyst';
+export type AgentMode = 'marketer' | 'manager' | 'methodist' | 'analyst' | 'designer';
 
 export type NavSection =
   | 'home'
@@ -9,6 +9,7 @@ export type NavSection =
   | 'manager'
   | 'methodist'
   | 'analyst'
+  | 'designer'
   | 'knowledge'
   | 'backups'
   | 'connections';
@@ -184,6 +185,7 @@ export type SpecialistRoleKey =
   | 'manager'
   | 'methodist'
   | 'analyst'
+  | 'designer'
   | 'pixel';
 
 export interface SpecialistModelSetting {
@@ -221,6 +223,204 @@ export interface OllamaLocalInfo {
   error?: string;
 }
 
+export type DesignAspectRatio = '3:4' | '9:16' | '1:1' | '16:9' | '4:3';
+
+export type DesignQualityMode = 'standard' | '1K' | '2K' | '4K';
+
+export type DesignTemplatePresetId =
+  | 'promo_banner'
+  | 'story_vertical'
+  | 'vk_post'
+  | 'event_poster'
+  | 'free_concept';
+
+export interface DesignOverlayLayer {
+  id: string;
+  type: 'headline' | 'offer' | 'cta' | 'school_badge' | 'plate';
+  label: string;
+  text: string;
+  visible: boolean;
+  xPercent: number;
+  yPercent: number;
+  fontSizePx: number;
+  textColor: string;
+  backgroundColor?: string;
+  accentColor?: string;
+  align?: 'left' | 'center' | 'right';
+}
+
+export interface DesignSelectionBox {
+  xPercent: number;
+  yPercent: number;
+  widthPercent: number;
+  heightPercent: number;
+}
+
+export type ImageProviderId = 'cloudflare';
+
+export type FreeDesignImageModelId =
+  | '@cf/black-forest-labs/flux-1-schnell'
+  | '@cf/black-forest-labs/flux-2-klein-9b';
+
+export type DesignImageModelId =
+  | FreeDesignImageModelId
+  | 'gemini-3.1-flash-lite-image'
+  | 'gemini-nano-banana-2.1'
+  | 'gemini-2.5-flash-image'
+  | string;
+
+export type ImageProviderAvailabilityStatus =
+  | 'available'
+  | 'not_configured'
+  | 'quota_exceeded'
+  | 'error';
+
+export interface ImageModelDescriptor {
+  id: FreeDesignImageModelId;
+  providerId: ImageProviderId;
+  label: string;
+  shortLabel: string;
+  descriptionRu: string;
+  isFreeTier: true;
+  status: ImageProviderAvailabilityStatus;
+  statusLabelRu: string;
+  supportsReferenceImage: boolean;
+  supportsImageEditing: boolean;
+  supportedAspectRatios: DesignAspectRatio[];
+  maxResolutionLabel: string;
+  inputImageLimitLabel: string;
+  estimatedNeuronsPerRun: number;
+  limitationsRu: string[];
+}
+
+export interface ImageProviderQuotaState {
+  dailyLimitLabel: string;
+  resetScheduleLabel: string;
+  requestsTodayCount: number;
+  estimatedNeuronsUsedToday: number;
+  dailyFreeNeuronLimit: number;
+  remainingQuotaStatus: 'unknown';
+  remainingQuotaLabelRu: string;
+  isExhausted: boolean;
+  lastError?: string;
+  utcDateKey: string;
+}
+
+export interface ImageProviderDescriptor {
+  id: ImageProviderId;
+  label: string;
+  shortLabel: string;
+  isFreeTierOnly: true;
+  configured: boolean;
+  status: ImageProviderAvailabilityStatus;
+  statusLabelRu: string;
+  lastCheckedAtIso?: string;
+  quota: ImageProviderQuotaState;
+  models: ImageModelDescriptor[];
+}
+
+export interface ImageProvidersRegistryState {
+  defaultProviderId: ImageProviderId;
+  defaultModelId: FreeDesignImageModelId;
+  providers: ImageProviderDescriptor[];
+}
+
+export interface DesignVersionItem {
+  id: string;
+  versionNumber: number;
+  label: string;
+  promptUsed: string;
+  editInstruction?: string;
+  selectionBox?: DesignSelectionBox;
+  providerId?: ImageProviderId | 'gemini';
+  modelUsed: DesignImageModelId;
+  aspectRatio: DesignAspectRatio;
+  qualityMode: DesignQualityMode;
+  backgroundImageDataUrl: string;
+  layers: DesignOverlayLayer[];
+  createdAt: string;
+}
+
+export interface DesignArtifactRecord {
+  id: string;
+  schoolId: SchoolId;
+  sessionId: string;
+  messageId?: string;
+  title: string;
+  conceptSummary: string;
+  aspectRatio: DesignAspectRatio;
+  qualityMode: DesignQualityMode;
+  templatePreset: DesignTemplatePresetId;
+  activeVersionId: string;
+  versions: DesignVersionItem[];
+  pendingVersion?: DesignVersionItem;
+  sourceHandoffId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SpecialistHandoffPacket {
+  id: string;
+  fromSpecialist: AgentMode;
+  toSpecialist: AgentMode;
+  sourceSessionId: string;
+  sourceMessageId?: string;
+  targetSessionId: string;
+  schoolId: SchoolId;
+  originalTask: string;
+  goalAndAudience: string;
+  approvedOfferAndText: string;
+  additionalRequirements: string;
+  discussionContext: string;
+  attachments: ChatAttachment[];
+  status: 'sent' | 'in_progress' | 'clarifying' | 'completed';
+  resultSummary?: string;
+  resultArtifactId?: string;
+  resultImageDataUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SpecialistHandoffResult {
+  handoffId: string;
+  fromSpecialist: AgentMode;
+  toSpecialist: AgentMode;
+  sourceSessionId: string;
+  targetSessionId: string;
+  schoolId: SchoolId;
+  summary: string;
+  artifactId?: string;
+  previewImageDataUrl?: string;
+  layersSummary?: string;
+  completedAt: string;
+}
+
+export interface DesignerConceptOption {
+  id: string;
+  title: string;
+  visualDirection: string;
+  compositionAndStyle: string;
+  suggestedHeadline: string;
+  suggestedOffer: string;
+  suggestedCta: string;
+  recommendedAspectRatio: DesignAspectRatio;
+  imageGenerationPrompt: string;
+}
+
+export interface DesignerClarifyingQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  selectedOption?: string;
+}
+
+export interface DesignerInteractivePrompt {
+  concepts: DesignerConceptOption[];
+  selectedConceptId?: string;
+  questions: DesignerClarifyingQuestion[];
+  confirmedByAnna?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   sessionId: string;
@@ -244,6 +444,10 @@ export interface ChatMessage {
   delegationTaskId?: string;
   delegationIteration?: number;
   senderLabel?: string;
+  handoffPacket?: SpecialistHandoffPacket;
+  handoffResult?: SpecialistHandoffResult;
+  interactiveDesignerPrompt?: DesignerInteractivePrompt;
+  designArtifact?: DesignArtifactRecord;
 }
 
 export interface ChatSession {
@@ -258,6 +462,8 @@ export interface ChatSession {
   updatedAtMs?: number;
   messages: ChatMessage[];
   attachments?: ChatAttachment[];
+  linkedHandoffPacket?: SpecialistHandoffPacket;
+  designArtifacts?: DesignArtifactRecord[];
 }
 
 export interface QuickPromptTemplate {

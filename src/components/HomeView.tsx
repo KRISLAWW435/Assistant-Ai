@@ -11,6 +11,7 @@ import {
   GraduationCap,
   Megaphone,
   MessageSquareHeart,
+  Palette,
   Pin,
   Sparkles,
 } from 'lucide-react';
@@ -46,6 +47,7 @@ const MODE_ICONS: Record<
   manager: MessageSquareHeart,
   methodist: GraduationCap,
   analyst: BarChart3,
+  designer: Palette,
 };
 
 export const HomeView: React.FC<HomeViewProps> = ({
@@ -225,7 +227,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3.5">
           {AGENT_MODE_LIST.map((mode) => {
             const Icon = MODE_ICONS[mode.id];
             return (
