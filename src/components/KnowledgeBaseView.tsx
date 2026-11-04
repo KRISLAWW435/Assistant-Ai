@@ -58,6 +58,11 @@ import {
   ZipArchiveEntry,
 } from '../utils/documentParser';
 import { formatFileSizeRu } from './RightWorkspacePanel';
+import {
+  downloadOrExportFile,
+  openLocalFolder,
+  saveFileToLocalDisk,
+} from '../utils/diskFileManager';
 
 interface KnowledgeBaseViewProps {
   activeSchool: SchoolId;
@@ -243,9 +248,31 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
   const saveTimersRef = useRef<Partial<Record<CompositeCategoryKey, ReturnType<typeof setTimeout>>>>({});
   const universalInputRef = useRef<HTMLInputElement | null>(null);
+  const brandbookInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const backupInputRef = useRef<HTMLInputElement | null>(null);
   const videoPlayerRef = useRef<HTMLVideoElement | null>(null);
+
+  // Drag and drop upload support for Knowledge Base
+  const [isDraggingOverKB, setIsDraggingOverKB] = useState(false);
+  const kbDragCounterRef = useRef(0);
+
+  // Custom Brandbook Palette Management
+  const [showAddColorModal, setShowAddColorModal] = useState(false);
+  const [newColorHex, setNewColorHex] = useState('#00A8B5');
+  const [newColorLabel, setNewColorLabel] = useState('');
+  const [paletteOverrides, setPaletteOverrides] = useState<
+    Record<SchoolId, { added: VisualColorSample[]; removed: string[] }>
+  >(() => {
+    try {
+      const raw = localStorage.getItem('kiber_renderia_custom_palette_v1');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {
+      kiberone: { added: [], removed: [] },
+      renderia: { added: [], removed: [] },
+    };
+  });
 
   useEffect(() => {
     const timers = saveTimersRef.current;
@@ -320,9 +347,14 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     });
   }, [uploadedDocuments, activeSchool, schoolScopeFilter, fileTypeFilter, searchQuery]);
 
-  // Brandbook Palette & Documents
+  // Brandbook Palette & Documents with Custom Management Support
   const brandbookData = useMemo(() => {
-    const basePalette = DEFAULT_BRAND_COLORS[activeSchool] || [];
+    const schoolOverrides = paletteOverrides[activeSchool] || { added: [], removed: [] };
+    const removedUpper = new Set((schoolOverrides.removed || []).map((h) => h.toUpperCase()));
+
+    const basePalette = (DEFAULT_BRAND_COLORS[activeSchool] || []).filter(
+      (p) => !removedUpper.has(p.hex.toUpperCase())
+    );
     const extractedPalettes: VisualColorSample[] = [];
     const seenHex = new Set(basePalette.map((p) => p.hex.toUpperCase()));
 
@@ -330,7 +362,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       if (Array.isArray(doc.colorPalette)) {
         for (const c of doc.colorPalette) {
           const clean = c.hex.toUpperCase();
-          if (!seenHex.has(clean)) {
+          if (!seenHex.has(clean) && !removedUpper.has(clean)) {
             seenHex.add(clean);
             extractedPalettes.push({
               hex: clean,
@@ -338,6 +370,18 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             });
           }
         }
+      }
+    }
+
+    const customAdded: VisualColorSample[] = [];
+    for (const c of schoolOverrides.added || []) {
+      const clean = c.hex.toUpperCase();
+      if (!seenHex.has(clean) && !removedUpper.has(clean)) {
+        seenHex.add(clean);
+        customAdded.push({
+          hex: clean,
+          label: c.label || 'Пользовательский цвет',
+        });
       }
     }
 
@@ -350,10 +394,10 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     );
 
     return {
-      palette: [...basePalette, ...extractedPalettes],
+      palette: [...basePalette, ...extractedPalettes, ...customAdded],
       brandDocs,
     };
-  }, [activeSchool, eligibleSchoolDocs]);
+  }, [activeSchool, eligibleSchoolDocs, paletteOverrides]);
 
   const filledCount = KNOWLEDGE_CATEGORIES.filter(
     (c) => (confirmedSchoolData[c.key] || '').trim().length > 0
@@ -580,11 +624,20 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             ? 'processed'
             : 'no_text';
 
+      let diskRes: { absolutePath?: string; folderPath?: string; sizeBytes?: number } | null = null;
+      if (stagedDoc.sourceFile) {
+        diskRes = await saveFileToLocalDisk(
+          stagedDoc.sourceFile,
+          schoolId === 'all' ? activeSchool : schoolId,
+          visualRole === 'brandbook' || visualRole === 'logo' ? 'Brandbook' : 'Materials'
+        );
+      }
+
       const docRecord: UploadedDocumentRecord = {
         id: `doc-${now.getTime()}-${Math.random().toString(36).slice(2, 7)}`,
         name: parsed.name,
         extension: parsed.extension,
-        sizeBytes: parsed.sizeBytes,
+        sizeBytes: diskRes?.sizeBytes ?? parsed.sizeBytes,
         schoolId,
         categoryKey,
         status: finalStatus,
@@ -608,6 +661,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         durationSec: parsed.durationSec,
         videoWidth: parsed.videoWidth,
         videoHeight: parsed.videoHeight,
+        filePath: diskRes?.absolutePath,
+        diskFolderPath: diskRes?.folderPath,
       };
 
       let categoryUpdate:
@@ -831,6 +886,119 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     setTimeout(() => setCopiedHex((prev) => (prev === hex ? null : prev)), 2000);
   };
 
+  const handleAddCustomColor = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    let hex = newColorHex.trim();
+    if (!hex) return;
+    if (!hex.startsWith('#')) hex = '#' + hex;
+    if (!/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(hex)) {
+      alert('Пожалуйста, введите корректный HEX-код цвета (например, #00A8B5 или #FFF)');
+      return;
+    }
+    hex = hex.toUpperCase();
+    const label = newColorLabel.trim() || 'Фирменный цвет';
+
+    setPaletteOverrides((prev) => {
+      const cur = prev[activeSchool] || { added: [], removed: [] };
+      const nextRemoved = cur.removed.filter((h) => h.toUpperCase() !== hex);
+      const nextAdded = [...cur.added.filter((c) => c.hex.toUpperCase() !== hex), { hex, label }];
+      const next = {
+        ...prev,
+        [activeSchool]: {
+          added: nextAdded,
+          removed: nextRemoved,
+        },
+      };
+      try {
+        localStorage.setItem('kiber_renderia_custom_palette_v1', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    setShowAddColorModal(false);
+    setNewColorLabel('');
+  };
+
+  const handleDeleteCustomColor = (hexToDelete: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const clean = hexToDelete.toUpperCase();
+    setPaletteOverrides((prev) => {
+      const cur = prev[activeSchool] || { added: [], removed: [] };
+      const nextAdded = cur.added.filter((c) => c.hex.toUpperCase() !== clean);
+      const nextRemoved = Array.from(new Set([...cur.removed, clean]));
+      const next = {
+        ...prev,
+        [activeSchool]: {
+          added: nextAdded,
+          removed: nextRemoved,
+        },
+      };
+      try {
+        localStorage.setItem('kiber_renderia_custom_palette_v1', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  const handleResetPalette = () => {
+    setPaletteOverrides((prev) => {
+      const next = {
+        ...prev,
+        [activeSchool]: { added: [], removed: [] },
+      };
+      try {
+        localStorage.setItem('kiber_renderia_custom_palette_v1', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  // Drag and drop handlers for Knowledge Base
+  const handleKBDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    kbDragCounterRef.current += 1;
+    if (e.dataTransfer?.items && e.dataTransfer.items.length > 0) {
+      setIsDraggingOverKB(true);
+    }
+  };
+
+  const handleKBDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  };
+
+  const handleKBDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    kbDragCounterRef.current -= 1;
+    if (kbDragCounterRef.current <= 0) {
+      kbDragCounterRef.current = 0;
+      setIsDraggingOverKB(false);
+    }
+  };
+
+  const handleKBDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    kbDragCounterRef.current = 0;
+    setIsDraggingOverKB(false);
+
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    const rolePreset: VisualAssetRole | undefined =
+      activeSubTab === 'brandbooks'
+        ? 'brandbook'
+        : activeSubTab === 'visual_library'
+          ? 'reference'
+          : undefined;
+    await handleUniversalFileUpload(file, rolePreset);
+  };
+
   const handleBackupFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -839,7 +1007,13 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+    <div
+      onDragEnter={handleKBDragEnter}
+      onDragOver={handleKBDragOver}
+      onDragLeave={handleKBDragLeave}
+      onDrop={handleKBDrop}
+      className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6 relative min-h-screen"
+    >
       {/* Top Header & School Switcher */}
       <div className="glass-panel rounded-2xl p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
         <div className="space-y-1.5 max-w-2xl">
@@ -916,7 +1090,35 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             <Upload className="w-4 h-4 text-[#165B73]" />
             <span>Импорт (.json)</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => openLocalFolder({ school: activeSchool, category: activeSubTab })}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#00A8B5] text-white hover:bg-[#00929E] transition-colors whitespace-nowrap shadow-2xs cursor-pointer"
+            title="Открыть папку с локальными файлами в Проводнике Windows (NotebookLM style)"
+          >
+            <FolderOpen className="w-4 h-4 text-white" />
+            <span>Открыть папку с файлами</span>
+          </button>
         </div>
+      </div>
+
+      {/* Local Files Path Banner */}
+      <div className="glass-panel rounded-xl px-4 py-2.5 border border-slate-200/90 bg-slate-50/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-700">
+        <div className="flex items-center gap-2">
+          <FolderOpen className="w-4 h-4 text-[#00A8B5] shrink-0" />
+          <span>
+            Локальная папка файлов: <code className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">Документы/BusinessAssistant/{activeSchool.toUpperCase()}/{activeSubTab === 'brandbooks' ? 'Brandbook' : 'Materials'}</code>
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => openLocalFolder({ school: activeSchool, category: activeSubTab })}
+          className="inline-flex items-center gap-1 text-[#00A8B5] font-bold hover:underline cursor-pointer"
+        >
+          <span>Открыть в Проводнике</span>
+          <ExternalLink className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       {statusBanner && (
@@ -1009,6 +1211,18 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) handleUniversalFileUpload(f);
+              e.target.value = '';
+            }}
+            className="hidden"
+          />
+
+          <input
+            ref={brandbookInputRef}
+            type="file"
+            accept=".pdf,.docx,.pptx,.ppt,.png,.jpg,.jpeg,.webp,.svg,.txt,.zip"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUniversalFileUpload(f, 'brandbook');
               e.target.value = '';
             }}
             className="hidden"
@@ -1439,16 +1653,38 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                   <span>Фирменные цвета и палитра: {schoolConfig.name}</span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Нажмите на образец цвета, чтобы мгновенно скопировать HEX-код в буфер обмена.
+                  Нажмите на образец цвета для копирования HEX. Наведите для удаления цвета из палитры.
                 </p>
               </div>
 
-              {copiedHex && (
-                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-emerald-100 text-emerald-800 text-xs font-bold shadow-xs">
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Скопировано: {copiedHex}</span>
-                </span>
-              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                {copiedHex && (
+                  <span className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-emerald-100 text-emerald-800 text-xs font-bold shadow-xs">
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Скопировано: {copiedHex}</span>
+                  </span>
+                )}
+                {((paletteOverrides[activeSchool]?.added?.length || 0) > 0 ||
+                  (paletteOverrides[activeSchool]?.removed?.length || 0) > 0) && (
+                  <button
+                    type="button"
+                    onClick={handleResetPalette}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer"
+                    title="Сбросить палитру к стандартным цветам"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Сбросить</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowAddColorModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#00A8B5] text-white hover:bg-[#00929E] transition-colors shadow-2xs cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Добавить цвет</span>
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
@@ -1456,12 +1692,21 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 <div
                   key={`${color.hex}-${idx}`}
                   onClick={() => handleCopyHex(color.hex)}
-                  className="rounded-xl p-3 bg-white border border-slate-200 hover:border-slate-300 hover:shadow-xs transition-all cursor-pointer space-y-2 group"
+                  className="rounded-xl p-3 bg-white border border-slate-200 hover:border-slate-300 hover:shadow-xs transition-all cursor-pointer space-y-2 group relative"
                 >
                   <div
-                    className="w-full h-14 rounded-lg border border-black/10 flex items-end justify-end p-1.5 shadow-2xs"
+                    className="w-full h-14 rounded-lg border border-black/10 flex items-end justify-between p-1.5 shadow-2xs relative"
                     style={{ backgroundColor: color.hex }}
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => handleDeleteCustomColor(color.hex, e)}
+                      className="absolute top-1 right-1 p-1 rounded-md bg-black/60 text-white/90 hover:bg-red-600 hover:text-white transition-all opacity-0 group-hover:opacity-100 shadow-xs cursor-pointer z-10"
+                      title={`Удалить ${color.hex} из палитры`}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                    <div />
                     <Copy className="w-3.5 h-3.5 text-white/80 opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-sm" />
                   </div>
                   <div className="space-y-0.5">
@@ -1494,7 +1739,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => imageInputRef.current?.click()}
+                onClick={() => brandbookInputRef.current?.click()}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-colors shadow-xs cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5 text-[#FFD700]" />
@@ -2760,6 +3005,121 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>{isDeletingDoc ? 'Удаление...' : 'Удалить'}</span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          MODAL 8: ADD BRAND COLOR
+         ==================================================================== */}
+      {showAddColorModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
+          onClick={() => setShowAddColorModal(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white border border-slate-200 shadow-2xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h4 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
+                <Palette className="w-4 h-4 text-[#00A8B5]" />
+                <span>Новый цвет: {schoolConfig.name}</span>
+              </h4>
+              <button
+                type="button"
+                onClick={() => setShowAddColorModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddCustomColor} className="space-y-3.5">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Выбор цвета (палитра или HEX):
+                </label>
+                <div className="flex items-center gap-2.5">
+                  <input
+                    type="color"
+                    value={
+                      newColorHex.startsWith('#') && newColorHex.length === 7
+                        ? newColorHex
+                        : '#00A8B5'
+                    }
+                    onChange={(e) => setNewColorHex(e.target.value.toUpperCase())}
+                    className="w-11 h-11 rounded-xl cursor-pointer border border-slate-200 p-0.5 bg-white shrink-0 shadow-2xs"
+                  />
+                  <input
+                    type="text"
+                    value={newColorHex}
+                    onChange={(e) => setNewColorHex(e.target.value.toUpperCase())}
+                    placeholder="#00A8B5"
+                    className="flex-1 font-mono text-xs px-3 py-2.5 rounded-xl border border-slate-200 uppercase font-bold focus:outline-none focus:ring-2 focus:ring-[#00A8B5] text-slate-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Название цвета (необязательно):
+                </label>
+                <input
+                  type="text"
+                  value={newColorLabel}
+                  onChange={(e) => setNewColorLabel(e.target.value)}
+                  placeholder="Например: Неоновый акцент баннеров"
+                  className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] text-slate-900"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddColorModal(false)}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-colors shadow-xs cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5 text-[#FFD700]" />
+                  <span>Сохранить цвет</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          FULLSCREEN DRAG-AND-DROP OVERLAY FOR KNOWLEDGE BASE
+         ==================================================================== */}
+      {isDraggingOverKB && (
+        <div className="fixed inset-0 z-50 pointer-events-none bg-slate-900/60 backdrop-blur-xs flex flex-col items-center justify-center p-6 transition-all animate-in fade-in duration-150">
+          <div className="flex flex-col items-center text-center p-8 bg-white/95 rounded-3xl shadow-2xl border-2 border-dashed border-[#00A8B5] max-w-md space-y-4 pointer-events-none">
+            <div className="w-16 h-16 rounded-2xl bg-[#00A8B5]/15 text-[#00A8B5] flex items-center justify-center shadow-inner">
+              <Upload className="w-8 h-8 animate-bounce" />
+            </div>
+            <div>
+              <h3 className="font-display font-bold text-lg text-slate-900">
+                Загрузить в Базу знаний
+              </h3>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                Перетащите файлы сюда (PDF, DOCX, PPTX, изображения, видео или ZIP-архивы) для школы{' '}
+                <strong>{schoolConfig.name}</strong>
+              </p>
+            </div>
+            <div className="text-[11px] font-semibold text-[#00A8B5] bg-[#00A8B5]/10 px-3 py-1.5 rounded-xl">
+              {activeSubTab === 'brandbooks'
+                ? 'Файл будет помечен как материал брендбука'
+                : activeSubTab === 'visual_library'
+                  ? 'Файл будет добавлен в визуальную библиотеку'
+                  : 'Автоматический анализ структуры документа'}
             </div>
           </div>
         </div>

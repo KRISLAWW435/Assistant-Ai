@@ -43,7 +43,7 @@ export const GEMINI_MODEL =
   rawEnvGeminiModel && !rawEnvGeminiModel.startsWith('gemini-2.5')
     ? rawEnvGeminiModel
     : 'gemini-3.8-flash';
-const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview';
+const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 const rawEnvOpenRouterModel = (process.env.OPENROUTER_MODEL || '').trim();
 export const OPENROUTER_DEFAULT_FREE_MODEL =
   rawEnvOpenRouterModel &&
@@ -1215,16 +1215,12 @@ function classifyProviderError(
 
 function getThinkingConfigForGeminiModel(modelName: string): Record<string, unknown> | undefined {
   const norm = (modelName || '').toLowerCase();
-  // Gemini 2.5 generation models support thinkingBudget (0 turns off thinking latency)
-  if (norm.startsWith('gemini-2.5')) {
-    return { thinkingBudget: 0 };
-  }
-  // Gemini 3.1 flash-lite and flash-lite-latest support thinkingBudget: 0 for fast responses
+  // gemini-3.1-flash-lite defaults to MINIMAL thinking
   if (norm.includes('3.1-flash-lite') || norm.includes('flash-lite')) {
-    return { thinkingBudget: 0 };
+    return { thinkingLevel: ThinkingLevel.MINIMAL };
   }
-  // Gemini 3.8 and Gemini 3 full models support thinkingLevel
-  if (norm.startsWith('gemini-3')) {
+  // gemini-3.8-flash and gemini-flash-latest support thinkingLevel LOW or MEDIUM
+  if (norm.includes('3.8-flash') || norm.includes('flash-latest') || norm.startsWith('gemini-3')) {
     return { thinkingLevel: ThinkingLevel.LOW };
   }
   return undefined;
@@ -1232,9 +1228,8 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
 
 const GEMINI_MODEL_CASCADE: string[] = [
   'gemini-3.8-flash',
-  'gemini-3-flash-preview',
-  'gemini-flash-lite-latest',
-  GEMINI_QUOTA_FALLBACK_MODEL,
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
 ];
 
 let lastHealthyGeminiModel: string = 'gemini-3.8-flash';
@@ -1260,7 +1255,7 @@ async function executeGeminiGeneration(params: {
 
   // Order candidate models starting with vision-capable models when images are present
   const visionPriorityModels = params.hasImages
-    ? ['gemini-3-flash-preview', 'gemini-3.8-flash']
+    ? ['gemini-3.8-flash', 'gemini-flash-latest']
     : [lastHealthyGeminiModel];
 
   const candidateModels = Array.from(

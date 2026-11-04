@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   WebContentsView,
+  dialog,
   ipcMain,
   Notification,
   safeStorage,
@@ -66,6 +67,57 @@ const pixelAnnaDir = path.join(userDataDir, 'PixelData', 'Anna');
 const pixelConversationsDir = path.join(pixelAnnaDir, 'conversations');
 if (!fs.existsSync(pixelConversationsDir)) {
   fs.mkdirSync(pixelConversationsDir, { recursive: true });
+}
+
+// Local File Storage Directory for User Documents (NotebookLM style): Documents/BusinessAssistant/
+// Folders: 'KIBERONE/Brandbook', 'KIBERONE/Materials', 'RENDERIA/Brandbook', 'RENDERIA/Materials', 'Common'
+const documentsDir = app.getPath('documents');
+const businessAssistantDir = path.join(documentsDir, 'BusinessAssistant');
+
+const BUSINESS_ASSISTANT_SUBDIRS = [
+  path.join(businessAssistantDir, 'KIBERONE', 'Brandbook'),
+  path.join(businessAssistantDir, 'KIBERONE', 'Materials'),
+  path.join(businessAssistantDir, 'RENDERIA', 'Brandbook'),
+  path.join(businessAssistantDir, 'RENDERIA', 'Materials'),
+  path.join(businessAssistantDir, 'Common'),
+];
+
+function initBusinessAssistantDirectories(): void {
+  try {
+    if (!fs.existsSync(businessAssistantDir)) {
+      fs.mkdirSync(businessAssistantDir, { recursive: true });
+    }
+    for (const dir of BUSINESS_ASSISTANT_SUBDIRS) {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    }
+  } catch (err) {
+    console.warn('[Files] Directory initialization warning:', err);
+  }
+}
+
+function getTargetFolderForFile(school?: string, category?: string): string {
+  initBusinessAssistantDirectories();
+  const normSchool = (school || '').toLowerCase();
+  const normCategory = (category || '').toLowerCase();
+  const isBrandbook =
+    normCategory.includes('brandbook') ||
+    normCategory.includes('бренд') ||
+    normCategory.includes('logo') ||
+    normCategory.includes('лого');
+
+  if (normSchool === 'kiberone') {
+    return isBrandbook
+      ? path.join(businessAssistantDir, 'KIBERONE', 'Brandbook')
+      : path.join(businessAssistantDir, 'KIBERONE', 'Materials');
+  }
+  if (normSchool === 'renderia') {
+    return isBrandbook
+      ? path.join(businessAssistantDir, 'RENDERIA', 'Brandbook')
+      : path.join(businessAssistantDir, 'RENDERIA', 'Materials');
+  }
+  return path.join(businessAssistantDir, 'Common');
 }
 
 function safeWriteJson(filePath: string, data: unknown): void {
@@ -849,6 +901,130 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('flow:insertPrompt', async (_event, promptText: string) => {
     return insertPromptIntoFlow(promptText);
+  });
+
+  // --- Local Disk Files Storage IPC Handlers (NotebookLM Architecture) ---
+  ipcMain.handle(
+    'files:saveToDisk',
+    async (
+      _event,
+      input: {
+        fileName: string;
+        buffer?: ArrayBuffer | Uint8Array | number[];
+        filePath?: string;
+        school?: string;
+        category?: string;
+      }
+    ) => {
+      initBusinessAssistantDirectories();
+      const targetFolder = getTargetFolderForFile(input.school, input.category);
+      if (!fs.existsSync(targetFolder)) {
+        fs.mkdirSync(targetFolder, { recursive: true });
+      }
+
+      const cleanName = path.basename(input.fileName || 'document');
+      const targetPath = path.join(targetFolder, cleanName);
+
+      if (input.filePath && fs.existsSync(input.filePath)) {
+        fs.copyFileSync(input.filePath, targetPath);
+      } else if (input.buffer) {
+        let nodeBuf: Buffer;
+        if (Buffer.isBuffer(input.buffer)) {
+          nodeBuf = input.buffer;
+        } else if (input.buffer instanceof ArrayBuffer) {
+          nodeBuf = Buffer.from(new Uint8Array(input.buffer));
+        } else if (ArrayBuffer.isView(input.buffer)) {
+          nodeBuf = Buffer.from(
+            input.buffer.buffer,
+            input.buffer.byteOffset,
+            input.buffer.byteLength
+          );
+        } else if (Array.isArray(input.buffer)) {
+          nodeBuf = Buffer.from(input.buffer);
+        } else {
+          nodeBuf = Buffer.from(input.buffer as any);
+        }
+        fs.writeFileSync(targetPath, nodeBuf);
+      } else {
+        throw new Error('Данные файла не переданы для сохранения');
+      }
+
+      const stats = fs.statSync(targetPath);
+      return {
+        success: true,
+        absolutePath: targetPath,
+        fileName: cleanName,
+        sizeBytes: stats.size,
+        folderPath: targetFolder,
+      };
+    }
+  );
+
+  ipcMain.handle(
+    'files:openFolder',
+    async (
+      _event,
+      params?: { school?: string; category?: string; folderPath?: string }
+    ) => {
+      initBusinessAssistantDirectories();
+      let target = params?.folderPath;
+      if (!target) {
+        if (params?.school) {
+          target = getTargetFolderForFile(params.school, params.category);
+        } else {
+          target = businessAssistantDir;
+        }
+      }
+      if (!fs.existsSync(target)) {
+        target = businessAssistantDir;
+      }
+      const openResult = await shell.openPath(target);
+      return {
+        success: openResult === '',
+        path: target,
+        error: openResult || undefined,
+      };
+    }
+  );
+
+  ipcMain.handle('files:showInFolder', async (_event, filePath: string) => {
+    if (filePath && fs.existsSync(filePath)) {
+      shell.showItemInFolder(filePath);
+      return true;
+    }
+    return false;
+  });
+
+  ipcMain.handle('files:getBasePath', async () => {
+    initBusinessAssistantDirectories();
+    return businessAssistantDir;
+  });
+
+  ipcMain.handle(
+    'files:saveCopy',
+    async (_event, sourcePath: string, suggestedName?: string) => {
+      if (!sourcePath || !fs.existsSync(sourcePath)) {
+        throw new Error(`Файл не найден на диске: ${sourcePath}`);
+      }
+      const defaultName = suggestedName || path.basename(sourcePath);
+      const saveResult = await dialog.showSaveDialog({
+        defaultPath: defaultName,
+        title: 'Сохранить копию файла',
+      });
+      if (saveResult.canceled || !saveResult.filePath) {
+        return { success: false };
+      }
+      fs.copyFileSync(sourcePath, saveResult.filePath);
+      return { success: true, destinationPath: saveResult.filePath };
+    }
+  );
+
+  ipcMain.handle('files:readFile', async (_event, sourcePath: string) => {
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+      throw new Error(`Файл не найден на диске: ${sourcePath}`);
+    }
+    const buf = fs.readFileSync(sourcePath);
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   });
 }
 

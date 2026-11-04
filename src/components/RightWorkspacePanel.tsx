@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowRight,
   BookOpen,
   Check,
   CheckCircle2,
@@ -63,6 +64,7 @@ import {
   SCHOOLS,
 } from '../config/schoolsAndModes';
 import { renderStatusBadge } from './KnowledgeBaseView';
+import { downloadOrExportFile, openLocalFolder } from '../utils/diskFileManager';
 import { AIProvidersSystemState } from '../providers/aiProviderManager';
 import { voiceManager } from '../providers/voice/voiceManager';
 import {
@@ -135,6 +137,7 @@ interface RightWorkspacePanelProps {
     artifact?: DesignArtifactRecord;
     navigateBack?: boolean;
   }) => Promise<void>;
+  onInsertFileToDraft?: (attachment: ChatAttachment) => void;
 }
 
 interface SearchHit {
@@ -209,12 +212,23 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
   isCheckingImageProviders = false,
   onCheckImageProviders,
   onReturnHandoffResult,
+  onInsertFileToDraft,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchScope, setSearchScope] = useState<'local' | 'global'>('local');
   const [attachmentPendingDelete, setAttachmentPendingDelete] =
     useState<ChatAttachment | null>(null);
   const [isDeletingAttachment, setIsDeletingAttachment] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const handleDownloadAttachment = (att: ChatAttachment) => {
+    void downloadOrExportFile({
+      filePath: att.filePath,
+      name: att.name,
+      dataUrl: att.dataUrl,
+      extractedText: att.extractedText,
+    });
+  };
 
   // Stage 2: Design Preview, Zoom, Layer Editor & Regional AI Selection State
   const [designZoomPercent, setDesignZoomPercent] = useState<number>(100);
@@ -619,14 +633,21 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
     return sessionAttachments[0];
   }, [sessionAttachments, selectedAttachmentId]);
 
-  // Search across all saved sessions & messages & extracted text of dialogue attachments
+  // Search across saved sessions (current dialogue or all) & messages & attachments
   const searchResults: SearchHit[] = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [];
 
+    const targetSessions =
+      searchScope === 'local'
+        ? currentSession
+          ? [currentSession]
+          : []
+        : sessions;
+
     const hits: SearchHit[] = [];
 
-    for (const sess of sessions) {
+    for (const sess of targetSessions) {
       const titleMatch = sess.title.toLowerCase().includes(q);
       if (titleMatch) {
         hits.push({
@@ -690,7 +711,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
     }
 
     return hits.sort((a, b) => b.updatedAtMs - a.updatedAtMs).slice(0, 40);
-  }, [searchQuery, sessions]);
+  }, [searchQuery, sessions, currentSession, searchScope]);
 
   const schoolKnowledge = knowledgeBase[activeSchool];
   const filledCategories = useMemo(
@@ -1441,14 +1462,25 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
               </div>
             )}
 
-            {/* Separation Notice */}
-            <div className="rounded-xl p-3 bg-slate-50 border border-slate-200/80 text-[11px] text-slate-600 leading-relaxed flex items-start gap-2">
-              <Info className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
-              <span>
-                Файлы, прикреплённые в чате, связаны только с{' '}
-                <strong>этим диалогом</strong> и не попадают автоматически в
-                общую Базу знаний школы.
-              </span>
+            {/* Open Local Folder Button & Separation Notice */}
+            <div className="rounded-xl p-3 bg-slate-50 border border-slate-200/80 text-[11px] text-slate-600 leading-relaxed space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 font-semibold text-slate-800">
+                  <FolderOpen className="w-3.5 h-3.5 text-[#00A8B5] shrink-0" />
+                  <span>Локальное хранение (NotebookLM)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openLocalFolder({ school: activeSchool })}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-[#00A8B5] bg-white border border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer shadow-2xs"
+                  title="Открыть локальную папку в Проводнике Windows"
+                >
+                  <span>Открыть папку</span>
+                </button>
+              </div>
+              <div className="text-[10px] font-mono text-slate-500 bg-white p-1.5 rounded border border-slate-200 truncate">
+                Документы/BusinessAssistant/{activeSchool.toUpperCase()}/Materials
+              </div>
             </div>
 
             {sessionAttachments.length === 0 ? (
@@ -1473,6 +1505,11 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                     !(currentSession?.attachments || []).some(
                       (a) => a.id === att.id
                     );
+                  const extLower = (att.extension || '').toLowerCase();
+                  const isImage =
+                    IMAGE_PREVIEW_EXTENSIONS.has(extLower) ||
+                    Boolean(att.mimeType?.startsWith('image/')) ||
+                    Boolean(att.dataUrl?.startsWith('data:image/'));
 
                   return (
                     <div
@@ -1489,8 +1526,16 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          {renderFileTypeIcon(att.extension)}
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {isImage && att.dataUrl ? (
+                            <img
+                              src={att.dataUrl}
+                              alt={att.name}
+                              className="w-10 h-10 object-cover rounded-lg border border-slate-200/80 shrink-0 bg-slate-100"
+                            />
+                          ) : (
+                            renderFileTypeIcon(att.extension)
+                          )}
                           <span
                             className="text-xs font-semibold text-slate-900 truncate"
                             title={att.name}
@@ -1533,18 +1578,40 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                               onSelectAttachment(att.id);
                               onChangeTab('preview');
                             }}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors"
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                             title="Открыть извлечённый текст документа"
                           >
                             <Eye className="w-3 h-3" />
                             <span>Текст</span>
                           </button>
 
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadAttachment(att)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                            title="Скачать файл на компьютер"
+                          >
+                            <Download className="w-3 h-3 text-slate-600" />
+                            <span>Скачать</span>
+                          </button>
+
+                          {onInsertFileToDraft && (
+                            <button
+                              type="button"
+                              onClick={() => onInsertFileToDraft(att)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-[#00A8B5] hover:bg-[#00A8B5]/10 transition-colors cursor-pointer"
+                              title="Вставить этот файл в текущее поле ввода сообщения"
+                            >
+                              <ArrowRight className="w-3 h-3" />
+                              <span>В чат</span>
+                            </button>
+                          )}
+
                           {!isStagedOnly && currentSession && (
                             <button
                               type="button"
                               onClick={() => setAttachmentPendingDelete(att)}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-red-600 hover:bg-red-50 transition-colors"
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
                               title="Удалить файл из текущего диалога"
                             >
                               <Trash2 className="w-3 h-3" />
@@ -2256,8 +2323,22 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                 {/* File Metadata & Status Card */}
                 <div className="rounded-xl p-3.5 bg-slate-50 border border-slate-200/80 space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {renderFileTypeIcon(selectedAttachment.extension)}
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {(IMAGE_PREVIEW_EXTENSIONS.has(
+                        selectedAttachment.extension.toLowerCase()
+                      ) ||
+                        selectedAttachment.dataUrl?.startsWith(
+                          'data:image/'
+                        )) &&
+                      selectedAttachment.dataUrl ? (
+                        <img
+                          src={selectedAttachment.dataUrl}
+                          alt={selectedAttachment.name}
+                          className="w-10 h-10 object-cover rounded-lg border border-slate-200/80 shrink-0 bg-slate-100"
+                        />
+                      ) : (
+                        renderFileTypeIcon(selectedAttachment.extension)
+                      )}
                       <div className="font-semibold text-xs text-slate-900 break-all">
                         {selectedAttachment.name}
                       </div>
@@ -2271,7 +2352,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                           onClick={() =>
                             setAttachmentPendingDelete(selectedAttachment)
                           }
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-red-600 hover:bg-red-50 shrink-0"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-red-600 hover:bg-red-50 shrink-0 cursor-pointer"
                           title="Удалить файл из диалога"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -2280,14 +2361,40 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                       )}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {renderStatusBadge(
-                      selectedAttachment.status || 'processed'
-                    )}
-                    <span className="text-[11px] font-mono-tabular text-slate-600">
-                      .{selectedAttachment.extension.toUpperCase()} ·{' '}
-                      {formatFileSizeRu(selectedAttachment.sizeBytes)}
-                    </span>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-200/70">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {renderStatusBadge(
+                        selectedAttachment.status || 'processed'
+                      )}
+                      <span className="text-[11px] font-mono-tabular text-slate-600">
+                        .{selectedAttachment.extension.toUpperCase()} ·{' '}
+                        {formatFileSizeRu(selectedAttachment.sizeBytes)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadAttachment(selectedAttachment)}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer"
+                        title="Скачать файл на компьютер"
+                      >
+                        <Download className="w-3 h-3 text-slate-600" />
+                        <span>Скачать</span>
+                      </button>
+
+                      {onInsertFileToDraft && (
+                        <button
+                          type="button"
+                          onClick={() => onInsertFileToDraft(selectedAttachment)}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-[#00A8B5] bg-[#00A8B5]/10 border border-[#00A8B5]/20 hover:bg-[#00A8B5]/20 transition-colors cursor-pointer"
+                          title="Вставить этот файл в текущее поле ввода сообщения"
+                        >
+                          <ArrowRight className="w-3 h-3" />
+                          <span>В чат</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {selectedAttachment.warning && (
@@ -2329,15 +2436,42 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
           </div>
         )}
 
-        {/* TAB 3: ПОИСК (Full-Text Search Across Dialogues & Messages) */}
+        {/* TAB 3: ПОИСК (Full-Text Search Across Current or All Dialogues & Messages) */}
         {activeTab === 'search' && (
           <div className="space-y-3.5">
             <div>
+              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl mb-2 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setSearchScope('local')}
+                  className={`flex-1 py-1.5 px-2 rounded-lg text-center transition-all cursor-pointer ${
+                    searchScope === 'local'
+                      ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  В этом чате
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSearchScope('global')}
+                  className={`flex-1 py-1.5 px-2 rounded-lg text-center transition-all cursor-pointer ${
+                    searchScope === 'global'
+                      ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Во всех чатах
+                </button>
+              </div>
+
               <label
                 htmlFor="right-panel-global-search"
                 className="block text-xs font-bold text-slate-900 mb-1.5"
               >
-                Поиск по всем диалогам и сообщениям
+                {searchScope === 'local'
+                  ? 'Поиск по текущему чату'
+                  : 'Поиск по всем диалогам и сообщениям'}
               </label>
               <div className="relative">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -2346,14 +2480,18 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Введите слово или фразу из переписки..."
+                  placeholder={
+                    searchScope === 'local'
+                      ? 'Искать в текущем диалоге...'
+                      : 'Введите слово или фразу из переписки...'
+                  }
                   className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-8 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
                 />
                 {searchQuery && (
                   <button
                     type="button"
                     onClick={() => setSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
                     aria-label="Очистить поиск"
                   >
                     <X className="w-3.5 h-3.5" />

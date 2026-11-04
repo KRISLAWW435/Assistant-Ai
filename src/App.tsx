@@ -55,6 +55,7 @@ import {
   KNOWLEDGE_CATEGORIES,
   SCHOOLS,
 } from './config/schoolsAndModes';
+import { saveFileToLocalDisk } from './utils/diskFileManager';
 import {
   createDefaultCompanionPreferences,
   createInitialCompanionGreetingMessage,
@@ -1363,11 +1364,13 @@ export default function App() {
               : 'image/jpeg'
           : undefined);
 
+      const diskResult = await saveFileToLocalDisk(file, activeSchool, 'Materials');
+
       const attachment: ChatAttachment = {
         id: `att-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
         name: file.name,
         extension: ext,
-        sizeBytes: file.size,
+        sizeBytes: diskResult?.sizeBytes ?? file.size,
         extractedText,
         status,
         statusMessage,
@@ -1377,6 +1380,8 @@ export default function App() {
         createdAt: formatTimeNow(now),
         createdAtMs: now.getTime(),
         dataUrl,
+        filePath: diskResult?.absolutePath,
+        diskFolderPath: diskResult?.folderPath,
       };
 
       // Stage images directly to draft preview without a blocking document-text modal
@@ -3553,6 +3558,7 @@ export default function App() {
         isCheckingImageProviders={isCheckingImageProviders}
         onCheckImageProviders={handleCheckImageProvidersOnDemand}
         onReturnHandoffResult={handleReturnHandoffResultToSourceSpecialist}
+        onInsertFileToDraft={(attachment) => setDraftAttachment(attachment)}
       />
 
       {/* 4. PIXEL VOICE WIDGET (STAGE 6.1: PERSISTENT VOICE ASSISTANT) */}

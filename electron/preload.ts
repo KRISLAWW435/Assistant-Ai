@@ -107,5 +107,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
       };
     },
   },
+  files: {
+    saveToDisk: (payload: {
+      fileName: string;
+      buffer?: ArrayBuffer | Uint8Array;
+      filePath?: string;
+      school?: string;
+      category?: string;
+    }) => ipcRenderer.invoke('files:saveToDisk', payload),
+    openFolder: (params?: {
+      school?: string;
+      category?: string;
+      folderPath?: string;
+    }) => ipcRenderer.invoke('files:openFolder', params),
+    showInFolder: (absolutePath: string) =>
+      ipcRenderer.invoke('files:showInFolder', absolutePath),
+    getBasePath: () => ipcRenderer.invoke('files:getBasePath'),
+    saveCopy: (sourcePath: string, suggestedName?: string) =>
+      ipcRenderer.invoke('files:saveCopy', sourcePath, suggestedName),
+    readFile: (sourcePath: string) =>
+      ipcRenderer.invoke('files:readFile', sourcePath),
+  },
 });
 

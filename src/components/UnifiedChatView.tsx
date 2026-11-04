@@ -36,6 +36,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Upload,
   Volume2,
   VolumeX,
   Wand2,
@@ -855,12 +856,6 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     if (!file) return;
     e.target.value = '';
 
-    const maxSizeBytes = 15 * 1024 * 1024;
-    if (file.size > maxSizeBytes) {
-      setAttachmentNotice('Файл превышает допустимый размер 15 МБ.');
-      return;
-    }
-
     setAttachmentNotice(null);
     await onStageFileForDraft(file);
   };
@@ -882,11 +877,50 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       return;
     }
 
-    const maxImageBytes = 10 * 1024 * 1024;
-    if (file.size > maxImageBytes) {
-      setAttachmentNotice('Размер изображения превышает допустимый лимит 10 МБ.');
-      return;
+    setAttachmentNotice(null);
+    await onStageFileForDraft(file);
+  };
+
+  // Drag-and-drop file attachment support (Stage 1)
+  const [isDraggingOverChat, setIsDraggingOverChat] = useState(false);
+  const chatDragCounterRef = useRef(0);
+
+  const handleChatDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chatDragCounterRef.current += 1;
+    if (e.dataTransfer?.items && e.dataTransfer.items.length > 0) {
+      setIsDraggingOverChat(true);
     }
+  };
+
+  const handleChatDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  };
+
+  const handleChatDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chatDragCounterRef.current -= 1;
+    if (chatDragCounterRef.current <= 0) {
+      chatDragCounterRef.current = 0;
+      setIsDraggingOverChat(false);
+    }
+  };
+
+  const handleChatDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chatDragCounterRef.current = 0;
+    setIsDraggingOverChat(false);
+
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
 
     setAttachmentNotice(null);
     await onStageFileForDraft(file);
@@ -1216,13 +1250,17 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 : { width: `${chatWidthPercent}%` }
               : undefined
           }
-          className={`flex flex-col min-w-0 h-full ${
+          className={`flex flex-col min-w-0 h-full relative ${
             isFlowPanelOpen
               ? isFlowFullscreen
                 ? 'hidden'
                 : 'border-r border-slate-200/80 shrink-0'
               : 'w-full'
           } ${isDraggingSplitter ? 'transition-none select-none' : 'transition-[width] duration-150'}`}
+          onDragEnter={handleChatDragEnter}
+          onDragOver={handleChatDragOver}
+          onDragLeave={handleChatDragLeave}
+          onDrop={handleChatDrop}
         >
           {/* 2. Messages Viewport (ChatGPT-Style Centered Stream) */}
           <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 bg-[#F9FAFB]/60">
@@ -3374,6 +3412,30 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
           </div>
         </form>
       </div>
+
+      {/* Visual Drag & Drop Overlay */}
+      {isDraggingOverChat && (
+        <div className="absolute inset-0 z-50 pointer-events-none bg-slate-900/60 backdrop-blur-xs flex flex-col items-center justify-center p-6 m-2 rounded-2xl border-2 border-dashed border-[#00A8B5] transition-all animate-in fade-in duration-150">
+          <div className="flex flex-col items-center text-center p-6 bg-white/95 rounded-2xl shadow-2xl border border-[#00A8B5]/40 max-w-sm space-y-3 pointer-events-none">
+            <div className="w-14 h-14 rounded-2xl bg-[#00A8B5]/15 text-[#00A8B5] flex items-center justify-center shadow-inner">
+              <Upload className="w-7 h-7 animate-bounce" />
+            </div>
+            <div>
+              <h4 className="font-display font-bold text-base text-slate-900">
+                Прикрепить файл к сообщению
+              </h4>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                Отпустите файл здесь (изображение или документ), чтобы прикрепить его к диалогу для школы{' '}
+                <strong>{schoolConfig.name}</strong>
+              </p>
+            </div>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-100 text-[11px] font-semibold text-slate-700">
+              <Sparkles className="w-3.5 h-3.5 text-[#00A8B5]" />
+              <span>Локальное сохранение на диск (NotebookLM) · PNG, JPG, WEBP, PDF, DOCX, PPTX, TXT</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
 
     {/* Resizable Splitter Handle between Chat and Flow */}

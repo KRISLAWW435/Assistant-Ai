@@ -113,6 +113,8 @@ export interface UploadedDocumentRecord {
   videoWidth?: number;
   videoHeight?: number;
   archiveFilesCount?: number;
+  filePath?: string;
+  diskFolderPath?: string;
 }
 
 export interface ChatAttachment {
@@ -133,6 +135,8 @@ export interface ChatAttachment {
   messageId?: string;
   schoolId?: SchoolId;
   uploadedAt?: string;
+  filePath?: string;
+  diskFolderPath?: string;
 }
 
 export interface ChatAttachmentMeta {
@@ -144,6 +148,8 @@ export interface ChatAttachmentMeta {
   mimeType?: string;
   createdAt?: string;
   dataUrl?: string;
+  filePath?: string;
+  diskFolderPath?: string;
 }
 
 export type AIProviderId = 'gemini' | 'openrouter' | 'ollama';

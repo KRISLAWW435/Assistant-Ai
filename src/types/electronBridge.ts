@@ -121,12 +121,38 @@ export interface ElectronFlowBridge {
   onStateChange?(callback: (state: FlowViewState) => void): () => void;
 }
 
+export interface ElectronFilesBridge {
+  saveToDisk(payload: {
+    fileName: string;
+    buffer?: ArrayBuffer | Uint8Array;
+    filePath?: string;
+    school?: string;
+    category?: string;
+  }): Promise<{
+    success: boolean;
+    absolutePath: string;
+    fileName: string;
+    sizeBytes: number;
+    folderPath: string;
+  }>;
+  openFolder(params?: {
+    school?: string;
+    category?: string;
+    folderPath?: string;
+  }): Promise<{ success: boolean; path: string; error?: string }>;
+  showInFolder(absolutePath: string): Promise<boolean>;
+  getBasePath(): Promise<string>;
+  saveCopy(sourcePath: string, suggestedName?: string): Promise<{ success: boolean; destinationPath?: string }>;
+  readFile(sourcePath: string): Promise<ArrayBuffer>;
+}
+
 export interface ElectronAppApi {
   aiConnections?: ElectronAIConnectionsBridge;
   annaMemory?: ElectronAnnaMemoryBridge;
   notifications?: ElectronNotificationsBridge;
   companionTasks?: ElectronCompanionTasksBridge;
   flow?: ElectronFlowBridge;
+  files?: ElectronFilesBridge;
   safeStorage?: {
     isAvailable(): boolean;
   };
