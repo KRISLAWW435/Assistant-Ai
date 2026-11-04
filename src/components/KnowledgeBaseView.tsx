@@ -2971,15 +2971,59 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               </div>
             )}
 
+            {/* Extracted Page Images Scrollable Reader */}
+            {inspectedDoc.extractedImages && inspectedDoc.extractedImages.length > 0 && (
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-900 bg-slate-100 p-2.5 rounded-xl border border-slate-200/80">
+                  <span className="flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-[#00A8B5]" />
+                    <span>Страницы и изображения ({inspectedDoc.extractedImages.length})</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono-tabular font-normal">
+                    Просмотр всех страниц
+                  </span>
+                </div>
+
+                <div className="max-h-80 overflow-y-auto space-y-3 pr-1.5 custom-scrollbar">
+                  {inspectedDoc.extractedImages.map((pageImg, idx) => (
+                    <div
+                      key={pageImg.id || idx}
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 text-white font-mono-tabular font-bold text-[10px]">
+                          Страница {idx + 1} / {inspectedDoc.extractedImages!.length}
+                        </span>
+                        <span className="text-[11px] font-semibold text-slate-600">
+                          {pageImg.name || `Стр. ${idx + 1}`}
+                        </span>
+                      </div>
+                      <div className="rounded-lg overflow-hidden border border-slate-200 bg-white flex items-center justify-center p-1">
+                        <img
+                          src={pageImg.dataUrl}
+                          alt={pageImg.name || `Страница ${idx + 1}`}
+                          className="w-full h-auto max-h-72 object-contain rounded"
+                          loading="lazy"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {inspectedDoc.extractedText ? (
-              <pre className="w-full max-h-96 overflow-auto rounded-xl bg-slate-900 text-slate-100 p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
-                {inspectedDoc.extractedText}
-              </pre>
-            ) : (
+              <div className="space-y-1.5">
+                <div className="text-xs font-bold text-slate-800">Извлечённый текст:</div>
+                <pre className="w-full max-h-64 overflow-auto rounded-xl bg-slate-900 text-slate-100 p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
+                  {inspectedDoc.extractedText}
+                </pre>
+              </div>
+            ) : !inspectedDoc.extractedImages || inspectedDoc.extractedImages.length === 0 ? (
               <div className="rounded-xl p-4 bg-slate-50 border border-slate-200 text-xs text-slate-600 text-center">
                 В этом документе отсутствует извлечённый текст.
               </div>
-            )}
+            ) : null}
 
             <div className="flex items-center justify-between pt-2">
               <button

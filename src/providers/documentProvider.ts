@@ -98,7 +98,8 @@ export const documentProvider: IDocumentProvider = {
       return dataUrl.includes(',') ? dataUrl.split(',')[1].trim() : dataUrl.trim();
     };
 
-    const MAX_MULTIMODAL_IMAGES_TOTAL = 10;
+    const MAX_MULTIMODAL_IMAGES_TOTAL = 3;
+    const MAX_MULTIMODAL_IMAGES_PER_DOC = 3;
 
     // 1. Draft attachment explicitly attached to the current outgoing message
     if (draftAttachment) {
@@ -135,13 +136,15 @@ export const documentProvider: IDocumentProvider = {
           skippedNoTextDocuments.push(draftAttachment.name);
         }
 
-        // Multimodal support: forward extracted slide/page/media images to Gemini
+        // Multimodal support: forward extracted slide/page/media images to Gemini (capped to MAX_MULTIMODAL_IMAGES_PER_DOC)
         if (
           draftAttachment.extractedImages &&
           draftAttachment.extractedImages.length > 0
         ) {
+          let countForDoc = 0;
           for (const extImg of draftAttachment.extractedImages) {
             if (sendableImages.length >= MAX_MULTIMODAL_IMAGES_TOTAL) break;
+            if (countForDoc >= MAX_MULTIMODAL_IMAGES_PER_DOC) break;
             sendableImages.push({
               id: extImg.id,
               name: `${draftAttachment.name} — ${extImg.name}`,
@@ -149,6 +152,7 @@ export const documentProvider: IDocumentProvider = {
               base64Data: extractBase64(extImg.dataUrl),
               source: 'dialogue_attachment',
             });
+            countForDoc++;
           }
         }
       }
@@ -196,8 +200,10 @@ export const documentProvider: IDocumentProvider = {
 
         // Multimodal support: forward extracted slide/page/media images to Gemini
         if (att.extractedImages && att.extractedImages.length > 0) {
+          let countForDoc = 0;
           for (const extImg of att.extractedImages) {
             if (sendableImages.length >= MAX_MULTIMODAL_IMAGES_TOTAL) break;
+            if (countForDoc >= MAX_MULTIMODAL_IMAGES_PER_DOC) break;
             sendableImages.push({
               id: extImg.id,
               name: `${att.name} — ${extImg.name}`,
@@ -205,6 +211,7 @@ export const documentProvider: IDocumentProvider = {
               base64Data: extractBase64(extImg.dataUrl),
               source: 'dialogue_attachment',
             });
+            countForDoc++;
           }
         }
       }
@@ -271,8 +278,10 @@ export const documentProvider: IDocumentProvider = {
 
       // Multimodal support: forward extracted images from verified school documents
       if (doc.extractedImages && doc.extractedImages.length > 0) {
+        let countForDoc = 0;
         for (const extImg of doc.extractedImages) {
           if (sendableImages.length >= MAX_MULTIMODAL_IMAGES_TOTAL) break;
+          if (countForDoc >= MAX_MULTIMODAL_IMAGES_PER_DOC) break;
           sendableImages.push({
             id: extImg.id,
             name: `${doc.name} — ${extImg.name}`,
@@ -281,6 +290,7 @@ export const documentProvider: IDocumentProvider = {
             visualRole: extImg.visualRole || doc.visualRole,
             source: 'school_document',
           });
+          countForDoc++;
         }
       }
     }

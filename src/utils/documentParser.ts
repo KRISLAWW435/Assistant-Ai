@@ -232,17 +232,17 @@ export async function resizeImageBase64(
 }
 
 /**
- * Renders a PDF page to a base64 JPEG image URL scaled to maxDim (1024x1024).
+ * Renders a PDF page to a compressed base64 JPEG image URL scaled to maxDim (default 512x512).
  */
 async function renderPdfPageToDataUrl(
   page: any,
-  maxDim = 1024
+  maxDim = 512
 ): Promise<string> {
   if (typeof document === 'undefined') return '';
   try {
     const unscaledViewport = page.getViewport({ scale: 1.0 });
     const scale = Math.min(
-      1.5,
+      1.2,
       Math.min(maxDim / unscaledViewport.width, maxDim / unscaledViewport.height)
     );
     const viewport = page.getViewport({ scale: Math.max(scale, 0.4) });
@@ -262,7 +262,7 @@ async function renderPdfPageToDataUrl(
       viewport,
     }).promise;
 
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
     canvas.width = 0;
     canvas.height = 0;
     return dataUrl;
@@ -273,11 +273,11 @@ async function renderPdfPageToDataUrl(
 }
 
 /**
- * Extracts text and renders pages/slides into base64 images from a PDF file using pdfjs-dist.
+ * Extracts text and renders pages/slides into compressed base64 images from a PDF file using pdfjs-dist.
  */
 export async function extractPdfMultimodal(
   buffer: ArrayBuffer,
-  maxPagesToRender = 10
+  maxPagesToRender = 50
 ): Promise<{
   text: string;
   pageCount: number;
@@ -317,10 +317,10 @@ export async function extractPdfMultimodal(
       emptyPagesCount++;
     }
 
-    // 2. Render page to high-quality image if within limit
+    // 2. Render page to compressed image if within limit
     if (i <= pagesToRender && typeof document !== 'undefined') {
       try {
-        const pageDataUrl = await renderPdfPageToDataUrl(page, 1024);
+        const pageDataUrl = await renderPdfPageToDataUrl(page, 512);
         if (pageDataUrl) {
           images.push(pageDataUrl);
           extractedImages.push({

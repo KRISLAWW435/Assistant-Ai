@@ -2791,6 +2791,79 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   )}
                 </div>
 
+                {/* Multimodal Scrollable PDF/Presentation Page Reader with Selective Page Sending */}
+                {selectedAttachment.extractedImages &&
+                selectedAttachment.extractedImages.length > 0 ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-800 bg-slate-100 p-2.5 rounded-xl border border-slate-200/80">
+                      <span className="flex items-center gap-1.5">
+                        <Layers className="w-4 h-4 text-[#00A8B5]" />
+                        <span>
+                          Страницы и визуальные материалы (
+                          {selectedAttachment.extractedImages.length})
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono-tabular font-normal">
+                        Скроллируйте вниз
+                      </span>
+                    </div>
+
+                    <div className="max-h-[500px] overflow-y-auto space-y-3 pr-1.5 custom-scrollbar">
+                      {selectedAttachment.extractedImages.map((pageImg, idx) => (
+                        <div
+                          key={pageImg.id || idx}
+                          className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2.5 shadow-2xs hover:border-[#00A8B5]/50 transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900 text-white font-mono-tabular font-bold text-[11px]">
+                              <span>Стр. {idx + 1}</span>
+                              <span className="text-slate-400">/ {selectedAttachment.extractedImages!.length}</span>
+                            </span>
+
+                            {onInsertFileToDraft && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const pageAtt: ChatAttachment = {
+                                    id: `att-page-${selectedAttachment.id}-${idx + 1}-${Date.now()}`,
+                                    name: `${selectedAttachment.name} — Страница ${idx + 1}`,
+                                    extension: 'jpeg',
+                                    sizeBytes: Math.round(pageImg.dataUrl.length * 0.75),
+                                    extractedText: `[Страница ${idx + 1} из документа «${selectedAttachment.name}»]`,
+                                    status: 'processed',
+                                    mimeType: pageImg.mimeType || 'image/jpeg',
+                                    createdAt: new Date().toLocaleTimeString('ru-RU', {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    }),
+                                    createdAtMs: Date.now(),
+                                    dataUrl: pageImg.dataUrl,
+                                  };
+                                  onInsertFileToDraft(pageAtt);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-[#00A8B5] hover:bg-[#00929E] transition-colors cursor-pointer shadow-2xs"
+                                title="Отправить только эту страницу в чат нейросети"
+                              >
+                                <ArrowRight className="w-3.5 h-3.5" />
+                                <span>Отправить эту страницу в чат</span>
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="rounded-lg overflow-hidden border border-slate-200 bg-white shadow-inner flex items-center justify-center p-1">
+                            <img
+                              src={pageImg.dataUrl}
+                              alt={pageImg.name || `Страница ${idx + 1}`}
+                              className="w-full h-auto max-h-[360px] object-contain rounded"
+                              loading="lazy"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 {/* Extracted Text Preview */}
                 {selectedAttachment.extractedText &&
                 selectedAttachment.extractedText.trim().length > 0 ? (
@@ -2803,11 +2876,12 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                         {selectedAttachment.extractedText.length} симв.
                       </span>
                     </div>
-                    <pre className="w-full max-h-[440px] overflow-auto rounded-xl bg-slate-900 text-slate-100 p-3.5 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
+                    <pre className="w-full max-h-[300px] overflow-auto rounded-xl bg-slate-900 text-slate-100 p-3.5 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
                       {selectedAttachment.extractedText}
                     </pre>
                   </div>
-                ) : (
+                ) : !selectedAttachment.extractedImages ||
+                  selectedAttachment.extractedImages.length === 0 ? (
                   <div className="rounded-xl p-4 bg-slate-50 border border-slate-200/90 space-y-1.5">
                     <div className="text-xs font-semibold text-slate-900">
                       Нет доступного извлечённого текста
@@ -2817,7 +2891,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                         'В выбранном файле не обнаружено текстового содержимого (например, это отсканированный PDF без текстового слоя).'}
                     </p>
                   </div>
-                )}
+                ) : null}
               </div>
             )}
           </div>
