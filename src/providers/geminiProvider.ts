@@ -231,7 +231,7 @@ export const geminiProvider: IGeminiProvider = {
     activeRequestLocks.add(lockKey);
     const requestStartMs = Date.now();
     let accumulated = '';
-    let resolvedModel = 'gemini-2.5-flash';
+    let resolvedModel = 'gemini-3.8-flash';
     let resolvedProviderId: AIProviderId = 'gemini';
     let resolvedProviderLabel = 'Google Gemini Free';
     let resolvedFailoverUsed = false;

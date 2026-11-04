@@ -174,12 +174,116 @@ function decodeTextBufferSmart(buffer: ArrayBuffer): string {
 }
 
 /**
- * Extracts text from a PDF file using pdfjs-dist.
+ * Resizes an image Base64 data URL to a maximum dimension (default 1024x1024)
+ * using HTML5 Canvas in browser, or returns original if cannot resize.
  */
-async function extractPdfText(buffer: ArrayBuffer): Promise<{
+export async function resizeImageBase64(
+  dataUrl: string,
+  maxDim = 1024
+): Promise<string> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return dataUrl;
+  }
+  if (!dataUrl || !dataUrl.startsWith('data:image/')) return dataUrl;
+  if (dataUrl.startsWith('data:image/svg+xml')) return dataUrl;
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    const timeout = setTimeout(() => resolve(dataUrl), 2500);
+
+    img.onload = () => {
+      clearTimeout(timeout);
+      try {
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (!w || !h || (w <= maxDim && h <= maxDim)) {
+          resolve(dataUrl);
+          return;
+        }
+        const scale = maxDim / Math.max(w, h);
+        const targetW = Math.max(1, Math.round(w * scale));
+        const targetH = Math.max(1, Math.round(h * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+          const compressed = canvas.toDataURL('image/jpeg', 0.85);
+          canvas.width = 0;
+          canvas.height = 0;
+          resolve(compressed);
+          return;
+        }
+      } catch {
+        // ignore canvas errors
+      }
+      resolve(dataUrl);
+    };
+
+    img.onerror = () => {
+      clearTimeout(timeout);
+      resolve(dataUrl);
+    };
+
+    img.src = dataUrl;
+  });
+}
+
+/**
+ * Renders a PDF page to a base64 JPEG image URL scaled to maxDim (1024x1024).
+ */
+async function renderPdfPageToDataUrl(
+  page: any,
+  maxDim = 1024
+): Promise<string> {
+  if (typeof document === 'undefined') return '';
+  try {
+    const unscaledViewport = page.getViewport({ scale: 1.0 });
+    const scale = Math.min(
+      1.5,
+      Math.min(maxDim / unscaledViewport.width, maxDim / unscaledViewport.height)
+    );
+    const viewport = page.getViewport({ scale: Math.max(scale, 0.4) });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+
+    // Solid white background for transparent pages
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    await page.render({
+      canvasContext: ctx,
+      viewport,
+    }).promise;
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    canvas.width = 0;
+    canvas.height = 0;
+    return dataUrl;
+  } catch (err) {
+    console.warn('[PDF Page Render Error]', err);
+    return '';
+  }
+}
+
+/**
+ * Extracts text and renders pages/slides into base64 images from a PDF file using pdfjs-dist.
+ */
+export async function extractPdfMultimodal(
+  buffer: ArrayBuffer,
+  maxPagesToRender = 10
+): Promise<{
   text: string;
   pageCount: number;
   emptyPagesCount: number;
+  images: string[];
+  extractedImages: ExtractedDocumentImage[];
 }> {
   const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(buffer),
@@ -188,9 +292,15 @@ async function extractPdfText(buffer: ArrayBuffer): Promise<{
   const pageCount = pdf.numPages;
   const pageTexts: string[] = [];
   let emptyPagesCount = 0;
+  const images: string[] = [];
+  const extractedImages: ExtractedDocumentImage[] = [];
+
+  const pagesToRender = Math.min(pageCount, maxPagesToRender);
 
   for (let i = 1; i <= pageCount; i++) {
     const page = await pdf.getPage(i);
+
+    // 1. Text extraction
     const content = await page.getTextContent();
     const strings: string[] = [];
     for (const item of content.items) {
@@ -206,61 +316,127 @@ async function extractPdfText(buffer: ArrayBuffer): Promise<{
     } else {
       emptyPagesCount++;
     }
+
+    // 2. Render page to high-quality image if within limit
+    if (i <= pagesToRender && typeof document !== 'undefined') {
+      try {
+        const pageDataUrl = await renderPdfPageToDataUrl(page, 1024);
+        if (pageDataUrl) {
+          images.push(pageDataUrl);
+          extractedImages.push({
+            id: `pdf-page-${i}`,
+            name: `Страница ${i}`,
+            dataUrl: pageDataUrl,
+            mimeType: 'image/jpeg',
+            sourceSlide: i,
+          });
+        }
+      } catch (renderErr) {
+        console.warn(`[PDF Render Page ${i} Warning]`, renderErr);
+      }
+    }
   }
 
   return {
     text: pageTexts.join('\n\n'),
     pageCount,
     emptyPagesCount,
+    images,
+    extractedImages,
   };
 }
 
 /**
- * Extracts text from a DOCX file using Mammoth, with JSZip XML fallback.
+ * Extracts text and embedded media images (/media/) from a DOCX file using Mammoth and JSZip.
  */
-async function extractDocxText(buffer: ArrayBuffer): Promise<{
+export async function extractDocxMultimodal(
+  buffer: ArrayBuffer
+): Promise<{
   text: string;
+  images: string[];
+  extractedImages: ExtractedDocumentImage[];
   warnings: string[];
 }> {
+  let text = '';
+  const warnings: string[] = [];
+
   try {
     const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-    const raw = (result.value || '').replace(/\r\n/g, '\n').trim();
+    text = (result.value || '').replace(/\r\n/g, '\n').trim();
     const messages = (result.messages || [])
       .filter((m) => m.type === 'warning')
       .map((m) => m.message);
-    if (raw.length > 0) {
-      return { text: raw, warnings: messages };
-    }
+    warnings.push(...messages);
   } catch {
-    // Fallback to JSZip XML parsing below
+    // Fallback to JSZip XML parsing
   }
 
-  // Fallback: inspect word/document.xml via JSZip
   const zip = await JSZip.loadAsync(buffer);
-  const docFile = zip.file('word/document.xml');
-  if (!docFile) {
-    throw new Error(
-      'Файл не содержит структуры документа Word (word/document.xml). Проверьте, что это корректный файл .docx.'
-    );
-  }
-  const xmlStr = await docFile.async('string');
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlStr, 'application/xml');
-  const paragraphs: string[] = [];
-  const pNodes = Array.from(xmlDoc.getElementsByTagName('w:p'));
 
-  for (const p of pNodes) {
-    const tNodes = Array.from(p.getElementsByTagName('w:t'));
-    const line = tNodes
-      .map((t) => t.textContent || '')
-      .join('')
-      .trim();
-    if (line) {
-      paragraphs.push(line);
+  if (!text) {
+    const docFile = zip.file('word/document.xml');
+    if (docFile) {
+      const xmlStr = await docFile.async('string');
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlStr, 'application/xml');
+      const paragraphs: string[] = [];
+      const pNodes = Array.from(xmlDoc.getElementsByTagName('w:p'));
+      for (const p of pNodes) {
+        const tNodes = Array.from(p.getElementsByTagName('w:t'));
+        const line = tNodes
+          .map((t) => t.textContent || '')
+          .join('')
+          .trim();
+        if (line) {
+          paragraphs.push(line);
+        }
+      }
+      text = paragraphs.join('\n');
     }
   }
 
-  return { text: paragraphs.join('\n'), warnings: [] };
+  // Extract embedded media images from word/media/* or media/*
+  const images: string[] = [];
+  const extractedImages: ExtractedDocumentImage[] = [];
+  const mediaPaths: string[] = [];
+
+  zip.forEach((p) => {
+    const lower = p.toLowerCase();
+    if (
+      lower.startsWith('word/media/') ||
+      lower.includes('/media/') ||
+      lower.startsWith('media/')
+    ) {
+      mediaPaths.push(p);
+    }
+  });
+
+  let imgIdx = 1;
+  for (const mediaPath of mediaPaths.slice(0, 25)) {
+    const file = zip.file(mediaPath);
+    if (!file) continue;
+    const fileName = mediaPath.split('/').pop() || `image_${imgIdx}.png`;
+    const ext = fileName.split('.').pop()?.toLowerCase() || 'png';
+    if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)) {
+      try {
+        const base64 = await file.async('base64');
+        const mimeType = getMimeTypeFromExt(ext);
+        const dataUrl = `data:${mimeType};base64,${base64}`;
+        const resizedUrl = await resizeImageBase64(dataUrl, 1024);
+        images.push(resizedUrl);
+        extractedImages.push({
+          id: `docx-img-${imgIdx++}`,
+          name: fileName,
+          dataUrl: resizedUrl,
+          mimeType: mimeType.startsWith('image/') ? mimeType : 'image/jpeg',
+        });
+      } catch {
+        // ignore corrupt media item
+      }
+    }
+  }
+
+  return { text, images, extractedImages, warnings };
 }
 
 /**
@@ -884,13 +1060,16 @@ export async function parseDocumentFile(
     }
 
     // =========================================================================
-    // 6. PDF
+    // 6. PDF (Multimodal: text + rendered page slides)
     // =========================================================================
     if (ext === 'pdf') {
-      const { text, pageCount, emptyPagesCount } = await extractPdfText(buffer);
+      const { text, pageCount, emptyPagesCount, extractedImages } =
+        await extractPdfMultimodal(buffer, 10);
       const palette = extractHexColorsFromText(text);
 
-      if (!text.trim()) {
+      const hasContent = text.trim().length > 0 || extractedImages.length > 0;
+
+      if (!hasContent) {
         return {
           name: file.name,
           extension: ext,
@@ -901,14 +1080,20 @@ export async function parseDocumentFile(
           pageCount,
           fileType: 'document',
           mimeType: 'application/pdf',
-          warning: `Документ PDF (${pageCount} стр.) не содержит извлекаемого текстового слоя (вероятно, скан или буклет из картинок).`,
+          warning: `Документ PDF (${pageCount} стр.) не содержит распознаваемого текста или страниц.`,
         };
       }
 
       const partialWarning =
-        emptyPagesCount > 0
-          ? `Извлечён текст с ${pageCount - emptyPagesCount} из ${pageCount} стр. На ${emptyPagesCount} стр. текстовый слой отсутствует.`
-          : undefined;
+        extractedImages.length > 0
+          ? `Извлечено ${pageCount} стр. и ${extractedImages.length} визуальных материалов для анализа нейросетью.${
+              emptyPagesCount > 0
+                ? ` (На ${emptyPagesCount} стр. печатный текст отсутствует, переданы страницы-изображения).`
+                : ''
+            }`
+          : emptyPagesCount > 0
+            ? `Извлечён текст с ${pageCount - emptyPagesCount} из ${pageCount} стр.`
+            : undefined;
 
       return {
         name: file.name,
@@ -921,18 +1106,22 @@ export async function parseDocumentFile(
         fileType: 'document',
         mimeType: 'application/pdf',
         warning: partialWarning,
+        extractedImages:
+          extractedImages.length > 0 ? extractedImages : undefined,
         colorPalette: palette.length > 0 ? palette : undefined,
       };
     }
 
     // =========================================================================
-    // 7. DOCX
+    // 7. DOCX (Multimodal: text + embedded illustrations / media)
     // =========================================================================
     if (ext === 'docx') {
-      const { text } = await extractDocxText(buffer);
+      const { text, extractedImages } = await extractDocxMultimodal(buffer);
       const palette = extractHexColorsFromText(text);
 
-      if (!text.trim()) {
+      const hasContent = text.trim().length > 0 || extractedImages.length > 0;
+
+      if (!hasContent) {
         return {
           name: file.name,
           extension: ext,
@@ -944,9 +1133,15 @@ export async function parseDocumentFile(
           mimeType:
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
           warning:
-            'Документ DOCX успешно открыт, но не содержит текстовых абзацев.',
+            'Документ DOCX успешно открыт, но не содержит текста или изображений.',
         };
       }
+
+      const warning =
+        extractedImages.length > 0
+          ? `Извлечён текст и ${extractedImages.length} встроенных изображений из документа Word.`
+          : undefined;
+
       return {
         name: file.name,
         extension: ext,
@@ -957,6 +1152,9 @@ export async function parseDocumentFile(
         fileType: 'document',
         mimeType:
           'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        warning,
+        extractedImages:
+          extractedImages.length > 0 ? extractedImages : undefined,
         colorPalette: palette.length > 0 ? palette : undefined,
       };
     }
@@ -1078,4 +1276,85 @@ export async function parseDocumentFile(
       warning: `Ошибка при разборе файла «${file.name}»: ${errMsg}`,
     };
   }
+}
+
+/**
+ * Universal multimodal extraction function.
+ * Extracts both textual content and base64 images from PDF, PPTX, DOCX, and image files.
+ * Returns: { text: string, images: string[] }
+ */
+export async function extractMultimodalContent(
+  input: File | Blob | ArrayBuffer | Uint8Array,
+  fileNameOrType = ''
+): Promise<{ text: string; images: string[] }> {
+  let buffer: ArrayBuffer;
+  let detectedName = fileNameOrType;
+
+  if (typeof File !== 'undefined' && input instanceof File) {
+    detectedName = detectedName || input.name;
+    buffer = await input.arrayBuffer();
+  } else if (typeof Blob !== 'undefined' && input instanceof Blob) {
+    buffer = await input.arrayBuffer();
+  } else if (input instanceof Uint8Array) {
+    const copy = new Uint8Array(input.byteLength);
+    copy.set(input);
+    buffer = copy.buffer;
+  } else {
+    buffer = input as ArrayBuffer;
+  }
+
+  const ext = (detectedName.split('.').pop() || detectedName).toLowerCase();
+
+  // 1. PDF
+  if (ext === 'pdf') {
+    const res = await extractPdfMultimodal(buffer, 10);
+    return {
+      text: res.text,
+      images: res.images,
+    };
+  }
+
+  // 2. PPTX
+  if (ext === 'pptx') {
+    const res = await extractPptxTextAndVisuals(buffer);
+    return {
+      text: res.text,
+      images: res.extractedImages.map((img) => img.dataUrl),
+    };
+  }
+
+  // 3. DOCX
+  if (ext === 'docx') {
+    const res = await extractDocxMultimodal(buffer);
+    return {
+      text: res.text,
+      images: res.images,
+    };
+  }
+
+  // 4. Pure image formats
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)) {
+    const mime = getMimeTypeFromExt(ext);
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const b64 =
+      typeof btoa !== 'undefined'
+        ? btoa(binary)
+        : Buffer.from(binary, 'binary').toString('base64');
+    const dataUrl = `data:${mime};base64,${b64}`;
+    return {
+      text: `[Изображение: ${detectedName || 'file'}]`,
+      images: [dataUrl],
+    };
+  }
+
+  // 5. Plain text, markdown, CSV, or unknown
+  const text = decodeTextBufferSmart(buffer);
+  return {
+    text,
+    images: [],
+  };
 }

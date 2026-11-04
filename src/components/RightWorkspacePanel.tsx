@@ -138,6 +138,7 @@ interface RightWorkspacePanelProps {
     navigateBack?: boolean;
   }) => Promise<void>;
   onInsertFileToDraft?: (attachment: ChatAttachment) => void;
+  onDeleteDocument?: (docId: string) => Promise<boolean>;
 }
 
 interface SearchHit {
@@ -213,6 +214,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
   onCheckImageProviders,
   onReturnHandoffResult,
   onInsertFileToDraft,
+  onDeleteDocument,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchScope, setSearchScope] = useState<'local' | 'global'>('local');
@@ -220,6 +222,14 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
     useState<ChatAttachment | null>(null);
   const [isDeletingAttachment, setIsDeletingAttachment] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Materials tab: Sub-sections ("В текущем диалоге" vs "Библиотека школы")
+  const [materialsSubSection, setMaterialsSubSection] = useState<'dialogue' | 'library'>('dialogue');
+  const [librarySearchQuery, setLibrarySearchQuery] = useState('');
+  const [libraryDocPendingDelete, setLibraryDocPendingDelete] =
+    useState<UploadedDocumentRecord | null>(null);
+  const [isDeletingLibraryDoc, setIsDeletingLibraryDoc] = useState(false);
+  const [previewSchoolDoc, setPreviewSchoolDoc] = useState<ChatAttachment | null>(null);
 
   const handleDownloadAttachment = (att: ChatAttachment) => {
     void downloadOrExportFile({
@@ -623,15 +633,18 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
   }, [currentSession, stagedDraftAttachment]);
 
   const selectedAttachment: ChatAttachment | null = useMemo(() => {
-    if (sessionAttachments.length === 0) return null;
+    if (previewSchoolDoc && previewSchoolDoc.id === selectedAttachmentId) {
+      return previewSchoolDoc;
+    }
+    if (sessionAttachments.length === 0) return previewSchoolDoc || null;
     if (selectedAttachmentId) {
       const found = sessionAttachments.find(
         (a) => a.id === selectedAttachmentId
       );
       if (found) return found;
     }
-    return sessionAttachments[0];
-  }, [sessionAttachments, selectedAttachmentId]);
+    return sessionAttachments[0] || previewSchoolDoc || null;
+  }, [sessionAttachments, selectedAttachmentId, previewSchoolDoc]);
 
   // Search across saved sessions (current dialogue or all) & messages & attachments
   const searchResults: SearchHit[] = useMemo(() => {
@@ -735,6 +748,83 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
       ),
     [uploadedDocuments, activeSchool]
   );
+
+  const filteredSchoolDocs = useMemo(() => {
+    const q = librarySearchQuery.trim().toLowerCase();
+    if (!q) return schoolDocs;
+    return schoolDocs.filter(
+      (d) =>
+        d.name.toLowerCase().includes(q) ||
+        (d.tags && d.tags.some((t) => t.toLowerCase().includes(q))) ||
+        (d.extractedText && d.extractedText.toLowerCase().includes(q))
+    );
+  }, [schoolDocs, librarySearchQuery]);
+
+  const handlePreviewSchoolDoc = (doc: UploadedDocumentRecord) => {
+    const att: ChatAttachment = {
+      id: doc.id,
+      name: doc.name,
+      extension: doc.extension,
+      sizeBytes: doc.sizeBytes,
+      extractedText: doc.extractedText,
+      status: doc.status,
+      statusMessage: doc.statusMessage,
+      warning: doc.warning,
+      pageCount: doc.pageCount,
+      mimeType: doc.mimeType,
+      createdAt: doc.createdAt,
+      createdAtMs: doc.createdAtMs,
+      dataUrl: doc.dataUrl,
+      filePath: doc.filePath,
+      diskFolderPath: doc.diskFolderPath,
+      extractedImages: doc.extractedImages,
+      slides: doc.slides,
+    };
+    setPreviewSchoolDoc(att);
+    onSelectAttachment(doc.id);
+    onChangeTab('preview');
+  };
+
+  const handleInsertSchoolDocToDraft = (doc: UploadedDocumentRecord) => {
+    if (!onInsertFileToDraft) return;
+    const att: ChatAttachment = {
+      id: `att-kb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: doc.name,
+      extension: doc.extension,
+      sizeBytes: doc.sizeBytes,
+      extractedText: doc.extractedText,
+      status: doc.status,
+      statusMessage: doc.statusMessage,
+      warning: doc.warning,
+      pageCount: doc.pageCount,
+      mimeType: doc.mimeType,
+      createdAt: doc.createdAt || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      createdAtMs: Date.now(),
+      dataUrl: doc.dataUrl,
+      filePath: doc.filePath,
+      diskFolderPath: doc.diskFolderPath,
+      extractedImages: doc.extractedImages,
+      slides: doc.slides,
+    };
+    onInsertFileToDraft(att);
+  };
+
+  const handleConfirmDeleteLibraryDoc = async () => {
+    if (!libraryDocPendingDelete || !onDeleteDocument) return;
+    setIsDeletingLibraryDoc(true);
+    try {
+      await onDeleteDocument(libraryDocPendingDelete.id);
+      if (selectedAttachmentId === libraryDocPendingDelete.id) {
+        onSelectAttachment(null);
+      }
+      if (previewSchoolDoc?.id === libraryDocPendingDelete.id) {
+        setPreviewSchoolDoc(null);
+      }
+      setLibraryDocPendingDelete(null);
+    } finally {
+      setIsDeletingLibraryDoc(false);
+    }
+  };
 
   const handleFileInputChange = async (
     e: React.ChangeEvent<HTMLInputElement>
@@ -1403,225 +1493,522 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
           </div>
         )}
 
-        {/* TAB 1: МАТЕРИАЛЫ (Files of the current dialogue ONLY) */}
+        {/* TAB 1: МАТЕРИАЛЫ (Two Sub-tabs: "В текущем диалоге" and "Библиотека школы") */}
         {activeTab === 'materials' && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <div className="text-xs font-bold text-slate-900">
-                  Файлы текущего диалога
-                </div>
-                <div className="text-[11px] text-slate-500">
-                  Изображения (PNG, JPG, WEBP) и документы (PDF, DOCX, TXT, CSV)
-                </div>
-              </div>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".png,.jpg,.jpeg,.webp,.pdf,.docx,.pptx,.txt,.md,.csv"
-                onChange={handleFileInputChange}
-                className="hidden"
-              />
+            {/* Sub-tab Switcher */}
+            <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
               <button
                 type="button"
-                disabled={isParsingDialogueFile}
-                onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60 transition-colors shrink-0 shadow-2xs"
+                onClick={() => setMaterialsSubSection('dialogue')}
+                className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  materialsSubSection === 'dialogue'
+                    ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                }`}
               >
-                {isParsingDialogueFile ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00A8B5]" />
-                    <span>{parsingStatusLabel || 'Разбор...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Paperclip
-                      className={`w-3.5 h-3.5 ${
-                        activeSchool === 'renderia'
-                          ? 'text-[#84CC16]'
-                          : 'text-[#F5B800]'
-                      }`}
-                    />
-                    <span>Прикрепить</span>
-                  </>
-                )}
+                <Paperclip className="w-3.5 h-3.5 text-[#00A8B5]" />
+                <span>В диалоге</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-slate-100 text-slate-700 text-[10px] font-bold font-mono-tabular">
+                  {sessionAttachments.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMaterialsSubSection('library')}
+                className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  materialsSubSection === 'library'
+                    ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5 text-[#00A8B5]" />
+                <span>Библиотека</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-slate-100 text-slate-700 text-[10px] font-bold font-mono-tabular">
+                  {schoolDocs.length}
+                </span>
               </button>
             </div>
 
-            {uploadError && (
-              <div className="rounded-xl p-2.5 bg-red-50 border border-red-200 text-xs text-red-800 flex items-center justify-between gap-2">
-                <span>{uploadError}</span>
-                <button
-                  type="button"
-                  onClick={() => setUploadError(null)}
-                  className="text-red-600 hover:text-red-900"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
+            {/* SUB-SECTION 1: В ТЕКУЩЕМ ДИАЛОГЕ */}
+            {materialsSubSection === 'dialogue' && (
+              <div className="space-y-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-bold text-slate-900">
+                      Файлы текущего диалога
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Изображения и документы, прикреплённые к этой переписке
+                    </div>
+                  </div>
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".png,.jpg,.jpeg,.webp,.pdf,.docx,.pptx,.txt,.md,.csv"
+                    onChange={handleFileInputChange}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    disabled={isParsingDialogueFile}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60 transition-colors shrink-0 shadow-2xs cursor-pointer"
+                  >
+                    {isParsingDialogueFile ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00A8B5]" />
+                        <span>{parsingStatusLabel || 'Разбор...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Paperclip
+                          className={`w-3.5 h-3.5 ${
+                            activeSchool === 'renderia'
+                              ? 'text-[#84CC16]'
+                              : 'text-[#F5B800]'
+                          }`}
+                        />
+                        <span>Прикрепить</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {uploadError && (
+                  <div className="rounded-xl p-2.5 bg-red-50 border border-red-200 text-xs text-red-800 flex items-center justify-between gap-2">
+                    <span>{uploadError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setUploadError(null)}
+                      className="text-red-600 hover:text-red-900"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Open Chat Folder Button */}
+                <div className="rounded-xl p-3 bg-slate-50 border border-slate-200/80 text-[11px] text-slate-600 leading-relaxed space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 font-semibold text-slate-800">
+                      <FolderOpen className="w-3.5 h-3.5 text-[#00A8B5] shrink-0" />
+                      <span>Папка диалога</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openLocalFolder({
+                          school: activeSchool,
+                          category: 'Chats',
+                          chatId: currentSession?.id || 'general',
+                        })
+                      }
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-[#00A8B5] bg-white border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer shadow-2xs"
+                      title="Открыть локальную папку текущего чата"
+                    >
+                      <span>Открыть папку чата</span>
+                    </button>
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-500 bg-white p-1.5 rounded border border-slate-200 truncate">
+                    Документы/BusinessAssistant/{activeSchool.toUpperCase()}/Chats/{currentSession?.id || 'general'}
+                  </div>
+                </div>
+
+                {sessionAttachments.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center space-y-2.5 bg-slate-50/50">
+                    <div className="w-10 h-10 rounded-xl bg-white border border-slate-200/80 flex items-center justify-center mx-auto text-slate-400">
+                      <FolderOpen className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs font-semibold text-slate-800">
+                      В этом диалоге пока нет документов
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      Прикрепите рабочий документ (.pdf, .docx, .pptx, .txt, .csv,
+                      .md) кнопкой выше или через скрепку внизу чата.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {sessionAttachments.map((att) => {
+                      const isSelected = selectedAttachment?.id === att.id;
+                      const isStagedOnly =
+                        stagedDraftAttachment?.id === att.id &&
+                        !(currentSession?.attachments || []).some(
+                          (a) => a.id === att.id
+                        );
+                      const extLower = (att.extension || '').toLowerCase();
+                      const isImage =
+                        IMAGE_PREVIEW_EXTENSIONS.has(extLower) ||
+                        Boolean(att.mimeType?.startsWith('image/')) ||
+                        Boolean(att.dataUrl?.startsWith('data:image/'));
+
+                      return (
+                        <div
+                          key={att.id}
+                          onClick={() => {
+                            onSelectAttachment(att.id);
+                          }}
+                          className={`rounded-xl p-3 border transition-all cursor-pointer space-y-2 ${
+                            isSelected
+                              ? activeSchool === 'renderia'
+                                ? 'bg-[#84CC16]/10 border-[#84CC16] shadow-2xs'
+                                : 'bg-[#F5B800]/10 border-[#F5B800] shadow-2xs'
+                              : 'bg-white hover:bg-slate-50 border-slate-200/80'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              {isImage && att.dataUrl ? (
+                                <img
+                                  src={att.dataUrl}
+                                  alt={att.name}
+                                  className="w-10 h-10 object-cover rounded-lg border border-slate-200/80 shrink-0 bg-slate-100"
+                                />
+                              ) : (
+                                renderFileTypeIcon(att.extension)
+                              )}
+                              <span
+                                className="text-xs font-semibold text-slate-900 truncate"
+                                title={att.name}
+                              >
+                                {att.name}
+                              </span>
+                            </div>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono-tabular text-[10px] font-bold uppercase shrink-0">
+                              .{att.extension || 'файл'}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {renderStatusBadge(att.status || 'processed')}
+                            {isStagedOnly && (
+                              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-sans font-semibold text-[10px]">
+                                В черновике
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 pt-1 border-t border-slate-100">
+                            <div className="flex items-center gap-1.5 font-mono-tabular">
+                              <span>{formatFileSizeRu(att.sizeBytes)}</span>
+                              {att.createdAt && (
+                                <>
+                                  <span>·</span>
+                                  <span>{att.createdAt}</span>
+                                </>
+                              )}
+                            </div>
+
+                            <div
+                              className="flex items-center gap-1"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onSelectAttachment(att.id);
+                                  onChangeTab('preview');
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                                title="Открыть извлечённый текст документа"
+                              >
+                                <Eye className="w-3 h-3" />
+                                <span>Текст</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadAttachment(att)}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                                title="Скачать файл на компьютер"
+                              >
+                                <Download className="w-3 h-3 text-slate-600" />
+                                <span>Скачать</span>
+                              </button>
+
+                              {onInsertFileToDraft && (
+                                <button
+                                  type="button"
+                                  onClick={() => onInsertFileToDraft(att)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-[#00A8B5] hover:bg-[#00A8B5]/10 transition-colors cursor-pointer"
+                                  title="Вставить этот файл в текущее поле ввода сообщения"
+                                >
+                                  <ArrowRight className="w-3 h-3" />
+                                  <span>В чат</span>
+                                </button>
+                              )}
+
+                              {!isStagedOnly && currentSession && (
+                                <button
+                                  type="button"
+                                  onClick={() => setAttachmentPendingDelete(att)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                                  title="Удалить файл из текущего диалога"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Open Local Folder Button & Separation Notice */}
-            <div className="rounded-xl p-3 bg-slate-50 border border-slate-200/80 text-[11px] text-slate-600 leading-relaxed space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 font-semibold text-slate-800">
-                  <FolderOpen className="w-3.5 h-3.5 text-[#00A8B5] shrink-0" />
-                  <span>Локальное хранение (NotebookLM)</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => openLocalFolder({ school: activeSchool })}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-[#00A8B5] bg-white border border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer shadow-2xs"
-                  title="Открыть локальную папку в Проводнике Windows"
-                >
-                  <span>Открыть папку</span>
-                </button>
-              </div>
-              <div className="text-[10px] font-mono text-slate-500 bg-white p-1.5 rounded border border-slate-200 truncate">
-                Документы/BusinessAssistant/{activeSchool.toUpperCase()}/Materials
-              </div>
-            </div>
-
-            {sessionAttachments.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center space-y-2.5 bg-slate-50/50">
-                <div className="w-10 h-10 rounded-xl bg-white border border-slate-200/80 flex items-center justify-center mx-auto text-slate-400">
-                  <FolderOpen className="w-5 h-5" />
-                </div>
-                <div className="text-xs font-semibold text-slate-800">
-                  В этом диалоге пока нет документов
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Прикрепите рабочий документ (.pdf, .docx, .pptx, .txt, .csv,
-                  .md) кнопкой выше или через скрепку внизу чата.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                {sessionAttachments.map((att) => {
-                  const isSelected = selectedAttachment?.id === att.id;
-                  const isStagedOnly =
-                    stagedDraftAttachment?.id === att.id &&
-                    !(currentSession?.attachments || []).some(
-                      (a) => a.id === att.id
-                    );
-                  const extLower = (att.extension || '').toLowerCase();
-                  const isImage =
-                    IMAGE_PREVIEW_EXTENSIONS.has(extLower) ||
-                    Boolean(att.mimeType?.startsWith('image/')) ||
-                    Boolean(att.dataUrl?.startsWith('data:image/'));
-
-                  return (
-                    <div
-                      key={att.id}
-                      onClick={() => {
-                        onSelectAttachment(att.id);
-                      }}
-                      className={`rounded-xl p-3 border transition-all cursor-pointer space-y-2 ${
-                        isSelected
-                          ? activeSchool === 'renderia'
-                            ? 'bg-[#84CC16]/10 border-[#84CC16] shadow-2xs'
-                            : 'bg-[#F5B800]/10 border-[#F5B800] shadow-2xs'
-                          : 'bg-white hover:bg-slate-50 border-slate-200/80'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          {isImage && att.dataUrl ? (
-                            <img
-                              src={att.dataUrl}
-                              alt={att.name}
-                              className="w-10 h-10 object-cover rounded-lg border border-slate-200/80 shrink-0 bg-slate-100"
-                            />
-                          ) : (
-                            renderFileTypeIcon(att.extension)
-                          )}
-                          <span
-                            className="text-xs font-semibold text-slate-900 truncate"
-                            title={att.name}
-                          >
-                            {att.name}
-                          </span>
-                        </div>
-                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono-tabular text-[10px] font-bold uppercase shrink-0">
-                          .{att.extension || 'файл'}
-                        </span>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {renderStatusBadge(att.status || 'processed')}
-                        {isStagedOnly && (
-                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-sans font-semibold text-[10px]">
-                            В черновике
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 pt-1 border-t border-slate-100">
-                        <div className="flex items-center gap-1.5 font-mono-tabular">
-                          <span>{formatFileSizeRu(att.sizeBytes)}</span>
-                          {att.createdAt && (
-                            <>
-                              <span>·</span>
-                              <span>{att.createdAt}</span>
-                            </>
-                          )}
-                        </div>
-
-                        <div
-                          className="flex items-center gap-1"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onSelectAttachment(att.id);
-                              onChangeTab('preview');
-                            }}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
-                            title="Открыть извлечённый текст документа"
-                          >
-                            <Eye className="w-3 h-3" />
-                            <span>Текст</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadAttachment(att)}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
-                            title="Скачать файл на компьютер"
-                          >
-                            <Download className="w-3 h-3 text-slate-600" />
-                            <span>Скачать</span>
-                          </button>
-
-                          {onInsertFileToDraft && (
-                            <button
-                              type="button"
-                              onClick={() => onInsertFileToDraft(att)}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-[#00A8B5] hover:bg-[#00A8B5]/10 transition-colors cursor-pointer"
-                              title="Вставить этот файл в текущее поле ввода сообщения"
-                            >
-                              <ArrowRight className="w-3 h-3" />
-                              <span>В чат</span>
-                            </button>
-                          )}
-
-                          {!isStagedOnly && currentSession && (
-                            <button
-                              type="button"
-                              onClick={() => setAttachmentPendingDelete(att)}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                              title="Удалить файл из текущего диалога"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
+            {/* SUB-SECTION 2: БИБЛИОТЕКА ШКОЛЫ */}
+            {materialsSubSection === 'library' && (
+              <div className="space-y-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-bold text-slate-900">
+                      Библиотека школы ({activeSchool === 'renderia' ? 'Renderia' : 'KIBERone'})
                     </div>
-                  );
-                })}
+                    <div className="text-[11px] text-slate-500">
+                      Все постоянные материалы Базы знаний ({schoolDocs.length} файлов)
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('knowledge')}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 transition-colors shrink-0 cursor-pointer"
+                    title="Перейти в раздел База знаний"
+                  >
+                    <BookOpen className="w-3.5 h-3.5 text-[#00A8B5]" />
+                    <span>В Базу знаний</span>
+                  </button>
+                </div>
+
+                {/* Open Knowledge Base Folder Button */}
+                <div className="rounded-xl p-3 bg-slate-50 border border-slate-200/80 text-[11px] text-slate-600 leading-relaxed space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 font-semibold text-slate-800">
+                      <FolderOpen className="w-3.5 h-3.5 text-[#00A8B5] shrink-0" />
+                      <span>Папка Базы знаний</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openLocalFolder({
+                          school: activeSchool,
+                          category: 'Knowledge_Base',
+                        })
+                      }
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-[#00A8B5] bg-white border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer shadow-2xs"
+                      title="Открыть локальную папку Базы знаний школы в Проводнике"
+                    >
+                      <span>Открыть папку Базы знаний</span>
+                    </button>
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-500 bg-white p-1.5 rounded border border-slate-200 truncate">
+                    Документы/BusinessAssistant/{activeSchool.toUpperCase()}/Knowledge_Base
+                  </div>
+                </div>
+
+                {/* Search Bar for School Library */}
+                {schoolDocs.length > 0 && (
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={librarySearchQuery}
+                      onChange={(e) => setLibrarySearchQuery(e.target.value)}
+                      placeholder="Поиск по названию или тексту файла..."
+                      className="w-full pl-8.5 pr-8 py-1.5 text-xs rounded-xl bg-white border border-slate-200 focus:outline-none focus:border-[#00A8B5] transition-colors"
+                    />
+                    {librarySearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setLibrarySearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {filteredSchoolDocs.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center space-y-2.5 bg-slate-50/50">
+                    <div className="w-10 h-10 rounded-xl bg-white border border-slate-200/80 flex items-center justify-center mx-auto text-slate-400">
+                      <BookOpen className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs font-semibold text-slate-800">
+                      {schoolDocs.length === 0
+                        ? 'В Базе знаний школы пока нет файлов'
+                        : 'Ничего не найдено по вашему запросу'}
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      {schoolDocs.length === 0
+                        ? 'Загрузите документы, методички или брендбук в разделе «База знаний», и они появятся здесь.'
+                        : 'Попробуйте изменить поисковый запрос.'}
+                    </p>
+                    {schoolDocs.length === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('knowledge')}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[#00A8B5] text-white hover:bg-[#00929E] transition-colors cursor-pointer shadow-2xs"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Загрузить материалы</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {filteredSchoolDocs.map((doc) => {
+                      const isSelected = selectedAttachment?.id === doc.id;
+                      const extLower = (doc.extension || '').toLowerCase();
+                      const isImage =
+                        IMAGE_PREVIEW_EXTENSIONS.has(extLower) ||
+                        Boolean(doc.mimeType?.startsWith('image/')) ||
+                        Boolean(doc.dataUrl?.startsWith('data:image/')) ||
+                        Boolean(doc.thumbnailUrl);
+
+                      return (
+                        <div
+                          key={doc.id}
+                          onClick={() => {
+                            handlePreviewSchoolDoc(doc);
+                          }}
+                          className={`rounded-xl p-3 border transition-all cursor-pointer space-y-2 ${
+                            isSelected
+                              ? activeSchool === 'renderia'
+                                ? 'bg-[#84CC16]/10 border-[#84CC16] shadow-2xs'
+                                : 'bg-[#F5B800]/10 border-[#F5B800] shadow-2xs'
+                              : 'bg-white hover:bg-slate-50 border-slate-200/80'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              {isImage && (doc.thumbnailUrl || doc.dataUrl) ? (
+                                <img
+                                  src={doc.thumbnailUrl || doc.dataUrl}
+                                  alt={doc.name}
+                                  className="w-10 h-10 object-cover rounded-lg border border-slate-200/80 shrink-0 bg-slate-100"
+                                />
+                              ) : (
+                                renderFileTypeIcon(doc.extension)
+                              )}
+                              <div className="min-w-0">
+                                <span
+                                  className="text-xs font-semibold text-slate-900 truncate block"
+                                  title={doc.name}
+                                >
+                                  {doc.name}
+                                </span>
+                                {doc.tags && doc.tags.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-0.5">
+                                    {doc.tags.slice(0, 2).map((t, i) => (
+                                      <span
+                                        key={i}
+                                        className="text-[9px] px-1 py-0.2 rounded bg-slate-100 text-slate-600 font-medium"
+                                      >
+                                        #{t}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono-tabular text-[10px] font-bold uppercase shrink-0">
+                              .{doc.extension || 'файл'}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {renderStatusBadge(doc.status || 'processed')}
+                            {doc.visualRole && doc.visualRole !== 'other' && (
+                              <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-sans font-semibold text-[10px]">
+                                {doc.visualRole === 'brandbook'
+                                  ? 'Брендбук'
+                                  : doc.visualRole === 'logo'
+                                    ? 'Логотип'
+                                    : 'Референс'}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 pt-1 border-t border-slate-100">
+                            <div className="flex items-center gap-1.5 font-mono-tabular">
+                              <span>{formatFileSizeRu(doc.sizeBytes)}</span>
+                              {doc.createdAt && (
+                                <>
+                                  <span>·</span>
+                                  <span>{doc.createdAt}</span>
+                                </>
+                              )}
+                            </div>
+
+                            <div
+                              className="flex items-center gap-1"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handlePreviewSchoolDoc(doc)}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                                title="Просмотреть текст и изображения документа"
+                              >
+                                <Eye className="w-3 h-3" />
+                                <span>Текст</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleDownloadAttachment({
+                                    id: doc.id,
+                                    name: doc.name,
+                                    extension: doc.extension,
+                                    sizeBytes: doc.sizeBytes,
+                                    extractedText: doc.extractedText,
+                                    filePath: doc.filePath,
+                                    dataUrl: doc.dataUrl,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                                title="Скачать файл на компьютер"
+                              >
+                                <Download className="w-3 h-3 text-slate-600" />
+                                <span>Скачать</span>
+                              </button>
+
+                              {onInsertFileToDraft && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleInsertSchoolDocToDraft(doc)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-[#00A8B5] hover:bg-[#00A8B5]/10 transition-colors cursor-pointer"
+                                  title="Прикрепить этот документ Базы знаний в текущий чат"
+                                >
+                                  <ArrowRight className="w-3 h-3" />
+                                  <span>В чат</span>
+                                </button>
+                              )}
+
+                              {onDeleteDocument && (
+                                <button
+                                  type="button"
+                                  onClick={() => setLibraryDocPendingDelete(doc)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                                  title="Удалить файл из Базы знаний и с диска"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2848,6 +3235,59 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>{isDeletingAttachment ? 'Удаление...' : 'Удалить'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Confirmation for deleting a school library document */}
+      {libraryDocPendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs"
+          onClick={() => {
+            if (!isDeletingLibraryDoc) setLibraryDocPendingDelete(null);
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white border border-slate-200 p-5 shadow-2xl space-y-3 animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-red-50 border border-red-200 flex items-center justify-center text-red-600 shrink-0">
+                <AlertTriangle className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-display font-bold text-sm text-slate-900">
+                  Удалить документ из Базы знаний?
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5 break-all">
+                  «{libraryDocPendingDelete.name}»
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Файл будет полностью удалён из Базы знаний школы (IndexedDB), а также стёрт с локального жёсткого диска.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                disabled={isDeletingLibraryDoc}
+                onClick={() => setLibraryDocPendingDelete(null)}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingLibraryDoc}
+                onClick={handleConfirmDeleteLibraryDoc}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isDeletingLibraryDoc ? 'Удаление...' : 'Удалить навсегда'}</span>
               </button>
             </div>
           </div>

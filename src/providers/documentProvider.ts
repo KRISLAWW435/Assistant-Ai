@@ -98,6 +98,8 @@ export const documentProvider: IDocumentProvider = {
       return dataUrl.includes(',') ? dataUrl.split(',')[1].trim() : dataUrl.trim();
     };
 
+    const MAX_MULTIMODAL_IMAGES_TOTAL = 10;
+
     // 1. Draft attachment explicitly attached to the current outgoing message
     if (draftAttachment) {
       seenIds.add(draftAttachment.id);
@@ -108,13 +110,15 @@ export const documentProvider: IDocumentProvider = {
         );
 
       if (isImg && draftAttachment.dataUrl) {
-        sendableImages.push({
-          id: draftAttachment.id,
-          name: draftAttachment.name,
-          mimeType: draftAttachment.mimeType || 'image/png',
-          base64Data: extractBase64(draftAttachment.dataUrl),
-          source: 'dialogue_attachment',
-        });
+        if (sendableImages.length < MAX_MULTIMODAL_IMAGES_TOTAL) {
+          sendableImages.push({
+            id: draftAttachment.id,
+            name: draftAttachment.name,
+            mimeType: draftAttachment.mimeType || 'image/png',
+            base64Data: extractBase64(draftAttachment.dataUrl),
+            source: 'dialogue_attachment',
+          });
+        }
       } else {
         const text = (draftAttachment.extractedText || '').trim();
         if (text.length > 0 && draftAttachment.status !== 'error') {
@@ -124,8 +128,28 @@ export const documentProvider: IDocumentProvider = {
             source: 'dialogue_attachment',
             extractedText: text,
           });
-        } else {
+        } else if (
+          !draftAttachment.extractedImages ||
+          draftAttachment.extractedImages.length === 0
+        ) {
           skippedNoTextDocuments.push(draftAttachment.name);
+        }
+
+        // Multimodal support: forward extracted slide/page/media images to Gemini
+        if (
+          draftAttachment.extractedImages &&
+          draftAttachment.extractedImages.length > 0
+        ) {
+          for (const extImg of draftAttachment.extractedImages) {
+            if (sendableImages.length >= MAX_MULTIMODAL_IMAGES_TOTAL) break;
+            sendableImages.push({
+              id: extImg.id,
+              name: `${draftAttachment.name} — ${extImg.name}`,
+              mimeType: extImg.mimeType || 'image/jpeg',
+              base64Data: extractBase64(extImg.dataUrl),
+              source: 'dialogue_attachment',
+            });
+          }
         }
       }
     }
@@ -145,13 +169,15 @@ export const documentProvider: IDocumentProvider = {
         );
 
       if (isImg && att.dataUrl) {
-        sendableImages.push({
-          id: att.id,
-          name: att.name,
-          mimeType: att.mimeType || 'image/png',
-          base64Data: extractBase64(att.dataUrl),
-          source: 'dialogue_attachment',
-        });
+        if (sendableImages.length < MAX_MULTIMODAL_IMAGES_TOTAL) {
+          sendableImages.push({
+            id: att.id,
+            name: att.name,
+            mimeType: att.mimeType || 'image/png',
+            base64Data: extractBase64(att.dataUrl),
+            source: 'dialogue_attachment',
+          });
+        }
       } else {
         const text = (att.extractedText || '').trim();
         if (text.length > 0 && att.status !== 'error') {
@@ -161,8 +187,25 @@ export const documentProvider: IDocumentProvider = {
             source: 'dialogue_attachment',
             extractedText: text,
           });
-        } else {
+        } else if (
+          !att.extractedImages ||
+          att.extractedImages.length === 0
+        ) {
           skippedNoTextDocuments.push(att.name);
+        }
+
+        // Multimodal support: forward extracted slide/page/media images to Gemini
+        if (att.extractedImages && att.extractedImages.length > 0) {
+          for (const extImg of att.extractedImages) {
+            if (sendableImages.length >= MAX_MULTIMODAL_IMAGES_TOTAL) break;
+            sendableImages.push({
+              id: extImg.id,
+              name: `${att.name} — ${extImg.name}`,
+              mimeType: extImg.mimeType || 'image/jpeg',
+              base64Data: extractBase64(extImg.dataUrl),
+              source: 'dialogue_attachment',
+            });
+          }
         }
       }
     }
@@ -171,8 +214,13 @@ export const documentProvider: IDocumentProvider = {
     // STRICT SCHOOL ISOLATION: doc must match activeSchool OR be explicitly marked 'all'
     const selectedSchoolDocSet = new Set(selectedSchoolDocumentIds);
     for (const doc of schoolDocuments) {
-      const isEligibleSchool = doc.schoolId === activeSchool || doc.schoolId === 'all';
-      if (!isEligibleSchool || seenIds.has(doc.id) || !selectedSchoolDocSet.has(doc.id)) {
+      const isEligibleSchool =
+        doc.schoolId === activeSchool || doc.schoolId === 'all';
+      if (
+        !isEligibleSchool ||
+        seenIds.has(doc.id) ||
+        !selectedSchoolDocSet.has(doc.id)
+      ) {
         continue;
       }
       seenIds.add(doc.id);
@@ -185,14 +233,16 @@ export const documentProvider: IDocumentProvider = {
         );
 
       if (isImg && doc.dataUrl) {
-        sendableImages.push({
-          id: doc.id,
-          name: doc.name,
-          mimeType: doc.mimeType || 'image/png',
-          base64Data: extractBase64(doc.dataUrl),
-          visualRole: doc.visualRole,
-          source: 'school_document',
-        });
+        if (sendableImages.length < MAX_MULTIMODAL_IMAGES_TOTAL) {
+          sendableImages.push({
+            id: doc.id,
+            name: doc.name,
+            mimeType: doc.mimeType || 'image/png',
+            base64Data: extractBase64(doc.dataUrl),
+            visualRole: doc.visualRole,
+            source: 'school_document',
+          });
+        }
       }
 
       const text = (doc.extractedText || '').trim();
@@ -202,7 +252,9 @@ export const documentProvider: IDocumentProvider = {
 
       // If document has extracted text or brand rules, include it
       if (text.length > 0 && doc.status !== 'error') {
-        const rolePrefix = doc.visualRole ? `[Визуальный материал: ${doc.visualRole}] ` : '';
+        const rolePrefix = doc.visualRole
+          ? `[Визуальный материал: ${doc.visualRole}] `
+          : '';
         sendableDocuments.push({
           id: doc.id,
           name: doc.name,
@@ -210,8 +262,26 @@ export const documentProvider: IDocumentProvider = {
           categoryTitle: catMeta?.title || doc.categoryKey,
           extractedText: `${rolePrefix}${text}`,
         });
-      } else if (!isImg) {
+      } else if (
+        !isImg &&
+        (!doc.extractedImages || doc.extractedImages.length === 0)
+      ) {
         skippedNoTextDocuments.push(doc.name);
+      }
+
+      // Multimodal support: forward extracted images from verified school documents
+      if (doc.extractedImages && doc.extractedImages.length > 0) {
+        for (const extImg of doc.extractedImages) {
+          if (sendableImages.length >= MAX_MULTIMODAL_IMAGES_TOTAL) break;
+          sendableImages.push({
+            id: extImg.id,
+            name: `${doc.name} — ${extImg.name}`,
+            mimeType: extImg.mimeType || 'image/jpeg',
+            base64Data: extractBase64(extImg.dataUrl),
+            visualRole: extImg.visualRole || doc.visualRole,
+            source: 'school_document',
+          });
+        }
       }
     }
 

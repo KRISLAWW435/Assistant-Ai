@@ -128,6 +128,7 @@ export interface ElectronFilesBridge {
     filePath?: string;
     school?: string;
     category?: string;
+    chatId?: string;
   }): Promise<{
     success: boolean;
     absolutePath: string;
@@ -139,11 +140,18 @@ export interface ElectronFilesBridge {
     school?: string;
     category?: string;
     folderPath?: string;
+    chatId?: string;
   }): Promise<{ success: boolean; path: string; error?: string }>;
   showInFolder(absolutePath: string): Promise<boolean>;
   getBasePath(): Promise<string>;
   saveCopy(sourcePath: string, suggestedName?: string): Promise<{ success: boolean; destinationPath?: string }>;
   readFile(sourcePath: string): Promise<ArrayBuffer>;
+  deleteFile?(filePath: string): Promise<{ success: boolean; error?: string }>;
+  deleteChatFiles?(chatId: string, school?: string): Promise<{ success: boolean; error?: string }>;
+  extractMultimodalContent?(
+    filePath: string,
+    fileType?: string
+  ): Promise<{ text: string; images: string[] }>;
 }
 
 export interface ElectronAppApi {

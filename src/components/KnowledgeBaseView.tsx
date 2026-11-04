@@ -300,10 +300,14 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       if (schoolScopeFilter === 'current' && d.schoolId !== activeSchool && d.schoolId !== 'all') {
         return false;
       }
-      // Must be image or have dataUrl/thumbnail
+      // Must be visual: image, presentation, pdf, pptx, docx or have extracted images/slides/dataUrl/thumbnail
+      const extLower = (d.extension || '').toLowerCase();
       const isVisual =
         d.fileType === 'image' ||
-        ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(d.extension.toLowerCase()) ||
+        d.fileType === 'presentation' ||
+        ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'pdf', 'pptx', 'docx'].includes(extLower) ||
+        Boolean(d.slides && d.slides.length > 0) ||
+        Boolean(d.extractedImages && d.extractedImages.length > 0) ||
         Boolean(d.dataUrl && d.mimeType?.startsWith('image/')) ||
         Boolean(d.thumbnailUrl);
 
@@ -320,7 +324,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         const matchName = d.name.toLowerCase().includes(q);
         const matchDesc = (d.description || '').toLowerCase().includes(q);
         const matchTag = (d.tags || []).some((t) => t.toLowerCase().includes(q));
-        if (!matchName && !matchDesc && !matchTag) return false;
+        const matchText = (d.extractedText || '').toLowerCase().includes(q);
+        if (!matchName && !matchDesc && !matchTag && !matchText) return false;
       }
 
       return true;
@@ -629,7 +634,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         diskRes = await saveFileToLocalDisk(
           stagedDoc.sourceFile,
           schoolId === 'all' ? activeSchool : schoolId,
-          visualRole === 'brandbook' || visualRole === 'logo' ? 'Brandbook' : 'Materials'
+          visualRole === 'brandbook' || visualRole === 'logo' ? 'Brandbook' : 'Knowledge_Base'
         );
       }
 
@@ -1093,12 +1098,17 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
           <button
             type="button"
-            onClick={() => openLocalFolder({ school: activeSchool, category: activeSubTab })}
+            onClick={() =>
+              openLocalFolder({
+                school: activeSchool,
+                category: activeSubTab === 'brandbooks' ? 'Brandbook' : 'Knowledge_Base',
+              })
+            }
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#00A8B5] text-white hover:bg-[#00929E] transition-colors whitespace-nowrap shadow-2xs cursor-pointer"
             title="Открыть папку с локальными файлами в Проводнике Windows (NotebookLM style)"
           >
             <FolderOpen className="w-4 h-4 text-white" />
-            <span>Открыть папку с файлами</span>
+            <span>Открыть папку Базы знаний</span>
           </button>
         </div>
       </div>
@@ -1108,12 +1118,21 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         <div className="flex items-center gap-2">
           <FolderOpen className="w-4 h-4 text-[#00A8B5] shrink-0" />
           <span>
-            Локальная папка файлов: <code className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">Документы/BusinessAssistant/{activeSchool.toUpperCase()}/{activeSubTab === 'brandbooks' ? 'Brandbook' : 'Materials'}</code>
+            Локальная папка файлов:{' '}
+            <code className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+              Документы/BusinessAssistant/{activeSchool.toUpperCase()}/
+              {activeSubTab === 'brandbooks' ? 'Brandbook' : 'Knowledge_Base'}
+            </code>
           </span>
         </div>
         <button
           type="button"
-          onClick={() => openLocalFolder({ school: activeSchool, category: activeSubTab })}
+          onClick={() =>
+            openLocalFolder({
+              school: activeSchool,
+              category: activeSubTab === 'brandbooks' ? 'Brandbook' : 'Knowledge_Base',
+            })
+          }
           className="inline-flex items-center gap-1 text-[#00A8B5] font-bold hover:underline cursor-pointer"
         >
           <span>Открыть в Проводнике</span>
@@ -1472,7 +1491,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               <input
                 ref={imageInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
+                accept=".png,.jpg,.jpeg,.webp,.svg,.gif,.pdf,.pptx,.docx,image/*,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (f) handleUniversalFileUpload(f, 'reference');
@@ -1486,7 +1505,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-colors shadow-xs cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5 text-[#FFD700]" />
-                <span>Добавить изображение</span>
+                <span>Добавить материал</span>
               </button>
             </div>
           </div>
@@ -1501,8 +1520,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 В визуальной библиотеке пока нет материалов
               </h3>
               <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                Загрузите логотипы, страницы брендбуков, референсы оформления или шаблоны баннеров.
-                Все загруженные изображения доступны для просмотра в полном размере и могут передаваться ИИ-специалистам для визуального анализа!
+                Загрузите презентации (PPTX), PDF-методички, логотипы, страницы брендбуков или референсы оформления.
+                Из PDF и PPTX автоматически извлекаются слайды, текст и визуальные материалы для передачи ИИ-специалистам!
               </p>
               <button
                 type="button"
@@ -1510,7 +1529,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-[#00A8B5] text-white hover:bg-[#00929E] transition-colors cursor-pointer"
               >
                 <Upload className="w-4 h-4" />
-                <span>Загрузить первое изображение (PNG, JPG, WEBP)</span>
+                <span>Загрузите материалы: презентации, PDF-документы или изображения</span>
               </button>
             </div>
           ) : (
@@ -1527,16 +1546,37 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                   >
                     {/* Thumbnail Preview Area */}
                     <div
-                      onClick={() => setFullSizeImageDoc(doc)}
+                      onClick={() => {
+                        if (doc.slides && doc.slides.length > 0) {
+                          setSelectedSlideIndex(0);
+                          setPptxSlidesDoc(doc);
+                        } else {
+                          setFullSizeImageDoc(doc);
+                        }
+                      }}
                       className="relative h-44 bg-slate-950 flex items-center justify-center cursor-pointer overflow-hidden"
                     >
-                      {doc.dataUrl || doc.thumbnailUrl ? (
+                      {doc.dataUrl || doc.thumbnailUrl || doc.extractedImages?.[0]?.dataUrl ? (
                         <img
-                          src={doc.dataUrl || doc.thumbnailUrl}
+                          src={doc.thumbnailUrl || doc.dataUrl || doc.extractedImages?.[0]?.dataUrl}
                           alt={doc.name}
                           className="max-h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
                           loading="lazy"
                         />
+                      ) : doc.fileType === 'presentation' || doc.extension.toLowerCase() === 'pptx' ? (
+                        <div className="flex flex-col items-center gap-1 text-[#00A8B5] p-2">
+                          <Presentation className="w-10 h-10" />
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider">
+                            {doc.slides?.length ? `${doc.slides.length} слайдов` : 'Презентация'}
+                          </span>
+                        </div>
+                      ) : doc.extension.toLowerCase() === 'pdf' ? (
+                        <div className="flex flex-col items-center gap-1 text-rose-400 p-2">
+                          <FileText className="w-10 h-10" />
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider">
+                            {doc.pageCount ? `${doc.pageCount} стр.` : 'PDF Документ'}
+                          </span>
+                        </div>
                       ) : (
                         <ImageIcon className="w-10 h-10 text-slate-700" />
                       )}
@@ -2345,15 +2385,26 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             </div>
 
             {/* Large Image Container */}
-            <div className="w-full min-h-[280px] max-h-[500px] bg-slate-950 rounded-2xl flex items-center justify-center p-3 overflow-hidden border border-slate-300">
-              {fullSizeImageDoc.dataUrl ? (
+            {/* Large Image / Document Container */}
+            <div className="w-full min-h-[280px] max-h-[500px] bg-slate-950 rounded-2xl flex flex-col items-center justify-center p-3 overflow-hidden border border-slate-300">
+              {fullSizeImageDoc.dataUrl || fullSizeImageDoc.thumbnailUrl || fullSizeImageDoc.extractedImages?.[0]?.dataUrl ? (
                 <img
-                  src={fullSizeImageDoc.dataUrl}
+                  src={fullSizeImageDoc.dataUrl || fullSizeImageDoc.thumbnailUrl || fullSizeImageDoc.extractedImages?.[0]?.dataUrl}
                   alt={fullSizeImageDoc.name}
                   className="max-h-[480px] max-w-full object-contain"
                 />
               ) : (
-                <div className="text-slate-500 text-xs">Изображение недоступно</div>
+                <div className="text-center p-6 space-y-3 text-slate-300 max-w-lg">
+                  <FileText className="w-12 h-12 mx-auto text-[#00A8B5]" />
+                  <div className="text-sm font-bold text-white">{fullSizeImageDoc.name}</div>
+                  {fullSizeImageDoc.extractedText ? (
+                    <div className="text-xs text-slate-400 max-h-40 overflow-y-auto p-3 bg-slate-900 rounded-xl border border-slate-800 text-left font-mono leading-relaxed">
+                      {fullSizeImageDoc.extractedText.slice(0, 800)}...
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500">Предпросмотр визуального содержимого недоступен</div>
+                  )}
+                </div>
               )}
             </div>
 

@@ -13,7 +13,8 @@ export interface DiskSaveResult {
 export async function saveFileToLocalDisk(
   file: File,
   school?: string,
-  category?: string
+  category?: string,
+  chatId?: string
 ): Promise<DiskSaveResult | null> {
   const filesApi = window.electronAPI?.files;
   if (!filesApi) {
@@ -27,6 +28,7 @@ export async function saveFileToLocalDisk(
       buffer,
       school,
       category,
+      chatId,
     });
     return {
       success: result.success,
@@ -44,6 +46,7 @@ export async function openLocalFolder(params?: {
   school?: string;
   category?: string;
   folderPath?: string;
+  chatId?: string;
 }): Promise<boolean> {
   const filesApi = window.electronAPI?.files;
   if (!filesApi) {
@@ -54,6 +57,39 @@ export async function openLocalFolder(params?: {
     return res.success;
   } catch (err) {
     console.error('[diskFileManager] Failed to open folder:', err);
+    return false;
+  }
+}
+
+export async function deleteFileFromLocalDisk(filePath?: string): Promise<boolean> {
+  if (!filePath) return false;
+  const filesApi = window.electronAPI?.files;
+  if (!filesApi || !filesApi.deleteFile) {
+    return false;
+  }
+  try {
+    const res = await filesApi.deleteFile(filePath);
+    return res.success;
+  } catch (err) {
+    console.error('[diskFileManager] Failed to delete file from disk:', err);
+    return false;
+  }
+}
+
+export async function deleteChatFolderFromLocalDisk(
+  chatId?: string,
+  school?: string
+): Promise<boolean> {
+  if (!chatId) return false;
+  const filesApi = window.electronAPI?.files;
+  if (!filesApi || !filesApi.deleteChatFiles) {
+    return false;
+  }
+  try {
+    const res = await filesApi.deleteChatFiles(chatId, school);
+    return res.success;
+  } catch (err) {
+    console.error('[diskFileManager] Failed to delete chat folder from disk:', err);
     return false;
   }
 }

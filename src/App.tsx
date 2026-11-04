@@ -55,7 +55,11 @@ import {
   KNOWLEDGE_CATEGORIES,
   SCHOOLS,
 } from './config/schoolsAndModes';
-import { saveFileToLocalDisk } from './utils/diskFileManager';
+import {
+  deleteChatFolderFromLocalDisk,
+  deleteFileFromLocalDisk,
+  saveFileToLocalDisk,
+} from './utils/diskFileManager';
 import {
   createDefaultCompanionPreferences,
   createInitialCompanionGreetingMessage,
@@ -1214,6 +1218,10 @@ export default function App() {
   const handleDeleteSession = async (sessionId: string): Promise<boolean> => {
     if (isStorageLoading) return false;
     try {
+      const targetSession = sessionsRef.current.find((s) => s.id === sessionId);
+      if (targetSession) {
+        deleteChatFolderFromLocalDisk(sessionId, targetSession.schoolId).catch(() => {});
+      }
       await storageProvider.deleteSessionCascade(sessionId);
 
       const remaining = sortSessionsPinnedAndUpdatedDesc(
@@ -1364,7 +1372,12 @@ export default function App() {
               : 'image/jpeg'
           : undefined);
 
-      const diskResult = await saveFileToLocalDisk(file, activeSchool, 'Materials');
+      const diskResult = await saveFileToLocalDisk(
+        file,
+        activeSchool,
+        'Chats',
+        currentSession?.id || 'general'
+      );
 
       const attachment: ChatAttachment = {
         id: `att-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1382,6 +1395,8 @@ export default function App() {
         dataUrl,
         filePath: diskResult?.absolutePath,
         diskFolderPath: diskResult?.folderPath,
+        extractedImages: parsedResult?.extractedImages,
+        slides: parsedResult?.slides,
       };
 
       // Stage images directly to draft preview without a blocking document-text modal
@@ -1521,6 +1536,12 @@ export default function App() {
     const updatedAtMs = now.getTime();
 
     try {
+      const targetSession = sessionsRef.current.find((s) => s.id === sessionId);
+      const targetAtt = targetSession?.attachments?.find((a) => a.id === attachmentId);
+      if (targetAtt?.filePath) {
+        deleteFileFromLocalDisk(targetAtt.filePath).catch(() => {});
+      }
+
       await storageProvider.removeSessionAttachment(
         sessionId,
         attachmentId,
@@ -1678,6 +1699,10 @@ export default function App() {
             createdAt: linkedAttachment.createdAt,
             status: linkedAttachment.status,
             dataUrl: linkedAttachment.dataUrl,
+            filePath: linkedAttachment.filePath,
+            diskFolderPath: linkedAttachment.diskFolderPath,
+            extractedImages: linkedAttachment.extractedImages,
+            extractedImagesCount: linkedAttachment.extractedImages?.length || 0,
           }
         : undefined,
     };
@@ -1729,7 +1754,7 @@ export default function App() {
     const combinedImages = [
       ...selectedImages,
       ...(docImages || []),
-    ];
+    ].slice(0, 10);
 
     const usedContextSummary: string[] = [
       `Школа: ${schoolCfg.name}`,
@@ -2921,11 +2946,14 @@ export default function App() {
     if (isStorageLoading) return false;
     try {
       const target = uploadedDocuments.find((d) => d.id === docId);
+      if (target?.filePath) {
+        await deleteFileFromLocalDisk(target.filePath).catch(() => {});
+      }
       await storageProvider.deleteDocument(docId);
       setUploadedDocuments((prev) => prev.filter((d) => d.id !== docId));
       if (target) {
         setKnowledgeBanner(
-          `Документ «${target.name}» удалён из хранилища (${getSchoolNameRu(target.schoolId)}).`
+          `Документ «${target.name}» удалён из хранилища и с диска (${getSchoolNameRu(target.schoolId)}).`
         );
       }
       setStorageError(null);
@@ -3559,6 +3587,7 @@ export default function App() {
         onCheckImageProviders={handleCheckImageProvidersOnDemand}
         onReturnHandoffResult={handleReturnHandoffResultToSourceSpecialist}
         onInsertFileToDraft={(attachment) => setDraftAttachment(attachment)}
+        onDeleteDocument={handleDeleteDocument}
       />
 
       {/* 4. PIXEL VOICE WIDGET (STAGE 6.1: PERSISTENT VOICE ASSISTANT) */}

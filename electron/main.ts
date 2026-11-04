@@ -8,10 +8,13 @@ import {
   safeStorage,
   session,
   shell,
+  nativeImage,
 } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import JSZip from 'jszip';
+import * as pdfjsLib from 'pdfjs-dist';
 import {
   startServer,
   setServerGeminiKey,
@@ -70,15 +73,17 @@ if (!fs.existsSync(pixelConversationsDir)) {
 }
 
 // Local File Storage Directory for User Documents (NotebookLM style): Documents/BusinessAssistant/
-// Folders: 'KIBERONE/Brandbook', 'KIBERONE/Materials', 'RENDERIA/Brandbook', 'RENDERIA/Materials', 'Common'
+// Folders: 'Brandbook', 'Knowledge_Base', 'Chats/{chatId}' per school (KIBERONE, RENDERIA) and Common
 const documentsDir = app.getPath('documents');
 const businessAssistantDir = path.join(documentsDir, 'BusinessAssistant');
 
 const BUSINESS_ASSISTANT_SUBDIRS = [
   path.join(businessAssistantDir, 'KIBERONE', 'Brandbook'),
-  path.join(businessAssistantDir, 'KIBERONE', 'Materials'),
+  path.join(businessAssistantDir, 'KIBERONE', 'Knowledge_Base'),
+  path.join(businessAssistantDir, 'KIBERONE', 'Chats'),
   path.join(businessAssistantDir, 'RENDERIA', 'Brandbook'),
-  path.join(businessAssistantDir, 'RENDERIA', 'Materials'),
+  path.join(businessAssistantDir, 'RENDERIA', 'Knowledge_Base'),
+  path.join(businessAssistantDir, 'RENDERIA', 'Chats'),
   path.join(businessAssistantDir, 'Common'),
 ];
 
@@ -97,27 +102,60 @@ function initBusinessAssistantDirectories(): void {
   }
 }
 
-function getTargetFolderForFile(school?: string, category?: string): string {
+function getTargetFolderForFile(
+  school?: string,
+  category?: string,
+  chatId?: string
+): string {
   initBusinessAssistantDirectories();
   const normSchool = (school || '').toLowerCase();
   const normCategory = (category || '').toLowerCase();
+
+  const schoolFolder =
+    normSchool === 'renderia'
+      ? 'RENDERIA'
+      : normSchool === 'kiberone'
+        ? 'KIBERONE'
+        : 'Common';
+
+  if (schoolFolder === 'Common') {
+    return path.join(businessAssistantDir, 'Common');
+  }
+
+  // 1. If it's a chat attachment
+  if (normCategory === 'chats' || normCategory.includes('chat') || chatId) {
+    const cleanChatId = chatId
+      ? chatId.replace(/[^a-zA-Z0-9_-]/g, '_')
+      : 'general';
+    const chatFolder = path.join(
+      businessAssistantDir,
+      schoolFolder,
+      'Chats',
+      cleanChatId
+    );
+    if (!fs.existsSync(chatFolder)) {
+      try {
+        fs.mkdirSync(chatFolder, { recursive: true });
+      } catch (err) {
+        console.warn('[Files] Failed to create chat folder:', err);
+      }
+    }
+    return chatFolder;
+  }
+
+  // 2. If it's brandbook
   const isBrandbook =
     normCategory.includes('brandbook') ||
     normCategory.includes('бренд') ||
     normCategory.includes('logo') ||
     normCategory.includes('лого');
 
-  if (normSchool === 'kiberone') {
-    return isBrandbook
-      ? path.join(businessAssistantDir, 'KIBERONE', 'Brandbook')
-      : path.join(businessAssistantDir, 'KIBERONE', 'Materials');
+  if (isBrandbook) {
+    return path.join(businessAssistantDir, schoolFolder, 'Brandbook');
   }
-  if (normSchool === 'renderia') {
-    return isBrandbook
-      ? path.join(businessAssistantDir, 'RENDERIA', 'Brandbook')
-      : path.join(businessAssistantDir, 'RENDERIA', 'Materials');
-  }
-  return path.join(businessAssistantDir, 'Common');
+
+  // 3. Knowledge Base materials
+  return path.join(businessAssistantDir, schoolFolder, 'Knowledge_Base');
 }
 
 function safeWriteJson(filePath: string, data: unknown): void {
@@ -914,10 +952,15 @@ function registerIpcHandlers(): void {
         filePath?: string;
         school?: string;
         category?: string;
+        chatId?: string;
       }
     ) => {
       initBusinessAssistantDirectories();
-      const targetFolder = getTargetFolderForFile(input.school, input.category);
+      const targetFolder = getTargetFolderForFile(
+        input.school,
+        input.category,
+        input.chatId
+      );
       if (!fs.existsSync(targetFolder)) {
         fs.mkdirSync(targetFolder, { recursive: true });
       }
@@ -964,19 +1007,32 @@ function registerIpcHandlers(): void {
     'files:openFolder',
     async (
       _event,
-      params?: { school?: string; category?: string; folderPath?: string }
+      params?: {
+        school?: string;
+        category?: string;
+        folderPath?: string;
+        chatId?: string;
+      }
     ) => {
       initBusinessAssistantDirectories();
       let target = params?.folderPath;
       if (!target) {
         if (params?.school) {
-          target = getTargetFolderForFile(params.school, params.category);
+          target = getTargetFolderForFile(
+            params.school,
+            params.category,
+            params.chatId
+          );
         } else {
           target = businessAssistantDir;
         }
       }
       if (!fs.existsSync(target)) {
-        target = businessAssistantDir;
+        try {
+          fs.mkdirSync(target, { recursive: true });
+        } catch {
+          target = businessAssistantDir;
+        }
       }
       const openResult = await shell.openPath(target);
       return {
@@ -999,6 +1055,50 @@ function registerIpcHandlers(): void {
     initBusinessAssistantDirectories();
     return businessAssistantDir;
   });
+
+  ipcMain.handle('files:deleteFile', async (_event, filePath: string) => {
+    if (!filePath) return { success: false, error: 'Путь к файлу не указан' };
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      return { success: true };
+    } catch (err) {
+      console.error('[Files] Error deleting file:', err);
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  ipcMain.handle(
+    'files:deleteChatFiles',
+    async (_event, chatId: string, school?: string) => {
+      if (!chatId) return { success: false };
+      try {
+        const schoolFolder =
+          (school || '').toLowerCase() === 'renderia' ? 'RENDERIA' : 'KIBERONE';
+        const cleanChatId = chatId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const chatFolder = path.join(
+          businessAssistantDir,
+          schoolFolder,
+          'Chats',
+          cleanChatId
+        );
+        if (fs.existsSync(chatFolder)) {
+          fs.rmSync(chatFolder, { recursive: true, force: true });
+        }
+        return { success: true };
+      } catch (err) {
+        console.error('[Files] Error deleting chat folder:', err);
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+  );
 
   ipcMain.handle(
     'files:saveCopy',
@@ -1026,6 +1126,179 @@ function registerIpcHandlers(): void {
     const buf = fs.readFileSync(sourcePath);
     return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   });
+
+  ipcMain.handle(
+    'files:extractMultimodalContent',
+    async (_event, sourcePath: string, fileType?: string) => {
+      return extractMultimodalContent(sourcePath, fileType);
+    }
+  );
+}
+
+/**
+ * Server-side / Electron multimodal extraction function:
+ * Reads PDF, DOCX, PPTX directly from disk and extracts text + base64 images.
+ */
+export async function extractMultimodalContent(
+  filePath: string,
+  fileType?: string
+): Promise<{ text: string; images: string[] }> {
+  if (!filePath || !fs.existsSync(filePath)) {
+    throw new Error(`Файл не найден: ${filePath}`);
+  }
+
+  const ext = (fileType || path.extname(filePath).replace(/^\./, '')).toLowerCase();
+  const fileBuffer = fs.readFileSync(filePath);
+
+  // 1. PPTX & DOCX (ZIP-based formats with /media/ images)
+  if (ext === 'pptx' || ext === 'docx') {
+    const zip = await JSZip.loadAsync(fileBuffer);
+    const images: string[] = [];
+    const mediaPaths: string[] = [];
+
+    zip.forEach((relPath) => {
+      const lower = relPath.toLowerCase();
+      if (
+        lower.startsWith('ppt/media/') ||
+        lower.startsWith('word/media/') ||
+        lower.includes('/media/') ||
+        lower.startsWith('media/')
+      ) {
+        mediaPaths.push(relPath);
+      }
+    });
+
+    for (const mPath of mediaPaths.slice(0, 25)) {
+      const entry = zip.file(mPath);
+      if (!entry) continue;
+      const mExt = mPath.split('.').pop()?.toLowerCase() || 'png';
+      if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(mExt)) {
+        try {
+          const rawBuffer = await entry.async('nodebuffer');
+          let outDataUrl = '';
+          try {
+            const nImg = nativeImage.createFromBuffer(rawBuffer);
+            const size = nImg.getSize();
+            if (size.width > 1024 || size.height > 1024) {
+              const scale = 1024 / Math.max(size.width, size.height);
+              const resized = nImg.resize({
+                width: Math.max(1, Math.round(size.width * scale)),
+                height: Math.max(1, Math.round(size.height * scale)),
+                quality: 'better',
+              });
+              outDataUrl = `data:image/jpeg;base64,${resized.toJPEG(85).toString('base64')}`;
+            } else {
+              const mime =
+                mExt === 'png'
+                  ? 'image/png'
+                  : mExt === 'webp'
+                    ? 'image/webp'
+                    : 'image/jpeg';
+              outDataUrl = `data:${mime};base64,${rawBuffer.toString('base64')}`;
+            }
+          } catch {
+            const mime = mExt === 'png' ? 'image/png' : 'image/jpeg';
+            outDataUrl = `data:${mime};base64,${rawBuffer.toString('base64')}`;
+          }
+          if (outDataUrl) {
+            images.push(outDataUrl);
+          }
+        } catch {
+          // ignore corrupted image entry
+        }
+      }
+    }
+
+    // Extract text from XML
+    let text = '';
+    if (ext === 'pptx') {
+      const slideTexts: string[] = [];
+      const slideEntries: { num: number; path: string }[] = [];
+      zip.forEach((relPath) => {
+        const m = relPath.match(/^ppt\/slides\/slide(\d+)\.xml$/i);
+        if (m) {
+          slideEntries.push({ num: parseInt(m[1], 10), path: relPath });
+        }
+      });
+      slideEntries.sort((a, b) => a.num - b.num);
+      for (const entry of slideEntries) {
+        const sFile = zip.file(entry.path);
+        if (!sFile) continue;
+        const xmlStr = await sFile.async('string');
+        const matches = xmlStr.matchAll(/<a:t[^>]*>([^<]+)<\/a:t>/gi);
+        const slideLines: string[] = [];
+        for (const match of matches) {
+          if (match[1]?.trim()) slideLines.push(match[1].trim());
+        }
+        if (slideLines.length > 0) {
+          slideTexts.push(`[Слайд ${entry.num}]\n${slideLines.join(' ')}`);
+        }
+      }
+      text = slideTexts.join('\n\n');
+    } else {
+      // DOCX
+      const docXmlFile = zip.file('word/document.xml');
+      if (docXmlFile) {
+        const xmlStr = await docXmlFile.async('string');
+        const matches = xmlStr.matchAll(/<w:t[^>]*>([^<]+)<\/w:t>/gi);
+        const lines: string[] = [];
+        for (const match of matches) {
+          if (match[1]?.trim()) lines.push(match[1].trim());
+        }
+        text = lines.join(' ');
+      }
+    }
+
+    return { text, images };
+  }
+
+  // 2. PDF (text extraction)
+  if (ext === 'pdf') {
+    try {
+      const loadingTask = pdfjsLib.getDocument({
+        data: new Uint8Array(
+          fileBuffer.buffer,
+          fileBuffer.byteOffset,
+          fileBuffer.byteLength
+        ),
+      });
+      const pdf = await loadingTask.promise;
+      const pageTexts: string[] = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const strings: string[] = [];
+        for (const item of content.items) {
+          if ('str' in item && typeof item.str === 'string') {
+            strings.push(item.str);
+          }
+        }
+        const joined = strings.join(' ').trim();
+        if (joined) {
+          pageTexts.push(`[Страница ${i}]\n${joined}`);
+        }
+      }
+      return { text: pageTexts.join('\n\n'), images: [] };
+    } catch {
+      return { text: '', images: [] };
+    }
+  }
+
+  // 3. Images
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
+    const mime =
+      ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+    const dataUrl = `data:${mime};base64,${fileBuffer.toString('base64')}`;
+    return {
+      text: `[Изображение: ${path.basename(filePath)}]`,
+      images: [dataUrl],
+    };
+  }
+
+  return {
+    text: fileBuffer.toString('utf-8'),
+    images: [],
+  };
 }
 
 // ============================================================================

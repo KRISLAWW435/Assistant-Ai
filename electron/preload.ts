@@ -114,11 +114,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       filePath?: string;
       school?: string;
       category?: string;
+      chatId?: string;
     }) => ipcRenderer.invoke('files:saveToDisk', payload),
     openFolder: (params?: {
       school?: string;
       category?: string;
       folderPath?: string;
+      chatId?: string;
     }) => ipcRenderer.invoke('files:openFolder', params),
     showInFolder: (absolutePath: string) =>
       ipcRenderer.invoke('files:showInFolder', absolutePath),
@@ -127,6 +129,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('files:saveCopy', sourcePath, suggestedName),
     readFile: (sourcePath: string) =>
       ipcRenderer.invoke('files:readFile', sourcePath),
+    deleteFile: (filePath: string) =>
+      ipcRenderer.invoke('files:deleteFile', filePath),
+    deleteChatFiles: (chatId: string, school?: string) =>
+      ipcRenderer.invoke('files:deleteChatFiles', chatId, school),
+    extractMultimodalContent: (filePath: string, fileType?: string) =>
+      ipcRenderer.invoke('files:extractMultimodalContent', filePath, fileType),
   },
 });
 

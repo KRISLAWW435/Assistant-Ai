@@ -699,6 +699,8 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       draftAttachment &&
       (((draftAttachment.extractedText || '').trim().length > 0 &&
         draftAttachment.status !== 'error') ||
+        (draftAttachment.extractedImages &&
+          draftAttachment.extractedImages.length > 0) ||
         Boolean(
           draftAttachment.dataUrl &&
             (draftAttachment.mimeType?.startsWith('image/') ||
@@ -712,6 +714,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     for (const att of dialogueAttachments) {
       const isSendable =
         ((att.extractedText || '').trim().length > 0 && att.status !== 'error') ||
+        (att.extractedImages && att.extractedImages.length > 0) ||
         Boolean(
           att.dataUrl &&
             (att.mimeType?.startsWith('image/') ||
@@ -1463,6 +1466,10 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                         const imageDataUrl =
                           msg.attachmentMeta?.dataUrl ||
                           matchedAttachment?.dataUrl;
+                        const extractedDocImages =
+                          msg.attachmentMeta?.extractedImages ||
+                          matchedAttachment?.extractedImages ||
+                          [];
 
                         return (
                           <div
@@ -1560,6 +1567,65 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                 )}
                               </div>
                             </div>
+
+                            {/* Multimodal Extracted Visuals Gallery (PDF Pages / PPTX Slides / DOCX Media) */}
+                            {extractedDocImages.length > 0 && (
+                              <div className="mt-2.5 pt-2 border-t border-slate-200/20 space-y-2">
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span
+                                    className={`inline-flex items-center gap-1.5 font-semibold ${
+                                      isUser ? 'text-amber-300' : 'text-[#00A8B5]'
+                                    }`}
+                                  >
+                                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                                    <span>
+                                      ИИ переданы текст и {extractedDocImages.length}{' '}
+                                      {extractedDocImages.length === 1
+                                        ? 'визуальный материал'
+                                        : extractedDocImages.length < 5
+                                          ? 'визуальных материала'
+                                          : 'визуальных материалов'}{' '}
+                                      (слайды/страницы/иллюстрации)
+                                    </span>
+                                  </span>
+                                  <span
+                                    className={`text-[10px] font-mono-tabular opacity-75 ${
+                                      isUser ? 'text-slate-300' : 'text-slate-500'
+                                    }`}
+                                  >
+                                    мультимодально 1024×1024
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-thin">
+                                  {extractedDocImages.map((imgItem, idx) => (
+                                    <div
+                                      key={imgItem.id || `thumb-${idx}`}
+                                      onClick={() => {
+                                        if (msg.attachmentMeta?.id) {
+                                          onInspectAttachmentInRightPanel(
+                                            msg.attachmentMeta.id
+                                          );
+                                        }
+                                      }}
+                                      className="relative group shrink-0 rounded-lg overflow-hidden border border-slate-300/30 bg-black/20 hover:border-amber-400 cursor-pointer transition-all shadow-2xs"
+                                      title={`${imgItem.name} — нажмите для просмотра`}
+                                    >
+                                      <img
+                                        src={imgItem.dataUrl}
+                                        alt={imgItem.name}
+                                        className="w-20 h-14 object-cover group-hover:scale-105 transition-transform"
+                                        loading="lazy"
+                                      />
+                                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent px-1 py-0.5 text-[9px] text-white truncate font-medium">
+                                        {imgItem.sourceSlide
+                                          ? `Слайд ${imgItem.sourceSlide}`
+                                          : `Стр. ${idx + 1}`}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         );
                       })()}
@@ -2566,6 +2632,53 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   )
                 ) : (
                   <>
+                    {draftAttachment.extractedImages &&
+                      draftAttachment.extractedImages.length > 0 && (
+                        <div className="rounded-lg p-2.5 bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-950 space-y-1.5">
+                          <div className="flex items-center justify-between font-semibold">
+                            <span className="flex items-center gap-1.5 text-emerald-800">
+                              <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                              Мультимодальность активна: извлечено{' '}
+                              {draftAttachment.extractedImages.length}{' '}
+                              {draftAttachment.extractedImages.length === 1
+                                ? 'визуальный материал'
+                                : draftAttachment.extractedImages.length < 5
+                                  ? 'визуальных материала'
+                                  : 'визуальных материалов'}
+                            </span>
+                            <span className="text-[10px] text-emerald-700">
+                              ИИ увидит слайды и картинки
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 overflow-x-auto pt-1 pb-1 scrollbar-thin">
+                            {draftAttachment.extractedImages
+                              .slice(0, 8)
+                              .map((img, idx) => (
+                                <div
+                                  key={img.id || idx}
+                                  className="relative shrink-0 rounded border border-emerald-300/60 overflow-hidden bg-white shadow-2xs"
+                                >
+                                  <img
+                                    src={img.dataUrl}
+                                    alt={img.name}
+                                    className="w-12 h-9 object-cover"
+                                  />
+                                  <div className="absolute inset-x-0 bottom-0 bg-black/60 px-0.5 text-[8px] text-white truncate text-center">
+                                    {img.sourceSlide
+                                      ? `Сл. ${img.sourceSlide}`
+                                      : `${idx + 1}`}
+                                  </div>
+                                </div>
+                              ))}
+                            {draftAttachment.extractedImages.length > 8 && (
+                              <span className="text-[10px] text-emerald-800 font-semibold shrink-0">
+                                +{draftAttachment.extractedImages.length - 8} ещё
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                     {draftAttachment.warning && (
                       <div className="rounded-lg p-2 bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
                         {draftAttachment.warning}
@@ -2573,14 +2686,16 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                     )}
 
                     {(!draftAttachment.extractedText ||
-                      draftAttachment.extractedText.trim().length === 0) && (
-                      <div className="rounded-lg p-2 bg-slate-100 border border-slate-200 text-[11px] text-slate-700">
-                        Ограничение: в этом файле отсутствует извлечённый
-                        текстовый слой (например, скан без OCR). Он сохранится в
-                        материалах диалога, но его текст не может быть передан в
-                        текстовый запрос.
-                      </div>
-                    )}
+                      draftAttachment.extractedText.trim().length === 0) &&
+                      (!draftAttachment.extractedImages ||
+                        draftAttachment.extractedImages.length === 0) && (
+                        <div className="rounded-lg p-2 bg-slate-100 border border-slate-200 text-[11px] text-slate-700">
+                          Ограничение: в этом файле отсутствует извлечённый
+                          текстовый слой (например, скан без OCR). Он сохранится в
+                          материалах диалога, но его текст не может быть передан в
+                          текстовый запрос.
+                        </div>
+                      )}
                   </>
                 )}
               </div>

@@ -137,6 +137,8 @@ export interface ChatAttachment {
   uploadedAt?: string;
   filePath?: string;
   diskFolderPath?: string;
+  extractedImages?: ExtractedDocumentImage[];
+  slides?: ExtractedSlideItem[];
 }
 
 export interface ChatAttachmentMeta {
@@ -150,6 +152,8 @@ export interface ChatAttachmentMeta {
   dataUrl?: string;
   filePath?: string;
   diskFolderPath?: string;
+  extractedImages?: ExtractedDocumentImage[];
+  extractedImagesCount?: number;
 }
 
 export type AIProviderId = 'gemini' | 'openrouter' | 'ollama';
