@@ -96,9 +96,11 @@ export const TopBar: React.FC<TopBarProps> = ({
           <div className="flex items-center gap-2 min-w-0 text-sm">
             <span
               className={`inline-flex items-center px-2.5 py-0.5 rounded-lg font-display font-extrabold text-xs tracking-wide shrink-0 transition-colors duration-200 ${
-                activeSchool === 'kiberone'
-                  ? 'bg-[#FFD700] text-slate-950'
-                  : 'bg-[#84CC16] text-slate-950'
+                activeSchool === 'all'
+                  ? 'bg-[#00A8B5] text-white'
+                  : activeSchool === 'kiberone'
+                    ? 'bg-[#FFD700] text-slate-950'
+                    : 'bg-[#84CC16] text-slate-950'
               }`}
             >
               {school.name}

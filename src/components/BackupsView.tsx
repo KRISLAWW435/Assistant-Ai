@@ -86,7 +86,9 @@ export const BackupsView: React.FC<BackupsViewProps> = ({
               className={`w-6 h-6 ${
                 activeSchool === 'renderia'
                   ? 'text-[#84CC16]'
-                  : 'text-[#F5B800]'
+                  : activeSchool === 'all'
+                    ? 'text-[#00A8B5]'
+                    : 'text-[#F5B800]'
               }`}
             />
           </div>
@@ -111,7 +113,9 @@ export const BackupsView: React.FC<BackupsViewProps> = ({
             className={`w-4 h-4 ${
               activeSchool === 'renderia'
                 ? 'text-[#84CC16]'
-                : 'text-[#F5B800]'
+                : activeSchool === 'all'
+                  ? 'text-[#00A8B5]'
+                  : 'text-[#F5B800]'
             }`}
           />
           <span>Создать резервную копию</span>
@@ -265,7 +269,9 @@ export const BackupsView: React.FC<BackupsViewProps> = ({
               className={`w-4 h-4 ${
                 activeSchool === 'renderia'
                   ? 'text-[#84CC16]'
-                  : 'text-[#F5B800]'
+                  : activeSchool === 'all'
+                    ? 'text-[#00A8B5]'
+                    : 'text-[#F5B800]'
               }`}
             />
             <span>Создать резервную копию</span>

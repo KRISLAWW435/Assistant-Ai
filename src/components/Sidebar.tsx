@@ -430,7 +430,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={`w-11 h-11 rounded-xl flex items-center justify-center transition-colors shadow-2xs ${
                 activeSchool === 'renderia'
                   ? 'bg-[#84CC16] text-slate-950 hover:bg-[#76b813]'
-                  : 'bg-[#FFD700] text-slate-950 hover:bg-[#f0ca00]'
+                  : activeSchool === 'all'
+                    ? 'bg-[#00A8B5] text-white hover:bg-[#00929e]'
+                    : 'bg-[#FFD700] text-slate-950 hover:bg-[#f0ca00]'
               }`}
             >
               <MessageSquarePlus className="w-5 h-5" />
@@ -445,22 +447,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Collapsed School Switcher with Circular Single-Letter Badges */}
           <div className="flex flex-col gap-2 p-1.5 bg-slate-200/60 rounded-xl w-full items-center">
-            {(['kiberone', 'renderia'] as SchoolId[]).map((id) => {
+            {(['all', 'kiberone', 'renderia'] as SchoolId[]).map((id) => {
               const s = SCHOOLS[id];
               const isSelected = activeSchool === id;
-              const letter = id === 'kiberone' ? 'K' : 'R';
+              const letter = id === 'all' ? 'О' : id === 'kiberone' ? 'K' : 'R';
+              const activeColor =
+                id === 'all'
+                  ? 'bg-[#00A8B5] text-white ring-2 ring-slate-900/15 shadow-xs scale-105'
+                  : id === 'kiberone'
+                    ? 'bg-[#FFD700] text-slate-950 ring-2 ring-slate-900/15 shadow-xs scale-105'
+                    : 'bg-[#84CC16] text-slate-950 ring-2 ring-slate-900/15 shadow-xs scale-105';
               return (
                 <div key={id} className="relative group">
                   <button
                     type="button"
                     onClick={() => onSelectSchool(id)}
-                    title={`Школа ${s.name} (нажмите для переключения)`}
-                    aria-label={`Школа ${s.name}`}
+                    title={`Режим: ${s.name} (нажмите для переключения)`}
+                    aria-label={`Режим: ${s.name}`}
                     className={`w-8 h-8 rounded-full font-display font-black text-xs tracking-tight flex items-center justify-center transition-all duration-200 cursor-pointer ${
                       isSelected
-                        ? id === 'kiberone'
-                          ? 'bg-[#FFD700] text-slate-950 ring-2 ring-slate-900/15 shadow-xs scale-105'
-                          : 'bg-[#84CC16] text-slate-950 ring-2 ring-slate-900/15 shadow-xs scale-105'
+                        ? activeColor
                         : 'bg-white/80 text-slate-600 hover:text-slate-900 hover:bg-white hover:scale-105'
                     }`}
                   >
@@ -470,7 +476,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     role="tooltip"
                     className="pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 absolute left-full top-1/2 -translate-y-1/2 ml-2.5 z-50 px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium whitespace-nowrap shadow-md"
                   >
-                    Школа {s.name}
+                    {s.name}
                   </div>
                 </div>
               );
@@ -489,27 +495,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={`w-4 h-4 shrink-0 ${
                 activeSchool === 'renderia'
                   ? 'text-[#84CC16]'
-                  : 'text-[#FFD700]'
+                  : activeSchool === 'all'
+                    ? 'text-[#00A8B5]'
+                    : 'text-[#FFD700]'
               }`}
             />
             <span>Новый чат</span>
           </button>
 
-          {/* Expressive Typographic School Switcher (KIBERONE / RENDERIA) */}
-          <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-200/60 rounded-xl">
-            {(['kiberone', 'renderia'] as SchoolId[]).map((id) => {
+          {/* Expressive Typographic School Switcher (Общее / KIBERONE / RENDERIA) */}
+          <div className="grid grid-cols-3 gap-1 p-1 bg-slate-200/60 rounded-xl">
+            {(['all', 'kiberone', 'renderia'] as SchoolId[]).map((id) => {
               const s = SCHOOLS[id];
               const isSelected = activeSchool === id;
+              const activeBg =
+                id === 'all'
+                  ? 'bg-[#00A8B5] text-white shadow-2xs'
+                  : id === 'kiberone'
+                    ? 'bg-[#FFD700] text-slate-950 shadow-2xs'
+                    : 'bg-[#84CC16] text-slate-950 shadow-2xs';
               return (
                 <button
                   key={id}
                   type="button"
                   onClick={() => onSelectSchool(id)}
-                  className={`flex items-center justify-center px-3 py-2.5 rounded-lg font-display font-extrabold text-xs sm:text-sm tracking-wide transition-colors duration-200 ${
+                  className={`flex items-center justify-center px-1.5 py-2 rounded-lg font-display font-extrabold text-xs tracking-tight transition-colors duration-200 cursor-pointer ${
                     isSelected
-                      ? id === 'kiberone'
-                        ? 'bg-[#FFD700] text-slate-950 shadow-2xs'
-                        : 'bg-[#84CC16] text-slate-950 shadow-2xs'
+                      ? activeBg
                       : 'bg-white/75 text-slate-600 hover:text-slate-900 hover:bg-white'
                   }`}
                 >

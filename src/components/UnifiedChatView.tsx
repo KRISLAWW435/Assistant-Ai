@@ -61,8 +61,10 @@ import {
   ImageProviderId,
   ImageProvidersRegistryState,
   KnowledgeBaseBySchool,
+  KnowledgeBaseSchoolId,
   NavSection,
   SchoolId,
+  SchoolKnowledgeFields,
   SpecialistHandoffPacket,
   UploadedDocumentRecord,
 } from '../types/assistant';
@@ -699,15 +701,31 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   const schoolDocuments = useMemo(
     () =>
       uploadedDocuments.filter(
-        (d) => d.schoolId === activeSchool || d.schoolId === 'all'
+        (d) =>
+          activeSchool === 'all' ||
+          d.schoolId === activeSchool ||
+          d.schoolId === 'all'
       ),
     [uploadedDocuments, activeSchool]
   );
 
-  const schoolKnowledge = knowledgeBase[activeSchool];
-  const filledCount = KNOWLEDGE_CATEGORIES.filter(
-    (cat) => (schoolKnowledge[cat.key] || '').trim().length > 0
-  ).length;
+  const filledCount = useMemo(() => {
+    if (activeSchool === 'all') {
+      const kCount = KNOWLEDGE_CATEGORIES.filter(
+        (cat) => (knowledgeBase.kiberone?.[cat.key] || '').trim().length > 0
+      ).length;
+      const rCount = KNOWLEDGE_CATEGORIES.filter(
+        (cat) => (knowledgeBase.renderia?.[cat.key] || '').trim().length > 0
+      ).length;
+      return kCount + rCount;
+    }
+    const schoolKnowledge =
+      knowledgeBase[activeSchool as KnowledgeBaseSchoolId] ||
+      ({} as SchoolKnowledgeFields);
+    return KNOWLEDGE_CATEGORIES.filter(
+      (cat) => (schoolKnowledge[cat.key] || '').trim().length > 0
+    ).length;
+  }, [activeSchool, knowledgeBase]);
 
   // Reset selected documents when switching school or session so context never leaks across schools
   useEffect(() => {
@@ -1395,26 +1413,34 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                     type="button"
                     onClick={() =>
                       onChangeSchool(
-                        activeSchool === 'kiberone' ? 'renderia' : 'kiberone'
+                        activeSchool === 'all'
+                          ? 'kiberone'
+                          : activeSchool === 'kiberone'
+                            ? 'renderia'
+                            : 'all'
                       )
                     }
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200/90 text-slate-700 hover:bg-slate-100 transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200/90 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                   >
                     <span>
-                      Переключить на{' '}
-                      {activeSchool === 'kiberone' ? 'RENDERIA' : 'KIBERONE'}
+                      {activeSchool === 'all'
+                        ? 'Переключить на KIBERONE'
+                        : activeSchool === 'kiberone'
+                          ? 'Переключить на RENDERIA'
+                          : 'Переключить на «Общее»'}
                     </span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => onNavigate('knowledge')}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200/90 text-slate-700 hover:bg-slate-100 transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200/90 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                   >
                     <BookOpen className="w-3.5 h-3.5 text-[#00A8B5]" />
                     <span>
-                      База знаний {schoolConfig.name}: {filledCount}/
-                      {KNOWLEDGE_CATEGORIES.length}
+                      {activeSchool === 'all'
+                        ? `База знаний (всего): ${filledCount}/${KNOWLEDGE_CATEGORIES.length * 2}`
+                        : `База знаний ${schoolConfig.name}: ${filledCount}/${KNOWLEDGE_CATEGORIES.length}`}
                     </span>
                   </button>
                 </div>

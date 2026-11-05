@@ -1,4 +1,4 @@
-export type SchoolId = 'kiberone' | 'renderia';
+export type SchoolId = 'all' | 'kiberone' | 'renderia';
 
 export type AgentMode = 'marketer' | 'manager' | 'methodist' | 'analyst' | 'designer';
 
@@ -35,7 +35,9 @@ export interface KnowledgeCategoryMeta {
 
 export type SchoolKnowledgeFields = Record<KnowledgeCategoryKey, string>;
 
-export type KnowledgeBaseBySchool = Record<SchoolId, SchoolKnowledgeFields>;
+export type KnowledgeBaseSchoolId = 'kiberone' | 'renderia';
+
+export type KnowledgeBaseBySchool = Record<KnowledgeBaseSchoolId, SchoolKnowledgeFields>;
 
 export type DocumentProcessingStatus =
   | 'uploading'

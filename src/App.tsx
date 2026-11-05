@@ -169,7 +169,7 @@ function readInitialRightPanelTab(): RightPanelTab {
 function readInitialActiveSchool(): SchoolId {
   try {
     const saved = window.localStorage.getItem(ACTIVE_SCHOOL_STORAGE_KEY);
-    if (saved === 'kiberone' || saved === 'renderia') {
+    if (saved === 'kiberone' || saved === 'renderia' || saved === 'all') {
       return saved;
     }
   } catch {
@@ -3372,7 +3372,9 @@ export default function App() {
       // Restore workspace settings if present
       const ws = pendingBackupRestore.archive.workspaceSettings;
       const nextSchool: SchoolId =
-        ws?.activeSchool === 'kiberone' || ws?.activeSchool === 'renderia'
+        ws?.activeSchool === 'kiberone' ||
+        ws?.activeSchool === 'renderia' ||
+        ws?.activeSchool === 'all'
           ? ws.activeSchool
           : activeSchool;
 
@@ -3591,6 +3593,13 @@ export default function App() {
   };
 
   const filledCategoriesCount: Record<SchoolId, number> = {
+    all:
+      KNOWLEDGE_CATEGORIES.filter(
+        (c) => knowledgeBase.kiberone[c.key]?.trim().length > 0
+      ).length +
+      KNOWLEDGE_CATEGORIES.filter(
+        (c) => knowledgeBase.renderia[c.key]?.trim().length > 0
+      ).length,
     kiberone: KNOWLEDGE_CATEGORIES.filter(
       (c) => knowledgeBase.kiberone[c.key]?.trim().length > 0
     ).length,

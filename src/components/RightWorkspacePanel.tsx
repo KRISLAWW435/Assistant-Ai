@@ -55,6 +55,7 @@ import {
   NavSection,
   RightPanelTab,
   SchoolId,
+  SchoolKnowledgeFields,
   SpecialistHandoffPacket,
   UploadedDocumentRecord,
 } from '../types/assistant';
@@ -741,25 +742,55 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
     return hits.sort((a, b) => b.updatedAtMs - a.updatedAtMs).slice(0, 40);
   }, [searchQuery, sessions, currentSession, searchScope]);
 
-  const schoolKnowledge = knowledgeBase[activeSchool];
-  const filledCategories = useMemo(
-    () =>
-      KNOWLEDGE_CATEGORIES.filter(
-        (cat) => (schoolKnowledge[cat.key] || '').trim().length > 0
-      ),
-    [schoolKnowledge]
-  );
-  const emptyCategories = useMemo(
-    () =>
-      KNOWLEDGE_CATEGORIES.filter(
-        (cat) => (schoolKnowledge[cat.key] || '').trim().length === 0
-      ),
-    [schoolKnowledge]
-  );
+  const schoolKnowledge = useMemo(() => {
+    if (activeSchool === 'all') {
+      return null;
+    }
+    return (
+      knowledgeBase[activeSchool as 'kiberone' | 'renderia'] ||
+      ({} as SchoolKnowledgeFields)
+    );
+  }, [activeSchool, knowledgeBase]);
+
+  const filledCategories = useMemo(() => {
+    if (activeSchool === 'all') {
+      return KNOWLEDGE_CATEGORIES.filter((cat) => {
+        const kHas =
+          (knowledgeBase.kiberone?.[cat.key] || '').trim().length > 0;
+        const rHas =
+          (knowledgeBase.renderia?.[cat.key] || '').trim().length > 0;
+        return kHas || rHas;
+      });
+    }
+    if (!schoolKnowledge) return [];
+    return KNOWLEDGE_CATEGORIES.filter(
+      (cat) => (schoolKnowledge[cat.key] || '').trim().length > 0
+    );
+  }, [activeSchool, knowledgeBase, schoolKnowledge]);
+
+  const emptyCategories = useMemo(() => {
+    if (activeSchool === 'all') {
+      return KNOWLEDGE_CATEGORIES.filter((cat) => {
+        const kHas =
+          (knowledgeBase.kiberone?.[cat.key] || '').trim().length > 0;
+        const rHas =
+          (knowledgeBase.renderia?.[cat.key] || '').trim().length > 0;
+        return !kHas && !rHas;
+      });
+    }
+    if (!schoolKnowledge) return KNOWLEDGE_CATEGORIES;
+    return KNOWLEDGE_CATEGORIES.filter(
+      (cat) => (schoolKnowledge[cat.key] || '').trim().length === 0
+    );
+  }, [activeSchool, knowledgeBase, schoolKnowledge]);
+
   const schoolDocs = useMemo(
     () =>
       uploadedDocuments.filter(
-        (d) => d.schoolId === activeSchool || d.schoolId === 'all'
+        (d) =>
+          activeSchool === 'all' ||
+          d.schoolId === activeSchool ||
+          d.schoolId === 'all'
       ),
     [uploadedDocuments, activeSchool]
   );
@@ -3603,18 +3634,41 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-900">
-                  База знаний школы {schoolConfig.name}
+                  {activeSchool === 'all'
+                    ? 'База знаний (KIBERONE & RENDERIA)'
+                    : `База знаний школы ${schoolConfig.name}`}
                 </span>
                 <span className="text-[11px] font-mono-tabular font-semibold text-slate-700">
                   {filledCategories.length} / {KNOWLEDGE_CATEGORIES.length}{' '}
-                  заполнено
+                  {activeSchool === 'all' ? 'категорий' : 'заполнено'}
                 </span>
               </div>
 
               <div className="space-y-1.5">
                 {KNOWLEDGE_CATEGORIES.map((cat) => {
-                  const val = (schoolKnowledge[cat.key] || '').trim();
-                  const isFilled = val.length > 0;
+                  let isFilled = false;
+                  let val = '';
+                  let detailBadge = '';
+
+                  if (activeSchool === 'all') {
+                    const kVal = (knowledgeBase.kiberone?.[cat.key] || '').trim();
+                    const rVal = (knowledgeBase.renderia?.[cat.key] || '').trim();
+                    isFilled = kVal.length > 0 || rVal.length > 0;
+                    val = [
+                      kVal ? `KIBERONE: ${kVal}` : '',
+                      rVal ? `RENDERIA: ${rVal}` : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' | ');
+                    detailBadge = isFilled
+                      ? `K: ${kVal.length > 0 ? '✓' : '—'} · R: ${rVal.length > 0 ? '✓' : '—'}`
+                      : 'Пусто';
+                  } else {
+                    val = (schoolKnowledge?.[cat.key] || '').trim();
+                    isFilled = val.length > 0;
+                    detailBadge = isFilled ? `${val.length} симв.` : 'Пусто';
+                  }
+
                   return (
                     <div
                       key={cat.key}
@@ -3640,7 +3694,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                           </span>
                         </div>
                         <span className="text-[10px] font-mono-tabular shrink-0">
-                          {isFilled ? `${val.length} симв.` : 'Пусто'}
+                          {detailBadge}
                         </span>
                       </div>
                       {isFilled && (

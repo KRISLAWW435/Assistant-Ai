@@ -269,6 +269,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       if (raw) return JSON.parse(raw);
     } catch {}
     return {
+      all: { added: [], removed: [] },
       kiberone: { added: [], removed: [] },
       renderia: { added: [], removed: [] },
     };
@@ -283,13 +284,19 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     };
   }, []);
 
-  const schoolConfig = SCHOOLS[activeSchool];
-  const confirmedSchoolData = knowledgeBase[activeSchool];
+  const [subKBSchool, setSubKBSchool] = useState<'kiberone' | 'renderia'>('kiberone');
+  const targetEditingSchool: 'kiberone' | 'renderia' =
+    activeSchool === 'all' ? subKBSchool : activeSchool;
+  const schoolConfig = SCHOOLS[targetEditingSchool];
+  const confirmedSchoolData = knowledgeBase[targetEditingSchool];
 
   // Eligible documents for active view: matches activeSchool OR marked 'all'
   const eligibleSchoolDocs = useMemo(() => {
     return uploadedDocuments.filter(
-      (d) => d.schoolId === activeSchool || d.schoolId === 'all'
+      (d) =>
+        activeSchool === 'all' ||
+        d.schoolId === activeSchool ||
+        d.schoolId === 'all'
     );
   }, [uploadedDocuments, activeSchool]);
 
@@ -1049,19 +1056,23 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         {/* School Switcher & Backups */}
         <div className="flex flex-wrap items-center gap-3 shrink-0">
           <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
-            {(['kiberone', 'renderia'] as SchoolId[]).map((id) => {
+            {(['all', 'kiberone', 'renderia'] as SchoolId[]).map((id) => {
               const s = SCHOOLS[id];
               const isSelected = activeSchool === id;
+              const activeColor =
+                id === 'all'
+                  ? 'bg-[#00A8B5] text-white shadow-xs'
+                  : id === 'kiberone'
+                    ? 'bg-[#FFD700] text-slate-950 shadow-xs'
+                    : 'bg-[#84CC16] text-slate-950 shadow-xs';
               return (
                 <button
                   key={id}
                   type="button"
                   onClick={() => onSelectSchool(id)}
-                  className={`px-4 py-2 rounded-lg font-display font-extrabold text-xs sm:text-sm tracking-wide transition-colors whitespace-nowrap cursor-pointer ${
+                  className={`px-3 sm:px-4 py-2 rounded-lg font-display font-extrabold text-xs sm:text-sm tracking-wide transition-colors whitespace-nowrap cursor-pointer ${
                     isSelected
-                      ? id === 'kiberone'
-                        ? 'bg-[#FFD700] text-slate-950 shadow-xs'
-                        : 'bg-[#84CC16] text-slate-950 shadow-xs'
+                      ? activeColor
                       : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                   }`}
                 >
@@ -1274,25 +1285,56 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       {activeSubTab === 'categories' && (
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 bg-white p-4 rounded-xl border border-slate-200/80">
-            <div>
-              Школа: <strong>{schoolConfig.name}</strong> · Заполнено{' '}
-              <span className="font-bold font-mono-tabular text-slate-900">
-                {filledCount}
-              </span>{' '}
-              из {KNOWLEDGE_CATEGORIES.length} разделов
+            <div className="flex items-center gap-3 flex-wrap">
+              <div>
+                Школа: <strong>{schoolConfig.name}</strong> · Заполнено{' '}
+                <span className="font-bold font-mono-tabular text-slate-900">
+                  {filledCount}
+                </span>{' '}
+                из {KNOWLEDGE_CATEGORIES.length} разделов
+              </div>
+              {activeSchool === 'all' && (
+                <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
+                  <span className="text-[11px] font-semibold text-slate-500 px-1.5">
+                    Редактировать:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSubKBSchool('kiberone')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      targetEditingSchool === 'kiberone'
+                        ? 'bg-[#FFD700] text-slate-950 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+                    }`}
+                  >
+                    KIBERONE
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubKBSchool('renderia')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      targetEditingSchool === 'renderia'
+                        ? 'bg-[#84CC16] text-slate-950 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+                    }`}
+                  >
+                    RENDERIA
+                  </button>
+                </div>
+              )}
             </div>
             <div className="text-slate-500">
-              Текстовые правила передаются специалистам строго с изоляцией по активной школе.
+              Базы знаний хранятся раздельно для каждой школы, обеспечивая чистоту данных.
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             {KNOWLEDGE_CATEGORIES.map((category) => {
-              const compositeKey: CompositeCategoryKey = `${activeSchool}:${category.key}`;
+              const compositeKey: CompositeCategoryKey = `${targetEditingSchool}:${category.key}`;
               const confirmedValue = confirmedSchoolData[category.key] ?? '';
               const isDirty = Boolean(dirtyByKey[compositeKey]);
               const displayedValue = isDirty
-                ? draftFieldsBySchool[activeSchool][category.key] ?? ''
+                ? draftFieldsBySchool[targetEditingSchool][category.key] ?? ''
                 : confirmedValue;
 
               const hasUnsavedChanges = isDirty && displayedValue !== confirmedValue;
@@ -1308,7 +1350,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 <div
                   key={compositeKey}
                   className={`glass-panel rounded-2xl p-5 flex flex-col justify-between gap-3 border ${
-                    activeSchool === 'renderia' && isConfirmedFilled
+                    targetEditingSchool === 'renderia' && isConfirmedFilled
                       ? 'border-[#84CC16]/60'
                       : 'border-slate-200/80'
                   }`}
@@ -1351,7 +1393,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                     rows={5}
                     value={displayedValue}
                     onChange={(e) =>
-                      handleDraftChange(activeSchool, category.key, e.target.value)
+                      handleDraftChange(targetEditingSchool, category.key, e.target.value)
                     }
                     placeholder={category.placeholder}
                     className="w-full rounded-xl border border-slate-200/90 bg-white/90 px-3.5 py-2.5 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] leading-relaxed resize-y"
@@ -1389,7 +1431,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                           type="button"
                           disabled={isSaving}
                           onClick={() =>
-                            handleClearCategoryField(activeSchool, category.key)
+                            handleClearCategoryField(targetEditingSchool, category.key)
                           }
                           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs text-slate-500 hover:text-red-700 hover:bg-red-50 disabled:opacity-40 transition-colors cursor-pointer"
                         >
@@ -1400,7 +1442,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                       <button
                         type="button"
                         onClick={() =>
-                          handleConfirmCategoryField(activeSchool, category.key)
+                          handleConfirmCategoryField(targetEditingSchool, category.key)
                         }
                         disabled={!hasUnsavedChanges || isSaving}
                         className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${

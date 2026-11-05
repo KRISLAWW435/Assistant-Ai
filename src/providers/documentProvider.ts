@@ -105,14 +105,103 @@ export const documentProvider: IDocumentProvider = {
 
   prepareKnowledgeContextForSchool(schoolId, knowledgeBase, enabled) {
     if (!enabled) return [];
-    const schoolFields = knowledgeBase[schoolId];
-    if (!schoolFields) return [];
 
-    return KNOWLEDGE_CATEGORIES.map((cat) => ({
-      categoryKey: cat.key,
-      categoryTitle: cat.title,
-      content: (schoolFields[cat.key] || '').trim(),
-    })).filter((item) => item.content.length > 0);
+    if (schoolId === 'all') {
+      const items: PreparedKnowledgeContextItem[] = [];
+      const kFields = knowledgeBase.kiberone;
+      const rFields = knowledgeBase.renderia;
+
+      for (const cat of KNOWLEDGE_CATEGORIES) {
+        const kText = (kFields?.[cat.key] || '').trim();
+        const rText = (rFields?.[cat.key] || '').trim();
+
+        if (kText.length > 0) {
+          items.push({
+            categoryKey: `kiberone_${cat.key}`,
+            categoryTitle: `[KIBERONE] ${cat.title}`,
+            content: kText,
+          });
+        }
+        if (rText.length > 0) {
+          items.push({
+            categoryKey: `renderia_${cat.key}`,
+            categoryTitle: `[RENDERIA] ${cat.title}`,
+            content: rText,
+          });
+        }
+      }
+      return items;
+    }
+
+    if (schoolId === 'kiberone') {
+      const kFields = knowledgeBase.kiberone;
+      const items: PreparedKnowledgeContextItem[] = [];
+      if (kFields) {
+        for (const cat of KNOWLEDGE_CATEGORIES) {
+          const content = (kFields[cat.key] || '').trim();
+          if (content.length > 0) {
+            items.push({
+              categoryKey: cat.key,
+              categoryTitle: cat.title,
+              content,
+            });
+          }
+        }
+      }
+      // Add compact cross-reference of RENDERIA for synergy and cross-promotions if available
+      const rDesc = (knowledgeBase.renderia?.description || '').trim();
+      const rProgs = (knowledgeBase.renderia?.programs || '').trim();
+      if (rDesc.length > 0 || rProgs.length > 0) {
+        const summary = [
+          rDesc ? `Направление RENDERIA: ${rDesc.slice(0, 500)}` : '',
+          rProgs ? `Программы RENDERIA: ${rProgs.slice(0, 500)}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+        items.push({
+          categoryKey: 'renderia_cross_reference',
+          categoryTitle: 'Справка RENDERIA (для поиска взаимных возможностей и синергии)',
+          content: summary,
+        });
+      }
+      return items;
+    }
+
+    if (schoolId === 'renderia') {
+      const rFields = knowledgeBase.renderia;
+      const items: PreparedKnowledgeContextItem[] = [];
+      if (rFields) {
+        for (const cat of KNOWLEDGE_CATEGORIES) {
+          const content = (rFields[cat.key] || '').trim();
+          if (content.length > 0) {
+            items.push({
+              categoryKey: cat.key,
+              categoryTitle: cat.title,
+              content,
+            });
+          }
+        }
+      }
+      // Add compact cross-reference of KIBERONE for synergy and cross-promotions if available
+      const kDesc = (knowledgeBase.kiberone?.description || '').trim();
+      const kProgs = (knowledgeBase.kiberone?.programs || '').trim();
+      if (kDesc.length > 0 || kProgs.length > 0) {
+        const summary = [
+          kDesc ? `Направление KIBERONE: ${kDesc.slice(0, 500)}` : '',
+          kProgs ? `Программы KIBERONE: ${kProgs.slice(0, 500)}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+        items.push({
+          categoryKey: 'kiberone_cross_reference',
+          categoryTitle: 'Справка KIBERONE (для поиска взаимных возможностей и синергии)',
+          content: summary,
+        });
+      }
+      return items;
+    }
+
+    return [];
   },
 
   prepareSelectedDocumentsForApi({
@@ -291,7 +380,7 @@ export const documentProvider: IDocumentProvider = {
     const selectedSchoolDocSet = new Set(selectedSchoolDocumentIds);
     for (const doc of schoolDocuments) {
       const isEligibleSchool =
-        doc.schoolId === activeSchool || doc.schoolId === 'all';
+        activeSchool === 'all' || doc.schoolId === activeSchool || doc.schoolId === 'all';
       if (
         !isEligibleSchool ||
         seenIds.has(doc.id) ||

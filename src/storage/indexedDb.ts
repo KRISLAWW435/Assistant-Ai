@@ -1451,7 +1451,7 @@ export function validateBackupArchiveJson(
         `У диалога «${s.id}» отсутствует текстовое название (title).`
       );
     }
-    if (s.schoolId !== 'kiberone' && s.schoolId !== 'renderia') {
+    if (s.schoolId !== 'kiberone' && s.schoolId !== 'renderia' && s.schoolId !== 'all') {
       throw new Error(
         `У диалога «${s.id}» указан недопустимый schoolId: ${String(s.schoolId)}.`
       );
@@ -1549,7 +1549,7 @@ export function validateBackupArchiveJson(
     if (typeof m.content !== 'string') {
       throw new Error(`У сообщения «${m.id}» отсутствует текст (content).`);
     }
-    if (m.schoolId !== 'kiberone' && m.schoolId !== 'renderia') {
+    if (m.schoolId !== 'kiberone' && m.schoolId !== 'renderia' && m.schoolId !== 'all') {
       throw new Error(`У сообщения «${m.id}» недопустимый schoolId.`);
     }
     if (!VALID_MODES.has(m.mode as AgentMode)) {
@@ -1892,7 +1892,11 @@ export function validateBackupArchiveJson(
     : {};
   const workspaceSettings: WorkspaceBackupSettings = {
     activeSchool:
-      rawSettings.activeSchool === 'renderia' ? 'renderia' : 'kiberone',
+      rawSettings.activeSchool === 'renderia'
+        ? 'renderia'
+        : rawSettings.activeSchool === 'all'
+          ? 'all'
+          : 'kiberone',
     sidebarCollapsed: Boolean(rawSettings.sidebarCollapsed),
     rightPanelCollapsed: Boolean(rawSettings.rightPanelCollapsed),
     rightPanelTab:

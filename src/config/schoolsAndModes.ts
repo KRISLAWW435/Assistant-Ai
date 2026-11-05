@@ -9,6 +9,16 @@ import {
 } from '../types/assistant';
 
 export const SCHOOLS: Record<SchoolId, SchoolConfig> = {
+  all: {
+    id: 'all',
+    name: 'Общее',
+    tagline: 'Единая образовательная экосистема: IT и цифровое творчество',
+    focusDescription:
+      'Общий бизнес KIBERONE и RENDERIA под управлением Анны: единая стратегия, маркетинг, совместные проекты, синергия направлений и аналитика',
+    accentHex: '#00A8B5',
+    secondaryHex: '#165B73',
+    badgeTextClass: 'text-white',
+  },
   kiberone: {
     id: 'kiberone',
     name: 'KIBERONE',
@@ -32,7 +42,7 @@ export const SCHOOLS: Record<SchoolId, SchoolConfig> = {
 };
 
 export function getSchoolNameRu(schoolId: SchoolId | 'all'): string {
-  if (schoolId === 'all') return 'Обе школы (KIBERone & Renderia)';
+  if (schoolId === 'all') return 'Общее (KIBERone & Renderia)';
   return SCHOOLS[schoolId]?.name || schoolId;
 }
 

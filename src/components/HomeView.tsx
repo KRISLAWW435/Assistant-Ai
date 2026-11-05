@@ -61,10 +61,20 @@ export const HomeView: React.FC<HomeViewProps> = ({
 }) => {
   const currentSchool = SCHOOLS[activeSchool];
 
-  const getFilledCategories = (id: SchoolId) =>
-    KNOWLEDGE_CATEGORIES.filter(
+  const getFilledCategories = (id: SchoolId) => {
+    if (id === 'all') {
+      const kCount = KNOWLEDGE_CATEGORIES.filter(
+        (cat) => knowledgeBase.kiberone[cat.key]?.trim().length > 0
+      ).length;
+      const rCount = KNOWLEDGE_CATEGORIES.filter(
+        (cat) => knowledgeBase.renderia[cat.key]?.trim().length > 0
+      ).length;
+      return kCount + rCount;
+    }
+    return KNOWLEDGE_CATEGORIES.filter(
       (cat) => knowledgeBase[id][cat.key]?.trim().length > 0
     ).length;
+  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-8 pb-24">
@@ -102,7 +112,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   className={`w-4 h-4 ${
                     activeSchool === 'renderia'
                       ? 'text-[#84CC16]'
-                      : 'text-[#FFD700]'
+                      : activeSchool === 'all'
+                        ? 'text-[#00A8B5]'
+                        : 'text-[#FFD700]'
                   }`}
                 />
               </button>
