@@ -1,64 +1,98 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
-const LOADING_PHRASES: string[] = [
-  'Работаю над вашей задачей, не отвлекайте... шучу, отдыхайте!',
-  'Секундочку, я изучаю материалы...',
-  'Анализирую картинки, чтобы всё было идеально!',
-  'Собираю мысли в кучу...',
-  'Ещё чуть-чуть, и будет готово!',
-  'Мозговой штурм в самом разгаре...',
-  'Проверяю каждый слайд, чтобы ничего не упустить.',
+export const WARM_ANNA_PHRASES: string[] = [
+  'Анна, вы сегодня молодец! Немного отдохните, я пока поработаю 💗',
+  'Я уже занимаюсь вашей задачей. Можно пока выдохнуть ☺️',
+  'Анна, мои алгоритмы сообщают: сегодня вы невероятно крутая! 💕',
+  'Пока я думаю, у вас есть время на чашечку чая ☕',
+  'Всё под контролем. Работаю над вашим результатом ✨',
+  'Анна, не переживайте, я внимательно всё проверяю 💗',
+  'Вы отдыхайте, а я пока включу свои нейронные извилины 😄',
+  'Кажется, у меня получается что-то хорошее! Ещё немного ✨',
+  'Анна, вдохновение уже в процессе, собираю лучший ответ 🌸',
+  'Ещё чуточку терпения — полирую детали для вас 💫',
 ];
 
 interface LoadingAnimationProps {
   elapsedSec?: number;
   variant?: 'compact' | 'full';
   className?: string;
+  stageLabel?: string;
 }
 
 export const LoadingAnimation: React.FC<LoadingAnimationProps> = ({
   elapsedSec,
   variant = 'full',
   className = '',
+  stageLabel,
 }) => {
   const [phraseIndex, setPhraseIndex] = useState(0);
-  const [fade, setFade] = useState(true);
+  const [opacity, setOpacity] = useState(1);
+  const lastIndexRef = useRef(0);
 
   useEffect(() => {
+    // Strictly switch phrase every 4000ms, never repeating the same phrase twice
     const interval = setInterval(() => {
-      setFade(false);
+      setOpacity(0);
       setTimeout(() => {
-        setPhraseIndex((prev) => (prev + 1) % LOADING_PHRASES.length);
-        setFade(true);
-      }, 300);
-    }, 3000);
+        let nextIndex: number;
+        do {
+          nextIndex = Math.floor(Math.random() * WARM_ANNA_PHRASES.length);
+        } while (
+          nextIndex === lastIndexRef.current &&
+          WARM_ANNA_PHRASES.length > 1
+        );
+
+        lastIndexRef.current = nextIndex;
+        setPhraseIndex(nextIndex);
+        setOpacity(1);
+      }, 350);
+    }, 4000);
 
     return () => clearInterval(interval);
   }, []);
 
+  const currentPhrase = WARM_ANNA_PHRASES[phraseIndex];
+
   if (variant === 'compact') {
     return (
       <div
-        className={`flex items-center gap-3 p-2.5 rounded-xl bg-slate-900/90 text-slate-100 border border-slate-700/60 shadow-lg ${className}`}
+        className={`flex items-center gap-3 p-2.5 rounded-xl bg-white/95 text-slate-800 border border-slate-200/90 shadow-xs ${className}`}
       >
-        {/* Animated neural / pulsing dots */}
+        {/* Circular Progress Spinner */}
         <div className="relative flex items-center justify-center w-6 h-6 shrink-0">
-          <span className="absolute w-5 h-5 rounded-full bg-[#00A8B5]/30 animate-ping" />
-          <span className="relative w-2.5 h-2.5 rounded-full bg-[#00A8B5] shadow-[0_0_8px_#00A8B5]" />
+          <svg
+            className="w-6 h-6 animate-spin text-[#00A8B5]"
+            viewBox="0 0 24 24"
+            fill="none"
+          >
+            <circle
+              className="opacity-20"
+              cx="12"
+              cy="12"
+              r="9"
+              stroke="currentColor"
+              strokeWidth="2.5"
+            />
+            <path
+              className="opacity-90"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            />
+          </svg>
         </div>
 
         <div className="flex-1 min-w-0">
           <p
-            className={`text-xs font-medium text-slate-200 transition-opacity duration-300 truncate ${
-              fade ? 'opacity-100' : 'opacity-0'
-            }`}
+            className="text-xs font-medium text-slate-700 transition-opacity duration-350 truncate"
+            style={{ opacity }}
           >
-            {LOADING_PHRASES[phraseIndex]}
+            {currentPhrase}
           </p>
         </div>
 
         {typeof elapsedSec === 'number' && (
-          <span className="px-2 py-0.5 rounded-md bg-slate-800 text-[10px] font-mono font-semibold text-[#00A8B5] shrink-0 border border-slate-700/50">
+          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-[10px] font-mono font-semibold text-slate-600 shrink-0 border border-slate-200/80">
             {elapsedSec} с
           </span>
         )}
@@ -68,53 +102,68 @@ export const LoadingAnimation: React.FC<LoadingAnimationProps> = ({
 
   return (
     <div
-      className={`rounded-2xl p-4 bg-slate-900/95 text-slate-100 border border-slate-800 shadow-xl space-y-3 relative overflow-hidden backdrop-blur-md ${className}`}
+      className={`rounded-2xl p-4 bg-white/95 text-slate-900 border border-slate-200/90 shadow-sm relative overflow-hidden backdrop-blur-xs transition-all ${className}`}
     >
-      {/* Background Neural Network / Wave Glow */}
-      <div className="absolute inset-0 bg-gradient-to-r from-[#00A8B5]/10 via-purple-500/10 to-[#FFD700]/10 pointer-events-none animate-pulse" />
-
       <div className="relative z-10 flex items-center gap-3.5">
-        {/* Animated Wave / Neural Nodes Container */}
+        {/* Soft Circular Spinner */}
         <div className="relative flex items-center justify-center w-10 h-10 shrink-0">
-          {/* Outer glowing pulsing ring */}
-          <span className="absolute inset-0 rounded-xl bg-[#00A8B5]/20 animate-ping opacity-75" />
-          <span className="absolute inset-1 rounded-lg bg-gradient-to-br from-[#00A8B5] to-indigo-600 opacity-30 blur-xs animate-pulse" />
-
-          {/* Neural nodes grid */}
-          <div className="relative grid grid-cols-2 gap-1 p-2">
-            <span className="w-2 h-2 rounded-full bg-[#00A8B5] animate-bounce [animation-delay:-0.3s] shadow-[0_0_6px_#00A8B5]" />
-            <span className="w-2 h-2 rounded-full bg-[#FFD700] animate-bounce [animation-delay:-0.15s] shadow-[0_0_6px_#FFD700]" />
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:-0.45s] shadow-[0_0_6px_#34d399]" />
-            <span className="w-2 h-2 rounded-full bg-cyan-300 animate-bounce shadow-[0_0_6px_#67e8f9]" />
-          </div>
+          <svg
+            className="w-9 h-9 animate-spin text-[#00A8B5]"
+            viewBox="0 0 36 36"
+            fill="none"
+          >
+            <defs>
+              <linearGradient
+                id="spinnerGradient"
+                x1="0%"
+                y1="0%"
+                x2="100%"
+                y2="100%"
+              >
+                <stop offset="0%" stopColor="#00A8B5" stopOpacity="0.2" />
+                <stop offset="50%" stopColor="#00A8B5" stopOpacity="0.8" />
+                <stop offset="100%" stopColor="#00808C" stopOpacity="1" />
+              </linearGradient>
+            </defs>
+            <circle
+              cx="18"
+              cy="18"
+              r="14"
+              stroke="#E2E8F0"
+              strokeWidth="3"
+            />
+            <path
+              d="M18 4 A14 14 0 0 1 32 18"
+              stroke="url(#spinnerGradient)"
+              strokeWidth="3.2"
+              strokeLinecap="round"
+            />
+          </svg>
+          {/* Gentle center pulse */}
+          <span className="absolute w-2 h-2 rounded-full bg-[#00A8B5] animate-ping opacity-60" />
+          <span className="absolute w-2 h-2 rounded-full bg-[#00A8B5]" />
         </div>
 
         {/* Text Content */}
         <div className="flex-1 min-w-0 space-y-1">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-[#00A8B5]">
-              Генерация ответа
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[#00A8B5] flex items-center gap-1.5">
+              <span>{stageLabel || 'Обработка запроса'}</span>
             </span>
             {typeof elapsedSec === 'number' && (
-              <span className="px-2 py-0.5 rounded-lg bg-slate-800/80 border border-slate-700/80 text-[11px] font-mono font-bold text-[#00A8B5] shrink-0">
+              <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[11px] font-mono font-semibold text-slate-600 shrink-0">
                 {elapsedSec} с
               </span>
             )}
           </div>
 
           <p
-            className={`text-xs font-semibold text-slate-100 leading-relaxed transition-all duration-300 ${
-              fade ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-1'
-            }`}
+            className="text-xs font-medium text-slate-700 leading-relaxed transition-opacity duration-350"
+            style={{ opacity }}
           >
-            {LOADING_PHRASES[phraseIndex]}
+            {currentPhrase}
           </p>
         </div>
-      </div>
-
-      {/* Pulsing Wave Bar at the bottom */}
-      <div className="relative w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-        <div className="absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-[#00A8B5] via-[#FFD700] to-emerald-400 rounded-full animate-[shimmer_2s_infinite] shadow-[0_0_10px_#00A8B5]" />
       </div>
     </div>
   );

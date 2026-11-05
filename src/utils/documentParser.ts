@@ -7,6 +7,7 @@ import {
   DocumentProcessingStatus,
   ExtractedDocumentImage,
   ExtractedSlideItem,
+  ExtractedSpreadsheetSheet,
   KnowledgeFileType,
   VisualColorSample,
 } from '../types/assistant';
@@ -21,6 +22,8 @@ export const SUPPORTED_DOCUMENT_EXTENSIONS = [
   'docx',
   'pptx',
   'ppt',
+  'xlsx',
+  'xls',
   'txt',
   'csv',
   'md',
@@ -63,6 +66,7 @@ export interface ParsedDocumentResult {
   slides?: ExtractedSlideItem[];
   colorPalette?: VisualColorSample[];
   extractedImages?: ExtractedDocumentImage[];
+  tableSheets?: ExtractedSpreadsheetSheet[];
   durationSec?: number;
   videoWidth?: number;
   videoHeight?: number;
@@ -71,6 +75,8 @@ export interface ParsedDocumentResult {
 
 export function getStatusLabelRu(status: DocumentProcessingStatus): string {
   switch (status) {
+    case 'uploading':
+      return 'Загружается';
     case 'queued':
     case 'pending':
       return 'Ожидает обработки';
@@ -78,7 +84,7 @@ export function getStatusLabelRu(status: DocumentProcessingStatus): string {
       return 'Обрабатывается';
     case 'processed':
     case 'verified':
-      return 'Успешно обработан';
+      return 'Готов';
     case 'no_text':
       return 'Нет доступного текста';
     case 'error':
@@ -125,6 +131,10 @@ export function getMimeTypeFromExt(ext: string): string {
       return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
     case 'ppt':
       return 'application/vnd.ms-powerpoint';
+    case 'xlsx':
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'xls':
+      return 'application/vnd.ms-excel';
     case 'txt':
       return 'text/plain';
     case 'csv':
@@ -967,24 +977,330 @@ export async function unpackSelectedZipEntries(
 }
 
 /**
- * Formats CSV content cleanly while keeping all rows and columns readable.
+ * Parses CSV content cleanly into structured headers and rows, supporting comma, semicolon and tab delimiters.
  */
-function formatCsvText(rawCsv: string): {
+export function parseCsvStructured(rawCsv: string): {
   text: string;
+  sheet: ExtractedSpreadsheetSheet;
   rowCount: number;
 } {
   const normalized = rawCsv.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
   if (!normalized) {
-    return { text: '', rowCount: 0 };
+    return {
+      text: '',
+      sheet: { name: 'CSV', headers: [], rows: [], rowCount: 0, columnCount: 0 },
+      rowCount: 0,
+    };
   }
   const lines = normalized
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+  if (lines.length === 0) {
+    return {
+      text: '',
+      sheet: { name: 'CSV', headers: [], rows: [], rowCount: 0, columnCount: 0 },
+      rowCount: 0,
+    };
+  }
+
+  // Detect delimiter: semicolon (standard in Russian Windows Excel), comma or tab
+  const firstLine = lines[0];
+  const semiCount = (firstLine.match(/;/g) || []).length;
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const tabCount = (firstLine.match(/\t/g) || []).length;
+  const delimiter =
+    tabCount > semiCount && tabCount > commaCount
+      ? '\t'
+      : semiCount >= commaCount
+        ? ';'
+        : ',';
+
+  // Parse CSV line accounting for quoted fields
+  const parseLine = (line: string): string[] => {
+    const result: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === delimiter && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  };
+
+  const parsedRows = lines.map(parseLine);
+  const maxCols = Math.max(...parsedRows.map((r) => r.length), 1);
+  const normalizedRows = parsedRows.map((r) => {
+    const padded = [...r];
+    while (padded.length < maxCols) padded.push('');
+    return padded;
+  });
+
+  const headers = normalizedRows[0] || [];
+  const dataRows = normalizedRows.slice(1);
+
+  const sheet: ExtractedSpreadsheetSheet = {
+    name: 'CSV Таблица',
+    headers,
+    rows: dataRows,
+    rowCount: lines.length,
+    columnCount: maxCols,
+  };
+
+  const mdLines: string[] = [
+    `### Таблица CSV (${lines.length} строк, ${maxCols} столбцов)`,
+    `| ${headers.map((h, i) => (h ? h.replace(/\|/g, '\\|') : `Колонка ${i + 1}`)).join(' | ')} |`,
+    `| ${headers.map(() => '---').join(' | ')} |`,
+    ...dataRows.map(
+      (row) => `| ${row.map((c) => c.replace(/\|/g, '\\|')).join(' | ')} |`
+    ),
+  ];
+
   return {
-    text: lines.join('\n'),
+    text: mdLines.join('\n'),
+    sheet,
     rowCount: lines.length,
   };
+}
+
+/**
+ * Extracts structured sheets, tables, and formatted markdown from an XLSX/XLS buffer using JSZip.
+ */
+export async function extractXlsxSpreadsheet(buffer: ArrayBuffer): Promise<{
+  text: string;
+  sheets: ExtractedSpreadsheetSheet[];
+  rowCount: number;
+  columnCount: number;
+  warning?: string;
+}> {
+  try {
+    const zip = await JSZip.loadAsync(buffer);
+
+    // 1. Parse sharedStrings.xml
+    const sharedStrings: string[] = [];
+    const sharedStringsFile = zip.file('xl/sharedStrings.xml');
+    if (sharedStringsFile) {
+      const xml = await sharedStringsFile.async('text');
+      const siMatches = xml.match(/<si[\s\S]*?<\/si>/g) || [];
+      for (const si of siMatches) {
+        const tMatches = si.match(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g) || [];
+        const fullString = tMatches
+          .map((m) => m.replace(/<t(?:\s[^>]*)?>/, '').replace(/<\/t>$/, ''))
+          .join('')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'");
+        sharedStrings.push(fullString);
+      }
+    }
+
+    // 2. Parse workbook.xml to find sheet names and relationship IDs
+    const workbookFile = zip.file('xl/workbook.xml');
+    const sheetDefs: Array<{ name: string; rId: string; sheetId: string }> = [];
+    if (workbookFile) {
+      const wbXml = await workbookFile.async('text');
+      const sheetTags = wbXml.match(/<sheet\s+[^>]*\/?>/g) || [];
+      for (const tag of sheetTags) {
+        const nameMatch = tag.match(/name="([^"]+)"/);
+        const rIdMatch = tag.match(/r:id="([^"]+)"/);
+        const sheetIdMatch = tag.match(/sheetId="([^"]+)"/);
+        if (nameMatch) {
+          sheetDefs.push({
+            name: nameMatch[1],
+            rId: rIdMatch ? rIdMatch[1] : '',
+            sheetId: sheetIdMatch ? sheetIdMatch[1] : `${sheetDefs.length + 1}`,
+          });
+        }
+      }
+    }
+
+    // 3. Parse workbook.xml.rels to resolve target filenames for sheets
+    const relsMap: Record<string, string> = {};
+    const relsFile = zip.file('xl/_rels/workbook.xml.rels');
+    if (relsFile) {
+      const relsXml = await relsFile.async('text');
+      const relTags = relsXml.match(/<Relationship\s+[^>]*\/?>/g) || [];
+      for (const rel of relTags) {
+        const idMatch = rel.match(/Id="([^"]+)"/);
+        const targetMatch = rel.match(/Target="([^"]+)"/);
+        if (idMatch && targetMatch) {
+          relsMap[idMatch[1]] = targetMatch[1]
+            .replace(/^\/?xl\//, '')
+            .replace(/^\//, '');
+        }
+      }
+    }
+
+    // 4. Extract data from each worksheet
+    const extractedSheets: ExtractedSpreadsheetSheet[] = [];
+    let totalRows = 0;
+    let maxCols = 0;
+
+    const sheetsToProcess =
+      sheetDefs.length > 0
+        ? sheetDefs
+        : [{ name: 'Лист 1', rId: '', sheetId: '1' }];
+
+    for (let sIdx = 0; sIdx < sheetsToProcess.length; sIdx++) {
+      const def = sheetsToProcess[sIdx];
+      let sheetPath =
+        def.rId && relsMap[def.rId]
+          ? `xl/${relsMap[def.rId]}`
+          : `xl/worksheets/sheet${sIdx + 1}.xml`;
+      let sheetFile = zip.file(sheetPath);
+      if (!sheetFile) {
+        sheetPath = `xl/worksheets/sheet${sIdx + 1}.xml`;
+        sheetFile = zip.file(sheetPath);
+      }
+      if (!sheetFile) continue;
+
+      const sheetXml = await sheetFile.async('text');
+      const rowMatches = sheetXml.match(/<row\s+[^>]*>[\s\S]*?<\/row>/g) || [];
+      const parsedRows: string[][] = [];
+
+      for (const rowXml of rowMatches) {
+        const cellMatches =
+          rowXml.match(/<c\s+[^>]*>[\s\S]*?<\/c>|<c\s+[^>]*\/>/g) || [];
+        const rowCells: Record<number, string> = {};
+        let maxColInRow = 0;
+
+        for (const cellXml of cellMatches) {
+          const rMatch = cellXml.match(/r="([A-Z]+)(\d+)"/);
+          if (!rMatch) continue;
+          const colLetters = rMatch[1];
+          let colIdx = 0;
+          for (let c = 0; c < colLetters.length; c++) {
+            colIdx = colIdx * 26 + (colLetters.charCodeAt(c) - 64);
+          }
+          colIdx -= 1; // 0-indexed
+
+          const tMatch = cellXml.match(/t="([^"]+)"/);
+          const cellType = tMatch ? tMatch[1] : '';
+
+          let val = '';
+          if (cellType === 's') {
+            const vMatch = cellXml.match(/<v>(\d+)<\/v>/);
+            if (vMatch) {
+              const strIdx = parseInt(vMatch[1], 10);
+              val = sharedStrings[strIdx] || '';
+            }
+          } else if (cellType === 'inlineStr') {
+            const isMatch = cellXml.match(
+              /<is>[\s\S]*?<t(?:\s[^>]*)?>([\s\S]*?)<\/t>[\s\S]*?<\/is>/
+            );
+            val = isMatch ? isMatch[1] : '';
+          } else {
+            const vMatch = cellXml.match(/<v>([\s\S]*?)<\/v>/);
+            val = vMatch ? vMatch[1] : '';
+          }
+
+          val = val
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim();
+
+          rowCells[colIdx] = val;
+          if (colIdx > maxColInRow) maxColInRow = colIdx;
+        }
+
+        const rowArr: string[] = [];
+        for (let i = 0; i <= maxColInRow; i++) {
+          rowArr.push(rowCells[i] || '');
+        }
+        if (rowArr.some((c) => c.length > 0)) {
+          parsedRows.push(rowArr);
+        }
+      }
+
+      if (parsedRows.length > 0) {
+        const sheetMaxCols = Math.max(...parsedRows.map((r) => r.length), 1);
+        const normalizedRows = parsedRows.map((r) => {
+          const padded = [...r];
+          while (padded.length < sheetMaxCols) padded.push('');
+          return padded;
+        });
+
+        const headers = normalizedRows[0] || [];
+        const dataRows = normalizedRows.slice(1);
+
+        extractedSheets.push({
+          name: def.name || `Лист ${sIdx + 1}`,
+          headers,
+          rows: dataRows,
+          rowCount: parsedRows.length,
+          columnCount: sheetMaxCols,
+        });
+
+        totalRows += parsedRows.length;
+        if (sheetMaxCols > maxCols) maxCols = sheetMaxCols;
+      }
+    }
+
+    if (extractedSheets.length === 0) {
+      return {
+        text: '',
+        sheets: [],
+        rowCount: 0,
+        columnCount: 0,
+        warning: 'Таблица Excel пуста или не содержит распознаваемых данных.',
+      };
+    }
+
+    // Build clean Markdown tables for LLM
+    const mdParts: string[] = [];
+    for (const sh of extractedSheets) {
+      mdParts.push(
+        `### Лист: «${sh.name}» (строк: ${sh.rowCount}, столбцов: ${sh.columnCount})`
+      );
+      if (sh.headers.length > 0) {
+        mdParts.push(
+          `| ${sh.headers.map((h, i) => (h ? h.replace(/\|/g, '\\|') : `Колонка ${i + 1}`)).join(' | ')} |`
+        );
+        mdParts.push(`| ${sh.headers.map(() => '---').join(' | ')} |`);
+        for (const row of sh.rows) {
+          mdParts.push(
+            `| ${row.map((cell) => cell.replace(/\|/g, '\\|')).join(' | ')} |`
+          );
+        }
+      }
+      mdParts.push('');
+    }
+
+    return {
+      text: mdParts.join('\n').trim(),
+      sheets: extractedSheets,
+      rowCount: totalRows,
+      columnCount: maxCols,
+    };
+  } catch (err: unknown) {
+    const msg = String(err instanceof Error ? err.message : err || '');
+    console.warn('[XLSX Extraction Error]', msg);
+    return {
+      text: '',
+      sheets: [],
+      rowCount: 0,
+      columnCount: 0,
+      warning: `Не удалось разобрать файл Excel: ${msg}. Пожалуйста, убедитесь, что файл не повреждён.`,
+    };
+  }
 }
 
 /**
@@ -1011,7 +1327,7 @@ export async function parseDocumentFile(
       statusLabel: getStatusLabelRu('error'),
       extractedText: '',
       fileType,
-      warning: `Формат .${ext || 'неизвестен'} не поддерживается. Допустимые форматы: PDF, DOCX, PPTX, PPT, TXT, CSV, MD, PNG, JPG, JPEG, WEBP, ZIP, MP4, MOV, WEBM.`,
+      warning: `Формат .${ext || 'неизвестен'} не поддерживается. Допустимые форматы: PDF, DOCX, PPTX, PPT, XLSX, XLS, TXT, CSV, MD, PNG, JPG, JPEG, WEBP, ZIP, MP4, MOV, WEBM.`,
     };
   }
 
@@ -1199,7 +1515,7 @@ export async function parseDocumentFile(
     // =========================================================================
     if (ext === 'csv') {
       const decoded = decodeTextBufferSmart(buffer);
-      const { text, rowCount } = formatCsvText(decoded);
+      const { text, sheet, rowCount } = parseCsvStructured(decoded);
       if (!text || rowCount === 0) {
         return {
           name: file.name,
@@ -1223,6 +1539,49 @@ export async function parseDocumentFile(
         pageCount: rowCount,
         fileType: 'document',
         mimeType: 'text/csv',
+        tableSheets: [sheet],
+      };
+    }
+
+    // =========================================================================
+    // 5.1 XLSX & XLS (Structured Spreadsheet parsing with JSZip)
+    // =========================================================================
+    if (ext === 'xlsx' || ext === 'xls') {
+      onStatusChange?.(
+        'processing',
+        'Анализ листов и ячеек таблицы Excel...'
+      );
+      const { text, sheets, rowCount, warning } =
+        await extractXlsxSpreadsheet(buffer);
+
+      if (!text || sheets.length === 0) {
+        return {
+          name: file.name,
+          extension: ext,
+          sizeBytes: file.size,
+          status: 'no_text',
+          statusLabel: getStatusLabelRu('no_text'),
+          extractedText: '',
+          fileType: 'document',
+          mimeType: getMimeTypeFromExt(ext),
+          warning:
+            warning ||
+            'Таблица Excel не содержит строк с данными или формулами.',
+        };
+      }
+
+      return {
+        name: file.name,
+        extension: ext,
+        sizeBytes: file.size,
+        status: 'processed',
+        statusLabel: `Распознано листов: ${sheets.length}`,
+        extractedText: text,
+        pageCount: rowCount,
+        fileType: 'document',
+        mimeType: getMimeTypeFromExt(ext),
+        tableSheets: sheets,
+        warning,
       };
     }
 

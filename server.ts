@@ -43,7 +43,8 @@ export const GEMINI_MODEL =
   rawEnvGeminiModel && !rawEnvGeminiModel.startsWith('gemini-2.5')
     ? rawEnvGeminiModel
     : 'gemini-3.8-flash';
-const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
+export const GEMINI_FILES_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
+const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.8-flash';
 const rawEnvOpenRouterModel = (process.env.OPENROUTER_MODEL || '').trim();
 export const OPENROUTER_DEFAULT_FREE_MODEL =
   rawEnvOpenRouterModel &&
@@ -236,10 +237,10 @@ const VALID_PROVIDER_IDS = new Set<AIProviderId>([
 
 // Section 5: Reasonable context size limits to prevent slow generation
 const MAX_MESSAGES_IN_CONTEXT = 12;
-const MAX_SINGLE_MESSAGE_CHARS = 8000;
-const MAX_SINGLE_DOC_CHARS = 15000;
-const MAX_TOTAL_DOCS = 30;
-const MAX_KB_CATEGORY_CHARS = 3500;
+const MAX_SINGLE_MESSAGE_CHARS = 12000;
+const MAX_SINGLE_DOC_CHARS = 150000;
+const MAX_TOTAL_DOCS = 50;
+const MAX_KB_CATEGORY_CHARS = 6000;
 const STREAM_CHUNK_SIZE_CHARS = 180;
 
 // Per-attempt timeout & heartbeat interval
@@ -679,6 +680,17 @@ export function isStrictlyFreeOpenRouterModelId(modelId: string): boolean {
   return false;
 }
 
+interface OpenRouterModelDetails {
+  id: string;
+  name: string;
+  contextLength: number;
+  inputModalities: string[];
+  supportsImages: boolean;
+  supportsFiles: boolean;
+}
+
+let cachedOpenRouterCatalogDetails: OpenRouterModelDetails[] = [];
+
 async function fetchOpenRouterFreeCatalog(
   signal?: AbortSignal
 ): Promise<string[]> {
@@ -708,11 +720,20 @@ async function fetchOpenRouterFreeCatalog(
     const json = (await res.json()) as {
       data?: Array<{
         id?: string;
+        name?: string;
+        context_length?: number;
         pricing?: { prompt?: string | number; completion?: string | number };
+        architecture?: {
+          modality?: string;
+          input_modalities?: string[];
+          output_modalities?: string[];
+        };
       }>;
     };
 
     const freeSet = new Set<string>(['openrouter/free']);
+    const details: OpenRouterModelDetails[] = [];
+
     for (const item of json.data || []) {
       const id = String(item?.id || '').trim();
       if (!id) continue;
@@ -723,12 +744,41 @@ async function fetchOpenRouterFreeCatalog(
         Number.isFinite(completionPrice) &&
         promptPrice === 0 &&
         completionPrice === 0;
+
       if (isZeroCost && (id === 'openrouter/free' || id.endsWith(':free'))) {
         freeSet.add(id);
+
+        const contextLength = Number(item?.context_length ?? 32768);
+        const inputModalities = Array.isArray(
+          item?.architecture?.input_modalities
+        )
+          ? item.architecture!.input_modalities
+          : [];
+        const modality = String(
+          item?.architecture?.modality || ''
+        ).toLowerCase();
+        const idLower = id.toLowerCase();
+        const supportsImages =
+          inputModalities.includes('image') ||
+          modality.includes('image') ||
+          idLower.includes('vl') ||
+          idLower.includes('vision');
+        const supportsFiles =
+          inputModalities.includes('file') || contextLength >= 32000;
+
+        details.push({
+          id,
+          name: String(item?.name || id),
+          contextLength,
+          inputModalities,
+          supportsImages,
+          supportsFiles,
+        });
       }
     }
 
     cachedVerifiedFreeModels = freeSet;
+    cachedOpenRouterCatalogDetails = details;
     lastOpenRouterCatalogFetchMs = now;
     providerHealthRegistry.openrouter.availableFreeModels =
       Array.from(freeSet).slice(0, 15);
@@ -738,6 +788,55 @@ async function fetchOpenRouterFreeCatalog(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function getOpenRouterCandidateModels(params: {
+  hasImages?: boolean;
+  hasDocuments?: boolean;
+  signal?: AbortSignal;
+}): Promise<string[]> {
+  await fetchOpenRouterFreeCatalog(params.signal);
+
+  let candidates: string[] = [];
+
+  if (params.hasImages) {
+    const matching = cachedOpenRouterCatalogDetails
+      .filter((m) => m.supportsImages)
+      .sort((a, b) => b.contextLength - a.contextLength)
+      .map((m) => m.id);
+
+    candidates = Array.from(
+      new Set([
+        ...OPENROUTER_MULTIMODAL_PRIORITY_MODELS,
+        ...matching,
+        'openrouter/free',
+      ])
+    ).filter((m) => isStrictlyFreeOpenRouterModelId(m));
+  } else if (params.hasDocuments) {
+    const matching = cachedOpenRouterCatalogDetails
+      .filter((m) => m.supportsFiles || m.contextLength >= 32000)
+      .sort((a, b) => b.contextLength - a.contextLength)
+      .map((m) => m.id);
+
+    candidates = Array.from(
+      new Set([
+        process.env.OPENROUTER_MODEL?.trim() || OPENROUTER_DEFAULT_FREE_MODEL,
+        ...matching,
+        ...OPENROUTER_MULTIMODAL_PRIORITY_MODELS,
+        'openrouter/free',
+      ])
+    ).filter((m) => Boolean(m) && isStrictlyFreeOpenRouterModelId(m));
+  } else {
+    candidates = Array.from(
+      new Set([
+        process.env.OPENROUTER_MODEL?.trim() || OPENROUTER_DEFAULT_FREE_MODEL,
+        ...OPENROUTER_MULTIMODAL_PRIORITY_MODELS,
+        'openrouter/free',
+      ])
+    ).filter((m) => Boolean(m) && isStrictlyFreeOpenRouterModelId(m));
+  }
+
+  return candidates.length > 0 ? candidates : ['openrouter/free'];
 }
 
 const SCHOOL_PROMPT_PROFILES: Record<
@@ -1266,6 +1365,7 @@ async function executeGeminiGeneration(params: {
   signal: AbortSignal;
   simulateError?: string;
   hasImages?: boolean;
+  hasFiles?: boolean;
 }): Promise<{ text: string; model: string }> {
   if (params.simulateError === 'force_error' || params.simulateError === 'force_gemini_error') {
     throw new Error('SIMULATED_GEMINI_ERROR');
@@ -1273,19 +1373,12 @@ async function executeGeminiGeneration(params: {
 
   const ai = getGenAIClient();
 
-  // Order candidate models starting with vision-capable models when images are present
-  const visionPriorityModels = params.hasImages
-    ? ['gemini-3.8-flash', 'gemini-flash-latest']
-    : [lastHealthyGeminiModel];
-
-  const candidateModels = Array.from(
-    new Set([
-      ...visionPriorityModels,
-      lastHealthyGeminiModel,
-      ...GEMINI_MODEL_CASCADE,
-      GEMINI_MODEL,
-    ])
-  ).filter(Boolean);
+  // For file analysis (documents or images), use gemini-3.1-flash-lite as the default primary model!
+  // Fallback to gemini-3.8-flash only if gemini-3.1-flash-lite returns an error.
+  const hasFilesOrImages = Boolean(params.hasFiles || params.hasImages);
+  const candidateModels = hasFilesOrImages
+    ? ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest']
+    : [GEMINI_MODEL, 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
 
   let lastErr: unknown = null;
 
@@ -1364,6 +1457,8 @@ async function executeOpenRouterFreeGeneration(params: {
   signal: AbortSignal;
   selectedImages?: IncomingSelectedImage[];
   hasImages?: boolean;
+  hasDocuments?: boolean;
+  candidateModels?: string[];
 }): Promise<{ text: string; model: string }> {
   const apiKey = getOpenRouterApiKey();
   if (!apiKey || apiKey === 'MY_OPENROUTER_API_KEY') {
@@ -1375,21 +1470,14 @@ async function executeOpenRouterFreeGeneration(params: {
       (params.selectedImages && params.selectedImages.length > 0)
   );
 
-  // Priority free multimodal models array for file/image analysis
-  // When 'models' array is provided, OpenRouter cascades automatically
-  const candidateModels: string[] = hasImages
-    ? [...OPENROUTER_MULTIMODAL_PRIORITY_MODELS]
-    : [
-        process.env.OPENROUTER_MODEL?.trim() || OPENROUTER_DEFAULT_FREE_MODEL,
-        ...OPENROUTER_MULTIMODAL_PRIORITY_MODELS,
-      ].filter((m, idx, arr) => m && arr.indexOf(m) === idx);
-
-  // Filter models to strictly verified free models
-  const safeModels = candidateModels.filter((m) =>
-    isStrictlyFreeOpenRouterModelId(m)
-  );
-  const modelsPayload =
-    safeModels.length > 0 ? safeModels : ['openrouter/free'];
+  const modelsToTry =
+    params.candidateModels && params.candidateModels.length > 0
+      ? params.candidateModels
+      : await getOpenRouterCandidateModels({
+          hasImages,
+          hasDocuments: params.hasDocuments,
+          signal: params.signal,
+        });
 
   // Construct OpenAI-compatible messages with multimodal support
   const openAiMessages: Array<{
@@ -1445,61 +1533,86 @@ async function executeOpenRouterFreeGeneration(params: {
   const onAbort = () => timeoutController.abort();
   params.signal.addEventListener('abort', onAbort, { once: true });
 
+  let lastModelError: Error | null = null;
+
   try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
-        'X-Title': 'KIBERONE & RENDERIA Business Assistant',
-      },
-      body: JSON.stringify({
-        models: modelsPayload,
-        model: modelsPayload[0],
-        messages: openAiMessages,
-      }),
-      signal: timeoutController.signal,
-    });
-
-    if (!res.ok) {
-      let errDetail = `${res.status}`;
-      try {
-        const errJson = (await res.json()) as {
-          error?: { message?: string; code?: number };
-        };
-        if (errJson?.error?.message) {
-          errDetail = `${res.status}: ${errJson.error.message}`;
-        }
-      } catch {
-        // ignore parse error
+    for (const modelId of modelsToTry) {
+      if (params.signal.aborted || timeoutController.signal.aborted) {
+        throw new Error('Request aborted');
       }
-      throw new Error(`OpenRouter HTTP ${errDetail}`);
+
+      console.log(`[OpenRouter Sequential Route] Attempting model: ${modelId}`);
+
+      try {
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
+            'X-Title': 'KIBERONE & RENDERIA Business Assistant',
+          },
+          body: JSON.stringify({
+            model: modelId,
+            messages: openAiMessages,
+          }),
+          signal: timeoutController.signal,
+        });
+
+        if (!res.ok) {
+          let errDetail = `${res.status}`;
+          try {
+            const errJson = (await res.json()) as {
+              error?: { message?: string; code?: number };
+            };
+            if (errJson?.error?.message) {
+              errDetail = `${res.status}: ${errJson.error.message}`;
+            }
+          } catch {
+            // ignore parse error
+          }
+          throw new Error(`OpenRouter HTTP ${errDetail}`);
+        }
+
+        const data = (await res.json()) as {
+          model?: string;
+          choices?: Array<{ message?: { content?: string } }>;
+          error?: { message?: string };
+        };
+
+        if (data?.error?.message) {
+          throw new Error(`OpenRouter Error: ${data.error.message}`);
+        }
+
+        const rawContent = data?.choices?.[0]?.message?.content;
+        const text = typeof rawContent === 'string' ? rawContent.trim() : '';
+        if (!text) {
+          throw new Error('EMPTY_MODEL_RESPONSE');
+        }
+
+        const actualModel = String(data?.model || modelId).trim();
+        console.log(
+          `[OpenRouter Sequential Success] Successfully generated content with: ${actualModel}`
+        );
+        return {
+          text,
+          model: actualModel,
+        };
+      } catch (candidateErr) {
+        lastModelError =
+          candidateErr instanceof Error
+            ? candidateErr
+            : new Error(String(candidateErr));
+        console.warn(
+          `[OpenRouter Model Candidate Failed] Model «${modelId}» error: ${lastModelError.message}. Switching to next candidate...`
+        );
+      }
     }
 
-    const data = (await res.json()) as {
-      model?: string;
-      choices?: Array<{ message?: { content?: string } }>;
-      error?: { message?: string };
-    };
-
-    if (data?.error?.message) {
-      throw new Error(`OpenRouter Error: ${data.error.message}`);
-    }
-
-    const rawContent = data?.choices?.[0]?.message?.content;
-    const text = typeof rawContent === 'string' ? rawContent.trim() : '';
-    // Strict requirement: Never substitute internal model reasoning for user content.
-    // If content is empty, trigger the standard controlled failover via EMPTY_MODEL_RESPONSE.
-    if (!text) {
-      throw new Error('EMPTY_MODEL_RESPONSE');
-    }
-
-    const actualModel = String(data?.model || modelsPayload[0]).trim();
-    return {
-      text,
-      model: actualModel,
-    };
+    throw (
+      lastModelError ||
+      new Error('Все подходящие бесплатные модели OpenRouter завершились ошибкой.')
+    );
   } finally {
     clearTimeout(timer);
     params.signal.removeEventListener('abort', onAbort);
@@ -2303,24 +2416,16 @@ export async function startServer(
     ];
 
     let candidateProviders: AIProviderId[];
-    if (isLargeMultimodalPayload) {
-      // REQUIREMENT 2: If attached images > 10, AUTOMATICALLY bypass Gemini and route directly to OpenRouter multimodal model (nvidia/nemotron-3.5-super-vl:free)
-      candidateProviders = isOpenRouterApiKeyConfigured()
-        ? ['openrouter', 'gemini']
-        : ['gemini'];
-    } else if (hasImages) {
-      if (requestedSelection === 'openrouter') {
-        candidateProviders = ['openrouter', 'gemini'];
-      } else {
-        candidateProviders = ['gemini', 'openrouter'];
-      }
-    } else if (requestedSelection !== 'auto') {
-      // Put requested provider first, followed by the remaining configured providers in failover order
+    if (requestedSelection !== 'auto') {
       candidateProviders = [
         requestedSelection,
         ...configuredOrder.filter((p) => p !== requestedSelection),
       ];
     } else {
+      // Sequential fallback route:
+      // 1. Gemini (with gemini-3.1-flash-lite as default for files)
+      // 2. OpenRouter (models suitable for files/images)
+      // 3. Ollama (if configured)
       const baseOrder: AIProviderId[] = configuredOrder.filter((p) => {
         if (p === 'ollama') {
           return (
@@ -2333,11 +2438,16 @@ export async function startServer(
       if (baseOrder.length === 0) {
         baseOrder.push('gemini', 'openrouter');
       }
-      // Put non-cooldown configured providers first, keeping fallback order intact
       const ready = baseOrder.filter((p) => !isProviderInCooldown(p));
       const cooling = baseOrder.filter((p) => isProviderInCooldown(p));
       candidateProviders = [...ready, ...cooling];
     }
+
+    const docNames = (body.selectedDocuments || []).map((d) => d.name);
+    const imgNames = validImages.map((i) => i.name);
+    console.log(
+      `[AI File Routing] RequestId: ${requestId}, School: ${body.schoolId}, Mode: ${body.mode}, Docs: ${docsCount} [${docNames.join(', ')}], Images: ${validImages.length} [${imgNames.join(', ')}], Candidates: [${candidateProviders.join(' -> ')}]`
+    );
 
     // Track actual client disconnect via res.on('close') before res.writableEnded
     const abortController = new AbortController();
@@ -2520,6 +2630,7 @@ export async function startServer(
               signal: abortController.signal,
               simulateError: body.simulateError,
               hasImages,
+              hasFiles: docsCount > 0,
             });
           } else if (providerId === 'openrouter') {
             attemptResult = await executeOpenRouterFreeGeneration({
@@ -2527,6 +2638,7 @@ export async function startServer(
               messages: normalizedRawMessages,
               selectedImages: validImages,
               hasImages,
+              hasDocuments: docsCount > 0,
               signal: abortController.signal,
             });
           } else {
@@ -2542,12 +2654,9 @@ export async function startServer(
           const failoverUsed = Boolean(
             firstFailedProvider && firstFailedProvider !== providerId
           );
-          const failoverNotice =
-            isLargeMultimodalPayload && providerId === 'openrouter'
-              ? `Автоматическая маршрутизация в OpenRouter (${attemptResult.model}): отправлено ${validImages.length} слайдов/изображений (>10) для полного анализа с высоким контекстом.`
-              : failoverUsed
-                ? `${PROVIDER_SHORT_LABELS_RU[firstFailedProvider!]} недоступен или не настроен. Переключились на ${PROVIDER_SHORT_LABELS_RU[providerId]}`
-                : undefined;
+          const failoverNotice = failoverUsed
+            ? `${PROVIDER_SHORT_LABELS_RU[firstFailedProvider!]} временно недоступен. Переключились на ${PROVIDER_SHORT_LABELS_RU[providerId]} (${attemptResult.model})`
+            : undefined;
 
           finalResult = {
             text: attemptResult.text,

@@ -104,6 +104,7 @@ interface RightWorkspacePanelProps {
   knowledgeBase: KnowledgeBaseBySchool;
   uploadedDocuments: UploadedDocumentRecord[];
   stagedDraftAttachment: ChatAttachment | null;
+  stagedDraftAttachments?: ChatAttachment[];
   isParsingDialogueFile?: boolean;
   parsingStatusLabel?: string | null;
   geminiStatus?: { configured: boolean; model: string } | null;
@@ -192,6 +193,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
   knowledgeBase,
   uploadedDocuments,
   stagedDraftAttachment,
+  stagedDraftAttachments,
   isParsingDialogueFile = false,
   parsingStatusLabel = null,
   geminiStatus = null,
@@ -230,6 +232,17 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
     useState<UploadedDocumentRecord | null>(null);
   const [isDeletingLibraryDoc, setIsDeletingLibraryDoc] = useState(false);
   const [previewSchoolDoc, setPreviewSchoolDoc] = useState<ChatAttachment | null>(null);
+
+  // Preview tab state for slides, spreadsheet sheets, and image zoom
+  const [activeSlideIndex, setActiveSlideIndex] = useState<number>(0);
+  const [activeSpreadsheetSheetIndex, setActiveSpreadsheetSheetIndex] = useState<number>(0);
+  const [imagePreviewZoom, setImagePreviewZoom] = useState<number>(100);
+
+  useEffect(() => {
+    setActiveSlideIndex(0);
+    setActiveSpreadsheetSheetIndex(0);
+    setImagePreviewZoom(100);
+  }, [selectedAttachmentId]);
 
   const handleDownloadAttachment = (att: ChatAttachment) => {
     void downloadOrExportFile({
@@ -620,17 +633,19 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
   const schoolConfig = SCHOOLS[activeSchool];
   const modeConfig = AGENT_MODES[activeMode];
 
-  // Combine saved dialogue attachments + currently staged draft attachment (if any)
+  // Combine saved dialogue attachments + all currently staged draft attachments
   const sessionAttachments: ChatAttachment[] = useMemo(() => {
     const saved = currentSession?.attachments || [];
-    if (
-      stagedDraftAttachment &&
-      !saved.some((a) => a.id === stagedDraftAttachment.id)
-    ) {
-      return [stagedDraftAttachment, ...saved];
-    }
-    return saved;
-  }, [currentSession, stagedDraftAttachment]);
+    const drafts =
+      stagedDraftAttachments && stagedDraftAttachments.length > 0
+        ? stagedDraftAttachments
+        : stagedDraftAttachment
+          ? [stagedDraftAttachment]
+          : [];
+    const savedIds = new Set(saved.map((a) => a.id));
+    const unmergedDrafts = drafts.filter((d) => !savedIds.has(d.id));
+    return [...unmergedDrafts, ...saved];
+  }, [currentSession, stagedDraftAttachment, stagedDraftAttachments]);
 
   const selectedAttachment: ChatAttachment | null = useMemo(() => {
     if (previewSchoolDoc && previewSchoolDoc.id === selectedAttachmentId) {
@@ -2017,6 +2032,62 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
         {/* TAB 2: ПРОСМОТР (Stage 2 Design Studio Preview + Editable Layers + Regional AI Edit OR Extracted Document Text) */}
         {activeTab === 'preview' && (
           <div className="space-y-4">
+            {/* Persistent Top File Switcher & Back to Materials */}
+            {sessionAttachments.length > 0 && (
+              <div className="rounded-xl bg-slate-50 border border-slate-200/90 p-2.5 space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 font-bold text-slate-900">
+                    <FileText className="w-3.5 h-3.5 text-[#00A8B5]" />
+                    <span>Файлы для просмотра ({sessionAttachments.length})</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onChangeTab('materials')}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#00A8B5] hover:underline cursor-pointer"
+                    title="Перейти к полному списку рабочих материалов"
+                  >
+                    <ChevronLeft className="w-3 h-3" />
+                    <span>К списку материалов</span>
+                  </button>
+                </div>
+
+                {/* Horizontal scrollable file selector pills */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-thin">
+                  {sessionAttachments.map((att) => {
+                    const isSelected = selectedAttachment?.id === att.id;
+                    const extUpper = (att.extension || 'file').toUpperCase();
+                    return (
+                      <button
+                        key={att.id}
+                        type="button"
+                        onClick={() => {
+                          onSelectAttachment(att.id);
+                          onSelectDesignArtifact?.(null);
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all truncate max-w-[200px] cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#00A8B5] text-white border-[#00A8B5] shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                        title={att.name}
+                      >
+                        <span
+                          className={`text-[9px] font-mono font-extrabold uppercase px-1 py-0.2 rounded ${
+                            isSelected
+                              ? 'bg-white/20 text-white'
+                              : 'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {extUpper.slice(0, 4)}
+                        </span>
+                        <span className="truncate">{att.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Switcher between Design Artifacts and Document Attachments when both exist */}
             {sessionDesignArtifacts.length > 0 && (
               <div className="rounded-xl bg-purple-50/80 border border-purple-200 p-2.5 space-y-2 text-xs">
@@ -2791,107 +2862,459 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   )}
                 </div>
 
-                {/* Multimodal Scrollable PDF/Presentation Page Reader with Selective Page Sending */}
-                {selectedAttachment.extractedImages &&
-                selectedAttachment.extractedImages.length > 0 ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between text-xs font-bold text-slate-800 bg-slate-100 p-2.5 rounded-xl border border-slate-200/80">
-                      <span className="flex items-center gap-1.5">
-                        <Layers className="w-4 h-4 text-[#00A8B5]" />
-                        <span>
-                          Страницы и визуальные материалы (
-                          {selectedAttachment.extractedImages.length})
-                        </span>
-                      </span>
-                      <span className="text-[10px] text-slate-500 font-mono-tabular font-normal">
-                        Скроллируйте вниз
-                      </span>
-                    </div>
+                {/* Specialized File Viewers: PPTX, XLSX/CSV Tables, PDF Pages, Images, DOCX & Text */}
+                {(() => {
+                  const ext = selectedAttachment.extension.toLowerCase();
+                  const isImage =
+                    IMAGE_PREVIEW_EXTENSIONS.has(ext) ||
+                    Boolean(selectedAttachment.mimeType?.startsWith('image/')) ||
+                    Boolean(selectedAttachment.dataUrl?.startsWith('data:image/'));
 
-                    <div className="max-h-[500px] overflow-y-auto space-y-3 pr-1.5 custom-scrollbar">
-                      {selectedAttachment.extractedImages.map((pageImg, idx) => (
-                        <div
-                          key={pageImg.id || idx}
-                          className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2.5 shadow-2xs hover:border-[#00A8B5]/50 transition-colors"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900 text-white font-mono-tabular font-bold text-[11px]">
-                              <span>Стр. {idx + 1}</span>
-                              <span className="text-slate-400">/ {selectedAttachment.extractedImages!.length}</span>
-                            </span>
+                  const isPptx =
+                    ext === 'pptx' ||
+                    ext === 'ppt' ||
+                    Boolean(selectedAttachment.slides && selectedAttachment.slides.length > 0);
 
-                            {onInsertFileToDraft && (
+                  const hasTableSheets = Boolean(
+                    selectedAttachment.tableSheets && selectedAttachment.tableSheets.length > 0
+                  );
+
+                  const isDocx = ext === 'docx' || ext === 'doc';
+
+                  // --- 1. SPREADSHEET / CSV VIEWER (XLSX, XLS, CSV) ---
+                  if (hasTableSheets) {
+                    const sheets = selectedAttachment.tableSheets!;
+                    const safeSheetIndex = Math.min(
+                      Math.max(0, activeSpreadsheetSheetIndex),
+                      sheets.length - 1
+                    );
+                    const currentSheet = sheets[safeSheetIndex] || sheets[0];
+
+                    return (
+                      <div className="space-y-3">
+                        {/* Sheet Tabs */}
+                        {sheets.length > 1 && (
+                          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-slate-200">
+                            {sheets.map((s, idx) => (
                               <button
+                                key={s.name || idx}
                                 type="button"
-                                onClick={() => {
-                                  const pageAtt: ChatAttachment = {
-                                    id: `att-page-${selectedAttachment.id}-${idx + 1}-${Date.now()}`,
-                                    name: `${selectedAttachment.name} — Страница ${idx + 1}`,
-                                    extension: 'jpeg',
-                                    sizeBytes: Math.round(pageImg.dataUrl.length * 0.75),
-                                    extractedText: `[Страница ${idx + 1} из документа «${selectedAttachment.name}»]`,
-                                    status: 'processed',
-                                    mimeType: pageImg.mimeType || 'image/jpeg',
-                                    createdAt: new Date().toLocaleTimeString('ru-RU', {
-                                      hour: '2-digit',
-                                      minute: '2-digit',
-                                    }),
-                                    createdAtMs: Date.now(),
-                                    dataUrl: pageImg.dataUrl,
-                                  };
-                                  onInsertFileToDraft(pageAtt);
-                                }}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-[#00A8B5] hover:bg-[#00929E] transition-colors cursor-pointer shadow-2xs"
-                                title="Отправить только эту страницу в чат нейросети"
+                                onClick={() => setActiveSpreadsheetSheetIndex(idx)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                                  safeSheetIndex === idx
+                                    ? 'bg-emerald-700 text-white shadow-2xs'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                }`}
                               >
-                                <ArrowRight className="w-3.5 h-3.5" />
-                                <span>Отправить эту страницу в чат</span>
+                                {s.name} ({s.rowCount} строк)
                               </button>
-                            )}
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between text-xs text-slate-600 bg-emerald-50/80 border border-emerald-200 p-2 rounded-xl">
+                          <span className="font-semibold text-emerald-950 flex items-center gap-1.5">
+                            <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+                            <span>
+                              {currentSheet.name}: {currentSheet.rowCount} строк,{' '}
+                              {currentSheet.columnCount} колонок
+                            </span>
+                          </span>
+                          <span className="text-[11px] font-mono-tabular text-emerald-800">
+                            Структурированная таблица
+                          </span>
+                        </div>
+
+                        {/* Interactive Data Table */}
+                        <div className="max-h-[460px] overflow-auto rounded-xl border border-slate-200 bg-white shadow-inner">
+                          <table className="w-full text-xs text-left border-collapse">
+                            <thead className="bg-slate-100 text-slate-800 font-bold sticky top-0 z-10 shadow-2xs">
+                              <tr>
+                                <th className="px-2.5 py-2 border-b border-r border-slate-200 text-center text-slate-400 font-mono text-[10px] w-10">
+                                  #
+                                </th>
+                                {currentSheet.headers.map((h, cIdx) => (
+                                  <th
+                                    key={cIdx}
+                                    className="px-3 py-2 border-b border-r border-slate-200 font-bold text-slate-900 whitespace-nowrap text-xs"
+                                  >
+                                    {h || `Колонка ${cIdx + 1}`}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {currentSheet.rows.map((row, rIdx) => (
+                                <tr
+                                  key={rIdx}
+                                  className="border-b border-slate-100 hover:bg-sky-50/60 transition-colors even:bg-slate-50/40"
+                                >
+                                  <td className="px-2.5 py-1.5 border-r border-slate-200 text-center text-slate-400 font-mono text-[10px]">
+                                    {rIdx + 1}
+                                  </td>
+                                  {row.map((cell, cIdx) => (
+                                    <td
+                                      key={cIdx}
+                                      className="px-3 py-1.5 border-r border-slate-100 text-slate-800 whitespace-pre-wrap break-words min-w-[80px]"
+                                    >
+                                      {cell}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // --- 2. PPTX SLIDE CAROUSEL VIEWER ---
+                  if (
+                    isPptx &&
+                    (selectedAttachment.slides?.length ||
+                      selectedAttachment.extractedImages?.length)
+                  ) {
+                    const totalSlides = Math.max(
+                      selectedAttachment.slides?.length || 0,
+                      selectedAttachment.extractedImages?.length || 0
+                    );
+                    const safeSlideIndex = Math.min(
+                      Math.max(0, activeSlideIndex),
+                      totalSlides - 1
+                    );
+                    const currentSlideMeta =
+                      selectedAttachment.slides?.[safeSlideIndex];
+                    const currentSlideImage =
+                      selectedAttachment.extractedImages?.[safeSlideIndex]?.dataUrl ||
+                      currentSlideMeta?.thumbnailDataUrl;
+
+                    return (
+                      <div className="space-y-3">
+                        {/* Carousel Header & Controls */}
+                        <div className="flex items-center justify-between gap-2 p-2.5 bg-amber-50/90 border border-amber-200 rounded-xl text-xs text-amber-950">
+                          <div className="flex items-center gap-2">
+                            <Layers className="w-4 h-4 text-amber-700" />
+                            <span className="font-bold">
+                              Слайд {safeSlideIndex + 1} из {totalSlides}
+                            </span>
                           </div>
 
-                          <div className="rounded-lg overflow-hidden border border-slate-200 bg-white shadow-inner flex items-center justify-center p-1">
-                            <img
-                              src={pageImg.dataUrl}
-                              alt={pageImg.name || `Страница ${idx + 1}`}
-                              className="w-full h-auto max-h-[360px] object-contain rounded"
-                              loading="lazy"
-                            />
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={safeSlideIndex <= 0}
+                              onClick={() =>
+                                setActiveSlideIndex((prev) => Math.max(0, prev - 1))
+                              }
+                              className="px-2 py-1 rounded-lg bg-white border border-amber-300 text-amber-900 disabled:opacity-40 hover:bg-amber-100 transition-colors font-semibold cursor-pointer"
+                            >
+                              ← Назад
+                            </button>
+                            <button
+                              type="button"
+                              disabled={safeSlideIndex >= totalSlides - 1}
+                              onClick={() =>
+                                setActiveSlideIndex((prev) =>
+                                  Math.min(totalSlides - 1, prev + 1)
+                                )
+                              }
+                              className="px-2 py-1 rounded-lg bg-white border border-amber-300 text-amber-900 disabled:opacity-40 hover:bg-amber-100 transition-colors font-semibold cursor-pointer"
+                            >
+                              Вперёд →
+                            </button>
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
 
-                {/* Extracted Text Preview */}
-                {selectedAttachment.extractedText &&
-                selectedAttachment.extractedText.trim().length > 0 ? (
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span className="font-semibold text-slate-700">
-                        Извлечённый текст документа
-                      </span>
-                      <span className="font-mono-tabular">
-                        {selectedAttachment.extractedText.length} симв.
-                      </span>
+                        {/* Active Slide Image */}
+                        {currentSlideImage ? (
+                          <div className="rounded-xl overflow-hidden border border-slate-200 bg-black/5 p-2 flex flex-col items-center justify-center">
+                            <img
+                              src={currentSlideImage}
+                              alt={`Слайд ${safeSlideIndex + 1}`}
+                              className="w-full h-auto max-h-[420px] object-contain rounded-lg shadow-sm"
+                            />
+                            {onInsertFileToDraft && (
+                              <div className="w-full flex justify-end pt-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const slideAtt: ChatAttachment = {
+                                      id: `att-slide-${selectedAttachment.id}-${safeSlideIndex + 1}-${Date.now()}`,
+                                      name: `${selectedAttachment.name} — Слайд ${safeSlideIndex + 1}`,
+                                      extension: 'jpeg',
+                                      sizeBytes: Math.round(
+                                        currentSlideImage.length * 0.75
+                                      ),
+                                      extractedText:
+                                        currentSlideMeta?.text ||
+                                        `[Слайд ${safeSlideIndex + 1} из презентации «${selectedAttachment.name}»]`,
+                                      status: 'processed',
+                                      mimeType: 'image/jpeg',
+                                      createdAt: new Date().toLocaleTimeString(
+                                        'ru-RU',
+                                        {
+                                          hour: '2-digit',
+                                          minute: '2-digit',
+                                        }
+                                      ),
+                                      createdAtMs: Date.now(),
+                                      dataUrl: currentSlideImage,
+                                    };
+                                    onInsertFileToDraft(slideAtt);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors cursor-pointer shadow-2xs"
+                                >
+                                  <ArrowRight className="w-3.5 h-3.5" />
+                                  <span>Отправить этот слайд в чат</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+
+                        {/* Slide Text / Notes if available */}
+                        {currentSlideMeta?.text && (
+                          <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1 text-xs">
+                            <span className="font-semibold text-slate-700 block">
+                              Текст слайда:
+                            </span>
+                            <p className="text-slate-800 leading-relaxed whitespace-pre-wrap">
+                              {currentSlideMeta.text}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Thumbnails Navigation Strip */}
+                        {totalSlides > 1 && (
+                          <div className="space-y-1.5">
+                            <span className="text-[11px] font-semibold text-slate-500">
+                              Все слайды презентации:
+                            </span>
+                            <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+                              {Array.from({ length: totalSlides }).map((_, idx) => {
+                                const thumb =
+                                  selectedAttachment.extractedImages?.[idx]?.dataUrl ||
+                                  selectedAttachment.slides?.[idx]?.thumbnailDataUrl;
+                                const isCur = idx === safeSlideIndex;
+                                return (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => setActiveSlideIndex(idx)}
+                                    className={`relative shrink-0 w-20 h-14 rounded-lg overflow-hidden border-2 transition-all cursor-pointer ${
+                                      isCur
+                                        ? 'border-amber-600 ring-2 ring-amber-300'
+                                        : 'border-slate-200 hover:border-slate-400 opacity-80 hover:opacity-100'
+                                    }`}
+                                    title={`Перейти к слайду ${idx + 1}`}
+                                  >
+                                    {thumb ? (
+                                      <img
+                                        src={thumb}
+                                        alt={`Слайд ${idx + 1}`}
+                                        className="w-full h-full object-cover"
+                                      />
+                                    ) : (
+                                      <div className="w-full h-full bg-slate-100 flex items-center justify-center font-bold text-xs text-slate-600">
+                                        {idx + 1}
+                                      </div>
+                                    )}
+                                    <span className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/70 text-white text-[8px] font-mono">
+                                      {idx + 1}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  // --- 3. HIGH-RES IMAGE VIEWER ---
+                  if (isImage && selectedAttachment.dataUrl) {
+                    return (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between p-2 bg-slate-100 rounded-xl border border-slate-200 text-xs">
+                          <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                            <ImageIcon className="w-4 h-4 text-emerald-600" />
+                            <span>Изображение высокого разрешения</span>
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setImagePreviewZoom((z) => Math.max(50, z - 25))
+                              }
+                              className="p-1 rounded hover:bg-slate-200 text-slate-700 cursor-pointer"
+                              title="Уменьшить"
+                            >
+                              <ZoomOut className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="text-[11px] font-mono-tabular font-bold px-1">
+                              {imagePreviewZoom}%
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setImagePreviewZoom((z) => Math.min(250, z + 25))
+                              }
+                              className="p-1 rounded hover:bg-slate-200 text-slate-700 cursor-pointer"
+                              title="Увеличить"
+                            >
+                              <ZoomIn className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="max-h-[500px] overflow-auto rounded-xl border border-slate-200 bg-black/5 p-3 flex items-center justify-center">
+                          <img
+                            src={selectedAttachment.dataUrl}
+                            alt={selectedAttachment.name}
+                            style={{
+                              width: `${imagePreviewZoom}%`,
+                              transition: 'width 150ms ease',
+                            }}
+                            className="h-auto max-w-none rounded-lg shadow-sm"
+                          />
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // --- 4. SCROLLABLE PDF PAGE READER ---
+                  if (
+                    selectedAttachment.extractedImages &&
+                    selectedAttachment.extractedImages.length > 0
+                  ) {
+                    return (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-800 bg-rose-50/80 border border-rose-200 p-2.5 rounded-xl">
+                          <span className="flex items-center gap-1.5 text-rose-950">
+                            <Layers className="w-4 h-4 text-rose-600" />
+                            <span>
+                              Страницы PDF документа (
+                              {selectedAttachment.extractedImages.length})
+                            </span>
+                          </span>
+                          <span className="text-[10px] text-rose-800 font-mono-tabular font-normal">
+                            Прокрутите вниз для просмотра всех страниц
+                          </span>
+                        </div>
+
+                        <div className="max-h-[520px] overflow-y-auto space-y-3 pr-1.5 custom-scrollbar">
+                          {selectedAttachment.extractedImages.map(
+                            (pageImg, idx) => (
+                              <div
+                                key={pageImg.id || idx}
+                                className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2.5 shadow-2xs hover:border-[#00A8B5]/50 transition-colors"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900 text-white font-mono-tabular font-bold text-[11px]">
+                                    <span>Стр. {idx + 1}</span>
+                                    <span className="text-slate-400">
+                                      / {selectedAttachment.extractedImages!.length}
+                                    </span>
+                                  </span>
+
+                                  {onInsertFileToDraft && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const pageAtt: ChatAttachment = {
+                                          id: `att-page-${selectedAttachment.id}-${idx + 1}-${Date.now()}`,
+                                          name: `${selectedAttachment.name} — Страница ${idx + 1}`,
+                                          extension: 'jpeg',
+                                          sizeBytes: Math.round(
+                                            pageImg.dataUrl.length * 0.75
+                                          ),
+                                          extractedText: `[Страница ${idx + 1} из документа «${selectedAttachment.name}»]`,
+                                          status: 'processed',
+                                          mimeType:
+                                            pageImg.mimeType || 'image/jpeg',
+                                          createdAt:
+                                            new Date().toLocaleTimeString(
+                                              'ru-RU',
+                                              {
+                                                hour: '2-digit',
+                                                minute: '2-digit',
+                                              }
+                                            ),
+                                          createdAtMs: Date.now(),
+                                          dataUrl: pageImg.dataUrl,
+                                        };
+                                        onInsertFileToDraft(pageAtt);
+                                      }}
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-[#00A8B5] hover:bg-[#00929E] transition-colors cursor-pointer shadow-2xs"
+                                      title="Отправить только эту страницу в чат нейросети"
+                                    >
+                                      <ArrowRight className="w-3.5 h-3.5" />
+                                      <span>Отправить эту страницу в чат</span>
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="rounded-lg overflow-hidden border border-slate-200 bg-white shadow-inner flex items-center justify-center p-1">
+                                  <img
+                                    src={pageImg.dataUrl}
+                                    alt={pageImg.name || `Страница ${idx + 1}`}
+                                    className="w-full h-auto max-h-[380px] object-contain rounded"
+                                    loading="lazy"
+                                  />
+                                </div>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // --- 5. DOCX / TEXT DOCUMENT VIEWER ---
+                  if (
+                    selectedAttachment.extractedText &&
+                    selectedAttachment.extractedText.trim().length > 0
+                  ) {
+                    return (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 bg-slate-100 p-2 rounded-xl">
+                          <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                            <FileText className="w-3.5 h-3.5 text-[#00A8B5]" />
+                            <span>
+                              {isDocx
+                                ? 'Содержимое документа Word'
+                                : 'Текстовое содержимое файла'}
+                            </span>
+                          </span>
+                          <span className="font-mono-tabular">
+                            {selectedAttachment.extractedText.length} символов
+                          </span>
+                        </div>
+
+                        <div className="w-full max-h-[460px] overflow-auto rounded-xl bg-white border border-slate-200 p-4 text-xs text-slate-900 leading-relaxed shadow-inner">
+                          <div className="prose prose-sm max-w-none whitespace-pre-wrap break-words font-sans">
+                            {selectedAttachment.extractedText}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // --- 6. EMPTY / FALLBACK STATE ---
+                  return (
+                    <div className="rounded-xl p-4 bg-slate-50 border border-slate-200/90 space-y-1.5">
+                      <div className="text-xs font-semibold text-slate-900">
+                        Нет доступного извлечённого текста
+                      </div>
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        {selectedAttachment.warning ||
+                          'В выбранном файле не обнаружено текстового содержимого (например, это отсканированный PDF без текстового слоя).'}
+                      </p>
                     </div>
-                    <pre className="w-full max-h-[300px] overflow-auto rounded-xl bg-slate-900 text-slate-100 p-3.5 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
-                      {selectedAttachment.extractedText}
-                    </pre>
-                  </div>
-                ) : !selectedAttachment.extractedImages ||
-                  selectedAttachment.extractedImages.length === 0 ? (
-                  <div className="rounded-xl p-4 bg-slate-50 border border-slate-200/90 space-y-1.5">
-                    <div className="text-xs font-semibold text-slate-900">
-                      Нет доступного извлечённого текста
-                    </div>
-                    <p className="text-[11px] text-slate-600 leading-relaxed">
-                      {selectedAttachment.warning ||
-                        'В выбранном файле не обнаружено текстового содержимого (например, это отсканированный PDF без текстового слоя).'}
-                    </p>
-                  </div>
-                ) : null}
+                  );
+                })()}
               </div>
             )}
           </div>

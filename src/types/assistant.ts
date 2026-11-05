@@ -38,6 +38,7 @@ export type SchoolKnowledgeFields = Record<KnowledgeCategoryKey, string>;
 export type KnowledgeBaseBySchool = Record<SchoolId, SchoolKnowledgeFields>;
 
 export type DocumentProcessingStatus =
+  | 'uploading'
   | 'queued'
   | 'processing'
   | 'processed'
@@ -72,6 +73,7 @@ export interface ExtractedSlideItem {
   slideNumber: number;
   text: string;
   imageUrls?: string[];
+  thumbnailDataUrl?: string;
   notes?: string;
 }
 
@@ -117,6 +119,14 @@ export interface UploadedDocumentRecord {
   diskFolderPath?: string;
 }
 
+export interface ExtractedSpreadsheetSheet {
+  name: string;
+  headers: string[];
+  rows: string[][];
+  rowCount: number;
+  columnCount: number;
+}
+
 export interface ChatAttachment {
   id: string;
   name: string;
@@ -140,6 +150,7 @@ export interface ChatAttachment {
   diskFolderPath?: string;
   extractedImages?: ExtractedDocumentImage[];
   slides?: ExtractedSlideItem[];
+  tableSheets?: ExtractedSpreadsheetSheet[];
 }
 
 export interface ChatAttachmentMeta {
@@ -157,6 +168,7 @@ export interface ChatAttachmentMeta {
   extractedImages?: ExtractedDocumentImage[];
   extractedImagesCount?: number;
   sentImagesCount?: number;
+  tableSheets?: ExtractedSpreadsheetSheet[];
 }
 
 export type AIProviderId = 'gemini' | 'openrouter' | 'ollama';
@@ -448,6 +460,8 @@ export interface ChatMessage {
   mode: AgentMode;
   attachmentName?: string;
   attachmentMeta?: ChatAttachmentMeta;
+  attachmentsMeta?: ChatAttachmentMeta[];
+  attachments?: ChatAttachment[];
   sentImagesCount?: number;
   usedContextSummary?: string[];
   isStreaming?: boolean;

@@ -133,8 +133,8 @@ export const documentProvider: IDocumentProvider = {
       return dataUrl.includes(',') ? dataUrl.split(',')[1].trim() : dataUrl.trim();
     };
 
-    // Target maximum multimodal images across all documents in a single request to guarantee swift execution (<25s) without timeouts
-    const TARGET_MAX_MULTIMODAL_IMAGES = 16;
+    // Maximum multimodal images across all documents in a single request to guarantee swift execution without timeouts
+    const TARGET_MAX_MULTIMODAL_IMAGES = 80;
 
     const draftList: ChatAttachment[] = Array.isArray(draftAttachments) && draftAttachments.length > 0
       ? draftAttachments

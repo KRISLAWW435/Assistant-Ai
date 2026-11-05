@@ -116,7 +116,13 @@ interface UnifiedChatViewProps {
   onSendMessage: (
     text: string,
     attachment: ChatAttachment | null,
-    contextOptions: SendMessageContextOptions
+    contextOptions: SendMessageContextOptions,
+    targetOverride?: {
+      sessionId: string;
+      schoolId: SchoolId;
+      mode: AgentMode;
+    },
+    explicitAttachments?: ChatAttachment[]
   ) => void;
   onRetryLastMessage?: (sessionId?: string) => void;
   onStopGeneration?: () => void;
@@ -1100,6 +1106,31 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     const trimmed = draftPrompt.trim();
     if (!trimmed && draftList.length === 0) return;
 
+    // Completeness verification: do not send if files are uploading/processing or have errors
+    const pendingFiles = draftList.filter(
+      (a) =>
+        a.status === 'uploading' ||
+        a.status === 'processing' ||
+        a.status === 'queued'
+    );
+    if (pendingFiles.length > 0) {
+      setAttachmentNotice(
+        `Пожалуйста, дождитесь окончания обработки всех файлов (${pendingFiles.length} ещё обрабатываются).`
+      );
+      return;
+    }
+
+    const failedFiles = draftList.filter((a) => a.status === 'error');
+    if (failedFiles.length > 0) {
+      const errDetails = failedFiles
+        .map((f) => `«${f.name}» (${f.statusMessage || f.warning || 'ошибка'})`)
+        .join(', ');
+      setAttachmentNotice(
+        `Нельзя отправить запрос: файл(ы) содержат ошибки: ${errDetails}. Удалите повреждённые файлы перед отправкой.`
+      );
+      return;
+    }
+
     const hasDraftImages = draftList.some(
       (att) =>
         att.dataUrl &&
@@ -1150,7 +1181,9 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         ),
         consentedProviders,
         providerSelection,
-      }
+      },
+      undefined,
+      draftList
     );
     setDraftPrompt('');
     setSelectedQuickPromptId(null);
@@ -1575,50 +1608,57 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                           );
                         }
 
-                        // Compact ChatGPT-style attachment summary line for documents and multiple files
-                        const meta = msg.attachmentMeta;
-                        const name = meta?.name || msg.attachmentName || '';
-                        const totalSlides = extractedDocImages.length;
-                        const multiMatch = name.match(/Прикреплено файлов \((\d+)\s*шт\.\)/i);
+                        // Individual file cards for all attached files
+                        const attachmentsList =
+                          msg.attachmentsMeta && msg.attachmentsMeta.length > 0
+                            ? msg.attachmentsMeta
+                            : msg.attachmentMeta
+                              ? [msg.attachmentMeta]
+                              : [];
 
-                        let summaryLabel = '';
-                        if (multiMatch) {
-                          const count = multiMatch[1];
-                          summaryLabel = `Прикреплено: ${count} файлов${
-                            totalSlides > 0 ? ` (${totalSlides} слайдов)` : ''
-                          }`;
-                        } else if (name) {
-                          const cleanName =
-                            name.length > 28 ? name.slice(0, 26) + '…' : name;
-                          summaryLabel = `${cleanName}${
-                            totalSlides > 0 ? ` (${totalSlides} сл.)` : ''
-                          }`;
-                        } else if (totalSlides > 0) {
-                          summaryLabel = `Прикреплено: ${totalSlides} слайдов`;
-                        } else {
-                          summaryLabel = 'Прикреплённый материал';
+                        if (attachmentsList.length > 0) {
+                          return (
+                            <div className="space-y-1.5 mb-2.5">
+                              {attachmentsList.map((attItem) => {
+                                const ext = (attItem.extension || 'file').toUpperCase();
+                                return (
+                                  <div
+                                    key={attItem.id}
+                                    className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl border text-xs transition-all ${
+                                      isUser
+                                        ? 'bg-slate-800/80 border-slate-700 text-slate-100'
+                                        : 'bg-slate-50 border-slate-200 text-slate-900'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <Paperclip className="w-3.5 h-3.5 text-[#00A8B5] shrink-0" />
+                                      <span
+                                        className="font-bold truncate max-w-[200px] sm:max-w-xs"
+                                        title={attItem.name}
+                                      >
+                                        {attItem.name}
+                                      </span>
+                                      <span className="text-[10px] opacity-75 font-mono-tabular shrink-0">
+                                        .{ext} · {formatFileSizeRu(attItem.sizeBytes)}
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onInspectAttachmentInRightPanel(attItem.id)
+                                      }
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#00A8B5]/15 hover:bg-[#00A8B5]/25 text-[#00A8B5] transition-colors shrink-0 cursor-pointer"
+                                      title="Открыть предпросмотр в правой панели"
+                                    >
+                                      <Eye className="w-3 h-3" />
+                                      <span>Просмотр</span>
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
                         }
-
-                        return (
-                          <div className="mb-2">
-                            <button
-                              type="button"
-                              onClick={() => setInspectedMessageForModal(msg)}
-                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold transition-all border cursor-pointer ${
-                                isUser
-                                  ? 'bg-slate-800/90 hover:bg-slate-700 text-slate-200 border-slate-700 shadow-2xs'
-                                  : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-200 shadow-2xs'
-                              }`}
-                              title="Нажмите для просмотра страниц и деталей файла"
-                            >
-                              <Paperclip className="w-3.5 h-3.5 text-[#00A8B5] shrink-0" />
-                              <span className="truncate max-w-xs sm:max-w-md">
-                                {summaryLabel}
-                              </span>
-                              <Info className="w-3 h-3 text-slate-400 shrink-0 ml-0.5" />
-                            </button>
-                          </div>
-                        );
                       })()}
 
                       <div>
@@ -2469,116 +2509,214 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             </div>
           )}
 
-          {/* Pre-send Attachment Preview (ChatGPT Style Compact Square Cards) */}
-          {draftList.length > 0 && (
-            <div className="flex items-center gap-2 overflow-x-auto py-1 px-0.5 scrollbar-thin">
-              {draftList.map((att) => {
-                const isImageFile =
-                  att.mimeType?.startsWith('image/') ||
-                  ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'jfif'].includes(
-                    att.extension.toLowerCase()
-                  );
+          {/* Pre-send Attachment Preview & Completeness Tracking */}
+          {draftList.length > 0 && (() => {
+            const readyCount = draftList.filter(
+              (a) => a.status === 'processed' || a.status === 'no_text' || a.status === 'verified'
+            ).length;
+            const processingCount = draftList.filter(
+              (a) =>
+                a.status === 'uploading' ||
+                a.status === 'processing' ||
+                a.status === 'queued'
+            ).length;
+            const errorCount = draftList.filter((a) => a.status === 'error').length;
 
-                const isValidImageUri = (url?: string): boolean =>
-                  Boolean(
-                    url &&
-                      (url.startsWith('data:image/') ||
-                        url.startsWith('blob:') ||
-                        url.startsWith('http://') ||
-                        url.startsWith('https://'))
-                  );
-
-                const rawThumb =
-                  (isValidImageUri(att.thumbnailUrl) ? att.thumbnailUrl : undefined) ||
-                  (isImageFile && isValidImageUri(att.dataUrl) ? att.dataUrl : undefined) ||
-                  (isValidImageUri(att.extractedImages?.[0]?.dataUrl)
-                    ? att.extractedImages![0].dataUrl
-                    : undefined);
-
-                const hasFailed = failedThumbnailIds.has(att.id);
-                const displayThumbnail = !hasFailed ? rawThumb : undefined;
-
-                const totalSlides = att.extractedImages ? att.extractedImages.length : 0;
-                const ext = (att.extension || 'file').toUpperCase();
-
-                const badgeColor =
-                  ext === 'DOCX' || ext === 'DOC'
-                    ? 'bg-blue-50 text-blue-700 border-blue-200'
-                    : ext === 'TXT' || ext === 'MD' || ext === 'CSV' || ext === 'JSON'
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : ext === 'PDF'
-                        ? 'bg-rose-50 text-rose-700 border-rose-200'
-                        : ext === 'PPTX' || ext === 'PPT'
-                          ? 'bg-amber-50 text-amber-700 border-amber-200'
-                          : 'bg-slate-50 text-slate-700 border-slate-200';
-
-                const shortName =
-                  att.name.length > 10 ? att.name.slice(0, 9) + '…' : att.name;
-
-                return (
-                  <div
-                    key={att.id}
-                    className="relative group shrink-0 w-16 h-16 rounded-xl border border-slate-200/90 bg-white shadow-2xs hover:border-slate-300 flex flex-col items-center justify-between p-1.5 transition-all select-none"
-                    title={`${att.name} (${formatFileSizeRu(att.sizeBytes)}${totalSlides > 0 ? `, ${totalSlides} сл.` : ''})`}
-                  >
-                    {/* Delete button (X) */}
+            return (
+              <div className="space-y-2 py-1 px-0.5">
+                {/* Completeness Summary Header */}
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-800">
+                      Вложения к запросу ({draftList.length}):
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-mono-tabular">
+                      <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+                        Готово: {readyCount}
+                      </span>
+                      {processingCount > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200 font-semibold flex items-center gap-1">
+                          <Loader2 className="w-3 h-3 animate-spin text-sky-600" />
+                          Обработка: {processingCount}
+                        </span>
+                      )}
+                      {errorCount > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-semibold flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 text-rose-600" />
+                          Ошибок: {errorCount}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (onRemoveDraftAttachment) {
-                          onRemoveDraftAttachment(att.id);
-                        } else {
-                          onClearDraftAttachment();
-                        }
-                      }}
-                      className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-slate-700 text-white flex items-center justify-center hover:bg-rose-600 hover:scale-110 shadow-xs transition-all z-10 cursor-pointer"
-                      title="Удалить файл"
+                      onClick={() => onClearDraftAttachment()}
+                      className="text-[11px] text-slate-500 hover:text-rose-600 transition-colors cursor-pointer"
                     >
-                      <X className="w-2.5 h-2.5 stroke-[3]" />
+                      Очистить все ({draftList.length})
                     </button>
-
-                    {/* Thumbnail / Document Icon Badge */}
-                    <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center shrink-0">
-                      {displayThumbnail ? (
-                        <img
-                          src={displayThumbnail}
-                          alt={att.name}
-                          className="w-full h-full object-cover rounded-md"
-                          onError={() => {
-                            setFailedThumbnailIds((prev) => new Set(prev).add(att.id));
-                          }}
-                        />
-                      ) : (
-                        <div
-                          className={`w-full h-full rounded-md border flex flex-col items-center justify-center gap-0.5 ${badgeColor}`}
-                        >
-                          <FileText className="w-3.5 h-3.5 shrink-0" />
-                          <span className="font-extrabold text-[7.5px] tracking-tight uppercase leading-none">
-                            {ext.slice(0, 4)}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Short File Name */}
-                    <div className="w-full text-center truncate">
-                      <span className="text-[9.5px] font-medium text-slate-700 block truncate leading-tight">
-                        {shortName}
-                      </span>
-                    </div>
-
-                    {/* Slide count indicator */}
-                    {totalSlides > 0 && (
-                      <div className="absolute bottom-0.5 right-0.5 px-1 py-0.2 rounded bg-black/60 text-white text-[7.5px] font-mono-tabular">
-                        {totalSlides} сл.
-                      </div>
-                    )}
                   </div>
-                );
-              })}
-            </div>
-          )}
+                </div>
+
+                {/* Horizontal Scrollable Attachment Cards */}
+                <div className="flex items-stretch gap-2.5 overflow-x-auto pb-1 scrollbar-thin">
+                  {draftList.map((att) => {
+                    const isImageFile =
+                      att.mimeType?.startsWith('image/') ||
+                      ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'jfif'].includes(
+                        att.extension.toLowerCase()
+                      );
+
+                    const isValidImageUri = (url?: string): boolean =>
+                      Boolean(
+                        url &&
+                          (url.startsWith('data:image/') ||
+                            url.startsWith('blob:') ||
+                            url.startsWith('http://') ||
+                            url.startsWith('https://'))
+                      );
+
+                    const rawThumb =
+                      (isValidImageUri(att.thumbnailUrl) ? att.thumbnailUrl : undefined) ||
+                      (isImageFile && isValidImageUri(att.dataUrl) ? att.dataUrl : undefined) ||
+                      (isValidImageUri(att.extractedImages?.[0]?.dataUrl)
+                        ? att.extractedImages![0].dataUrl
+                        : undefined);
+
+                    const hasFailed = failedThumbnailIds.has(att.id);
+                    const displayThumbnail = !hasFailed ? rawThumb : undefined;
+
+                    const totalSlides = att.extractedImages ? att.extractedImages.length : 0;
+                    const ext = (att.extension || 'file').toUpperCase();
+                    const status = att.status || 'processed';
+                    const isError = status === 'error';
+                    const isUploading = status === 'uploading';
+                    const isProcessing = status === 'processing' || status === 'queued';
+                    const isReady =
+                      status === 'processed' ||
+                      status === 'no_text' ||
+                      status === 'verified';
+
+                    const cardBorder = isError
+                      ? 'border-rose-300 bg-rose-50/70 text-rose-950'
+                      : isUploading || isProcessing
+                        ? 'border-sky-300 bg-sky-50/60 text-sky-950'
+                        : 'border-slate-200/90 bg-white hover:border-[#00A8B5]/60 hover:shadow-xs';
+
+                    return (
+                      <div
+                        key={att.id}
+                        onClick={() => onInspectAttachmentInRightPanel(att.id)}
+                        className={`group relative shrink-0 w-64 p-2.5 rounded-xl border flex items-center gap-2.5 transition-all select-none cursor-pointer ${cardBorder}`}
+                        title={`Нажмите для предпросмотра: ${att.name}`}
+                      >
+                        {/* Delete button (X) */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onRemoveDraftAttachment) {
+                              onRemoveDraftAttachment(att.id);
+                            } else {
+                              onClearDraftAttachment();
+                            }
+                          }}
+                          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-slate-700 text-white flex items-center justify-center hover:bg-rose-600 hover:scale-110 shadow-xs transition-all z-10 cursor-pointer"
+                          title="Удалить файл"
+                        >
+                          <X className="w-3 h-3 stroke-[2.5]" />
+                        </button>
+
+                        {/* Thumbnail / Document Icon Badge */}
+                        <div className="w-10 h-10 rounded-lg overflow-hidden flex items-center justify-center shrink-0 border border-slate-200/80 bg-slate-100">
+                          {displayThumbnail ? (
+                            <img
+                              src={displayThumbnail}
+                              alt={att.name}
+                              className="w-full h-full object-cover rounded-md"
+                              onError={() => {
+                                setFailedThumbnailIds((prev) =>
+                                  new Set(prev).add(att.id)
+                                );
+                              }}
+                            />
+                          ) : (
+                            <div className="flex flex-col items-center justify-center p-1 text-slate-700">
+                              <FileText className="w-4 h-4 text-[#00A8B5]" />
+                              <span className="font-extrabold text-[8px] tracking-tight uppercase leading-none mt-0.5">
+                                {ext.slice(0, 4)}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* File Details */}
+                        <div className="flex-1 min-w-0 pr-1">
+                          <div
+                            className="text-xs font-bold text-slate-900 truncate leading-snug"
+                            title={att.name}
+                          >
+                            {att.name}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5 font-mono-tabular">
+                            <span className="font-semibold text-slate-700">.{ext}</span>
+                            <span>·</span>
+                            <span>{formatFileSizeRu(att.sizeBytes)}</span>
+                            {totalSlides > 0 && (
+                              <>
+                                <span>·</span>
+                                <span>{totalSlides} сл.</span>
+                              </>
+                            )}
+                            {att.tableSheets && att.tableSheets.length > 0 && (
+                              <>
+                                <span>·</span>
+                                <span>{att.tableSheets.length} табл.</span>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Status Badge */}
+                          <div className="mt-1 flex items-center gap-1">
+                            {isUploading && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 bg-sky-100/90 px-1.5 py-0.5 rounded">
+                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                <span>Загружается</span>
+                              </span>
+                            )}
+                            {isProcessing && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-100/90 px-1.5 py-0.5 rounded">
+                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                <span>Обрабатывается</span>
+                              </span>
+                            )}
+                            {isReady && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-100/90 px-1.5 py-0.5 rounded">
+                                <Check className="w-2.5 h-2.5 stroke-[2.5]" />
+                                <span>Готов</span>
+                              </span>
+                            )}
+                            {isError && (
+                              <span
+                                className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded truncate max-w-full"
+                                title={att.statusMessage}
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+                                <span className="truncate">
+                                  {att.statusMessage || 'Ошибка'}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Collapsible Accordion: Settings, Templates, Knowledge Base, School & Designer Controls */}
           {isInputSettingsOpen && (
@@ -3318,7 +3456,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".pdf,.docx,.pptx,.txt,.md,.csv"
+                  accept=".pdf,.docx,.pptx,.txt,.md,.csv,.xlsx,.xls"
                   onChange={handleFileChange}
                   className="hidden"
                 />
@@ -3327,7 +3465,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   disabled={isParsingFile || isGenerating}
                   onClick={() => fileInputRef.current?.click()}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 border border-slate-200/80 disabled:opacity-60 transition-colors cursor-pointer"
-                  title="Прикрепить документ (PDF, DOCX, PPTX, TXT, CSV, MD) к текущему диалогу"
+                  title="Прикрепить документ (PDF, DOCX, PPTX, XLSX, XLS, TXT, CSV, MD) к текущему диалогу"
                 >
                   {isParsingFile ? (
                     <>
@@ -3386,7 +3524,14 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   <button
                     type="submit"
                     disabled={
-                      (!draftPrompt.trim() && !draftAttachment) ||
+                      (!draftPrompt.trim() && draftList.length === 0) ||
+                      draftList.some(
+                        (a) =>
+                          a.status === 'uploading' ||
+                          a.status === 'processing' ||
+                          a.status === 'queued' ||
+                          a.status === 'error'
+                      ) ||
                       isParsingFile ||
                       isGenerating
                     }
