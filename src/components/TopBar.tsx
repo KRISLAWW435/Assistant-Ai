@@ -203,7 +203,9 @@ export const TopBar: React.FC<TopBarProps> = ({
               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 activeSchool === 'renderia'
                   ? 'bg-[#84CC16] text-slate-950 hover:bg-[#76b813]'
-                  : 'bg-[#FFD700] text-slate-950 hover:bg-[#f0ca00]'
+                  : activeSchool === 'all'
+                    ? 'bg-[#00A8B5] text-white hover:bg-[#00929e]'
+                    : 'bg-[#FFD700] text-slate-950 hover:bg-[#f0ca00]'
               }`}
               title="Создать новый независимый чат"
             >
@@ -244,7 +246,9 @@ export const TopBar: React.FC<TopBarProps> = ({
                   className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono-tabular font-bold ${
                     activeSchool === 'renderia'
                       ? 'bg-[#84CC16] text-slate-950'
-                      : 'bg-[#FFD700] text-slate-950'
+                      : activeSchool === 'all'
+                        ? 'bg-[#00A8B5] text-white'
+                        : 'bg-[#FFD700] text-slate-950'
                   }`}
                 >
                   {dialogueFilesCount}

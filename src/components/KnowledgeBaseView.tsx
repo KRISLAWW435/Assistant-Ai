@@ -1032,9 +1032,11 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           <div className="inline-flex items-center gap-2">
             <span
               className={`px-3.5 py-1 rounded-xl font-display font-extrabold text-sm tracking-wide transition-colors ${
-                activeSchool === 'kiberone'
-                  ? 'bg-[#FFD700] text-slate-950'
-                  : 'bg-[#84CC16] text-slate-950'
+                activeSchool === 'all'
+                  ? 'bg-[#00A8B5] text-white'
+                  : activeSchool === 'kiberone'
+                    ? 'bg-[#FFD700] text-slate-950'
+                    : 'bg-[#84CC16] text-slate-950'
               }`}
             >
               {schoolConfig.name}

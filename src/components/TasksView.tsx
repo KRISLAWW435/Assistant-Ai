@@ -1692,15 +1692,17 @@ const TaskCardItem: React.FC<TaskCardItemProps> = ({
               {schoolConfig ? (
                 <span
                   className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
-                    task.schoolId === 'kiberone'
-                      ? 'bg-[#FFD700] text-slate-950'
-                      : 'bg-[#84CC16] text-slate-950'
+                    task.schoolId === 'all'
+                      ? 'bg-[#00A8B5] text-white'
+                      : task.schoolId === 'kiberone'
+                        ? 'bg-[#FFD700] text-slate-950'
+                        : 'bg-[#84CC16] text-slate-950'
                   }`}
                 >
                   {schoolConfig.name}
                 </span>
               ) : (
-                <span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[#00A8B5] text-white">
                   Обе школы
                 </span>
               )}

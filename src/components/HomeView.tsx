@@ -25,6 +25,7 @@ import {
 import {
   AGENT_MODE_LIST,
   AGENT_MODES,
+  getAgentModeList,
   KNOWLEDGE_CATEGORIES,
   SCHOOLS,
 } from '../config/schoolsAndModes';
@@ -85,10 +86,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
             <div className="inline-flex items-center gap-2 text-xs font-medium text-slate-500">
               <Sparkles className="w-3.5 h-3.5 text-amber-500" />
               <span>
-                Личное рабочее пространство Анны · Активная школа:{' '}
-                <strong className="font-semibold text-slate-800">
-                  {currentSchool.name}
-                </strong>
+                Личное рабочее пространство Анны ·{' '}
+                {activeSchool === 'all' ? (
+                  <>Контекст: <strong className="font-semibold text-slate-800">Обе школы</strong></>
+                ) : (
+                  <>Активная школа: <strong className="font-semibold text-slate-800">{currentSchool.name}</strong></>
+                )}
               </span>
             </div>
             <h1 className="font-display font-extrabold text-2xl sm:text-3xl text-slate-900 tracking-tight text-balance">
@@ -240,7 +243,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3.5">
-          {AGENT_MODE_LIST.map((mode) => {
+          {getAgentModeList(activeSchool).map((mode) => {
             const Icon = MODE_ICONS[mode.id];
             return (
               <button

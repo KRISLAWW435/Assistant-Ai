@@ -71,6 +71,7 @@ import {
 import {
   AGENT_MODE_LIST,
   AGENT_MODES,
+  getAgentModeConfig,
   KNOWLEDGE_CATEGORIES,
   SCHOOLS,
 } from '../config/schoolsAndModes';
@@ -679,7 +680,10 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const modeConfig = AGENT_MODES[activeMode];
+  const modeConfig = useMemo(
+    () => getAgentModeConfig(activeMode, activeSchool),
+    [activeMode, activeSchool]
+  );
   const schoolConfig = SCHOOLS[activeSchool];
 
   // Ensure currentSession strictly matches activeSessionId AND current school/mode
@@ -1388,9 +1392,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 <div className="flex flex-wrap items-center justify-center gap-2">
                   <span
                     className={`inline-flex items-center px-4 py-1.5 rounded-xl font-display font-extrabold text-base sm:text-lg tracking-wide shadow-2xs transition-colors duration-200 ${
-                      activeSchool === 'kiberone'
-                        ? 'bg-[#FFD700] text-slate-950'
-                        : 'bg-[#84CC16] text-slate-950'
+                      activeSchool === 'all'
+                        ? 'bg-[#00A8B5] text-white'
+                        : activeSchool === 'kiberone'
+                          ? 'bg-[#FFD700] text-slate-950'
+                          : 'bg-[#84CC16] text-slate-950'
                     }`}
                   >
                     {schoolConfig.name}
@@ -1401,7 +1407,9 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 </div>
 
                 <h2 className="font-display font-extrabold text-xl sm:text-2xl text-slate-900 tracking-tight">
-                  Анна, над какой задачей для {schoolConfig.name} поработаем?
+                  {activeSchool === 'all'
+                    ? 'Анна, над какой задачей для обеих школ поработаем?'
+                    : `Анна, над какой задачей для ${schoolConfig.name} поработаем?`}
                 </h2>
 
                 <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
@@ -1427,7 +1435,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                         ? 'Переключить на KIBERONE'
                         : activeSchool === 'kiberone'
                           ? 'Переключить на RENDERIA'
-                          : 'Переключить на «Общее»'}
+                          : 'Переключить на «Обе школы»'}
                     </span>
                   </button>
 
@@ -1475,7 +1483,9 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                           isSelected
                             ? activeSchool === 'renderia'
                               ? 'bg-[#84CC16]/15 border-[#84CC16] shadow-xs'
-                              : 'bg-[#F5B800]/15 border-[#F5B800] shadow-xs'
+                              : activeSchool === 'all'
+                                ? 'bg-[#00A8B5]/15 border-[#00A8B5] shadow-xs'
+                                : 'bg-[#F5B800]/15 border-[#F5B800] shadow-xs'
                             : 'bg-white hover:bg-slate-50 border-slate-200/90 shadow-2xs'
                         }`}
                       >
@@ -2784,7 +2794,9 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                             isSelected
                               ? activeSchool === 'renderia'
                                 ? 'bg-[#84CC16]/20 border-[#84CC16] text-slate-950 font-semibold'
-                                : 'bg-[#F5B800]/20 border-[#F5B800] text-slate-950 font-semibold'
+                                : activeSchool === 'all'
+                                  ? 'bg-[#00A8B5]/20 border-[#00A8B5] text-slate-950 font-semibold'
+                                  : 'bg-[#F5B800]/20 border-[#F5B800] text-slate-950 font-semibold'
                               : 'bg-white hover:bg-slate-100 border-slate-200/80 text-slate-700'
                           }`}
                         >
@@ -3286,16 +3298,18 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                     <div className="flex flex-wrap items-center gap-1.5">
                       {/* School Selector */}
                       <div className="inline-flex rounded-lg bg-white border border-purple-200 p-0.5">
-                        {(['kiberone', 'renderia'] as SchoolId[]).map((sch) => (
+                        {(['all', 'kiberone', 'renderia'] as SchoolId[]).map((sch) => (
                           <button
                             key={sch}
                             type="button"
                             onClick={() => onChangeSchool(sch)}
                             className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
                               activeSchool === sch
-                                ? sch === 'kiberone'
-                                  ? 'bg-[#FFD700] text-slate-950'
-                                  : 'bg-[#84CC16] text-slate-950'
+                                ? sch === 'all'
+                                  ? 'bg-[#00A8B5] text-white'
+                                  : sch === 'kiberone'
+                                    ? 'bg-[#FFD700] text-slate-950'
+                                    : 'bg-[#84CC16] text-slate-950'
                                 : 'text-slate-600 hover:text-slate-900'
                             }`}
                           >
@@ -3452,7 +3466,9 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
               placeholder={
                 isCurrentSessionGenerating
                   ? `${getGenerationStageLabelRu(generationStage)} (${generationElapsedSec} с)`
-                  : `Напишите задачу для специалиста «${modeConfig.shortTitle}» (школа ${schoolConfig.name})...`
+                  : activeSchool === 'all'
+                    ? `Напишите задачу для специалиста «${modeConfig.shortTitle}» (обе школы)...`
+                    : `Напишите задачу для специалиста «${modeConfig.shortTitle}» (школа ${schoolConfig.name})...`
               }
               className="w-full bg-transparent px-2 py-1 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none resize-y disabled:opacity-60"
             />
@@ -3526,8 +3542,14 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 </button>
 
                 <span className="text-[11px] text-slate-400 hidden md:inline">
-                  Школа:{' '}
-                  <strong className="text-slate-600">{schoolConfig.name}</strong>
+                  {activeSchool === 'all' ? (
+                    <strong className="text-slate-600">Обе школы</strong>
+                  ) : (
+                    <>
+                      Школа:{' '}
+                      <strong className="text-slate-600">{schoolConfig.name}</strong>
+                    </>
+                  )}
                 </span>
               </div>
 
@@ -3591,8 +3613,14 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 Прикрепить файл к сообщению
               </h4>
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Отпустите файл здесь (изображение или документ), чтобы прикрепить его к диалогу для школы{' '}
-                <strong>{schoolConfig.name}</strong>
+                Отпустите файл здесь (изображение или документ), чтобы прикрепить его к диалогу{' '}
+                {activeSchool === 'all' ? (
+                  <strong>для обеих школ</strong>
+                ) : (
+                  <>
+                    для школы <strong>{schoolConfig.name}</strong>
+                  </>
+                )}
               </p>
             </div>
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-100 text-[11px] font-semibold text-slate-700">
@@ -3846,9 +3874,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
               <div className="flex flex-wrap items-center gap-2 text-slate-600">
                 <span
                   className={`px-2 py-0.5 rounded font-bold text-[10px] ${
-                    sessionPendingDelete.schoolId === 'kiberone'
-                      ? 'bg-[#F5B800] text-slate-950'
-                      : 'bg-[#84CC16] text-slate-950'
+                    sessionPendingDelete.schoolId === 'all'
+                      ? 'bg-[#00A8B5] text-white'
+                      : sessionPendingDelete.schoolId === 'kiberone'
+                        ? 'bg-[#F5B800] text-slate-950'
+                        : 'bg-[#84CC16] text-slate-950'
                   }`}
                 >
                   {SCHOOLS[sessionPendingDelete.schoolId].name}

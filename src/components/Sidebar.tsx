@@ -352,23 +352,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           {isCollapsedMode ? (
             <div
-              title={`Активная школа: ${currentSchool.name}`}
+              title={`Контекст: ${currentSchool.name}`}
               className={`w-8 h-8 rounded-full font-display font-black text-xs tracking-tight flex items-center justify-center shrink-0 shadow-2xs transition-colors duration-200 ${
-                activeSchool === 'kiberone'
-                  ? 'bg-[#FFD700] text-slate-950'
-                  : 'bg-[#84CC16] text-slate-950'
+                activeSchool === 'all'
+                  ? 'bg-[#00A8B5] text-white'
+                  : activeSchool === 'kiberone'
+                    ? 'bg-[#FFD700] text-slate-950'
+                    : 'bg-[#84CC16] text-slate-950'
               }`}
             >
-              {activeSchool === 'kiberone' ? 'K' : 'R'}
+              {activeSchool === 'all' ? 'О' : activeSchool === 'kiberone' ? 'K' : 'R'}
             </div>
           ) : (
             <div className="min-w-0 space-y-1">
               <div className="flex items-center gap-1.5">
                 <span
                   className={`px-2.5 py-0.5 rounded-lg font-display font-extrabold text-sm tracking-wide transition-colors duration-200 ${
-                    activeSchool === 'kiberone'
-                      ? 'bg-[#FFD700] text-slate-950'
-                      : 'bg-[#84CC16] text-slate-950'
+                    activeSchool === 'all'
+                      ? 'bg-[#00A8B5] text-white'
+                      : activeSchool === 'kiberone'
+                        ? 'bg-[#FFD700] text-slate-950'
+                        : 'bg-[#84CC16] text-slate-950'
                   }`}
                 >
                   {currentSchool.name}
@@ -636,7 +640,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           isSelected && isViewingChat
                             ? activeSchool === 'renderia'
                               ? 'text-[#84CC16]'
-                              : 'text-[#FFD700]'
+                              : activeSchool === 'all'
+                                ? 'text-[#00A8B5]'
+                                : 'text-[#FFD700]'
                             : 'text-slate-500'
                         }`}
                       />
@@ -784,7 +790,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 className={`w-3.5 h-3.5 mt-0.5 shrink-0 rotate-45 ${
                                   activeSchool === 'renderia'
                                     ? 'text-[#65A30D]'
-                                    : 'text-[#D97706]'
+                                    : activeSchool === 'all'
+                                      ? 'text-[#00A8B5]'
+                                      : 'text-[#D97706]'
                                 }`}
                                 aria-label="Закреплённый диалог"
                               />
@@ -891,7 +899,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         isActive
                           ? activeSchool === 'renderia'
                             ? 'text-[#84CC16]'
-                            : 'text-[#F5B800]'
+                            : activeSchool === 'all'
+                              ? 'text-[#00A8B5]'
+                              : 'text-[#F5B800]'
                           : 'text-slate-500'
                       }`}
                     />
