@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LoadingAnimation } from './LoadingAnimation';
 import {
   AlertTriangle,
   ArrowRightLeft,
@@ -704,7 +705,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         Boolean(
           draftAttachment.dataUrl &&
             (draftAttachment.mimeType?.startsWith('image/') ||
-              ['png', 'jpg', 'jpeg', 'webp'].includes(draftAttachment.extension))
+              ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(draftAttachment.extension))
         ));
 
     if (draftAttachment && isDraftSendable) {
@@ -718,7 +719,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         Boolean(
           att.dataUrl &&
             (att.mimeType?.startsWith('image/') ||
-              ['png', 'jpg', 'jpeg', 'webp'].includes(att.extension))
+              ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(att.extension))
         );
       if (selDialSet.has(att.id) && isSendable && !names.includes(att.name)) {
         names.push(att.name);
@@ -752,7 +753,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     if (
       draftAttachment?.dataUrl &&
       (draftAttachment.mimeType?.startsWith('image/') ||
-        ['png', 'jpg', 'jpeg', 'webp'].includes(draftAttachment.extension))
+        ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(draftAttachment.extension))
     ) {
       return true;
     }
@@ -1047,7 +1048,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     const isDraftImage = Boolean(
       draftAttachment?.dataUrl &&
         (draftAttachment.mimeType?.startsWith('image/') ||
-          ['png', 'jpg', 'jpeg', 'webp'].includes(draftAttachment.extension))
+          ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(draftAttachment.extension))
     );
 
     if (
@@ -1633,68 +1634,26 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                       <div>
                         {msg.isStreaming ? (
                           <div className="space-y-3">
-                            {/* Multi-stage progress header with elapsed time counter */}
-                            <div className="rounded-xl p-3 bg-slate-50 border border-slate-200/90 space-y-2">
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="flex items-center gap-2 text-xs font-semibold text-slate-900">
-                                  <Loader2 className="w-4 h-4 animate-spin text-[#00A8B5] shrink-0" />
-                                  <span>
-                                    {getGenerationStageLabelRu(generationStage)}
-                                  </span>
-                                </div>
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-[11px] font-mono-tabular text-slate-600 shrink-0">
-                                  <Clock className="w-3 h-3 text-[#00A8B5]" />
-                                  <span>{generationElapsedSec} с</span>
+                            <LoadingAnimation elapsedSec={generationElapsedSec} />
+
+                            {/* 20-second slow response warning */}
+                            {isSlowGeneration && (
+                              <div className="rounded-xl p-3 bg-amber-50 border border-amber-200 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2 shadow-sm">
+                                <span>
+                                  Модель пока формирует ответ. Можно выждать ещё немного или остановить генерацию.
                                 </span>
+                                {onStopGeneration && (
+                                  <button
+                                    type="button"
+                                    onClick={onStopGeneration}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-600 text-white text-[11px] font-semibold hover:bg-red-700 transition-colors shrink-0 cursor-pointer"
+                                  >
+                                    <Square className="w-3 h-3 fill-current" />
+                                    <span>Остановить</span>
+                                  </button>
+                                )}
                               </div>
-
-                              {/* 4-step stage bar */}
-                              <div className="grid grid-cols-4 gap-1.5 pt-0.5">
-                                {STAGE_ORDER.map((st, idx) => {
-                                  const currentIdx = Math.max(
-                                    0,
-                                    STAGE_ORDER.indexOf(
-                                      generationStage || 'connecting'
-                                    )
-                                  );
-                                  const isDone = idx < currentIdx;
-                                  const isCurrent = idx === currentIdx;
-                                  return (
-                                    <div
-                                      key={st}
-                                      className={`h-1.5 rounded-full transition-all ${
-                                        isDone
-                                          ? 'bg-[#00A8B5]'
-                                          : isCurrent
-                                            ? 'bg-[#00A8B5] animate-pulse'
-                                            : 'bg-slate-200'
-                                      }`}
-                                      title={getGenerationStageLabelRu(st)}
-                                    />
-                                  );
-                                })}
-                              </div>
-
-                              {/* 20-second slow response warning */}
-                              {isSlowGeneration && (
-                                <div className="rounded-lg p-2.5 bg-amber-50 border border-amber-200 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
-                                  <span>
-                                    Модель пока формирует ответ. Можно
-                                    продолжить ожидание или остановить запрос
-                                  </span>
-                                  {onStopGeneration && (
-                                    <button
-                                      type="button"
-                                      onClick={onStopGeneration}
-                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-600 text-white text-[11px] font-semibold hover:bg-red-700 transition-colors shrink-0"
-                                    >
-                                      <Square className="w-3 h-3 fill-current" />
-                                      <span>Остановить</span>
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </div>
+                            )}
 
                             {msg.content && (
                               <div className="pt-1">
@@ -2492,6 +2451,15 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
           className="max-w-3xl mx-auto space-y-2"
         >
 
+          {isParsingFile && (
+            <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-sky-50 border border-sky-200 text-xs text-sky-950 animate-pulse">
+              <Loader2 className="w-4 h-4 animate-spin text-[#00A8B5] shrink-0" />
+              <span className="font-medium">
+                {parsingStatusLabel || 'Конвертация PPTX в PDF для полного анализа...'}
+              </span>
+            </div>
+          )}
+
           {attachmentNotice && (
             <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
               <span>{attachmentNotice}</span>
@@ -2510,7 +2478,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             const isDraftImage = Boolean(
               draftAttachment.dataUrl &&
                 (draftAttachment.mimeType?.startsWith('image/') ||
-                  ['png', 'jpg', 'jpeg', 'webp'].includes(
+                  ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(
                     draftAttachment.extension
                   ))
             );
@@ -2632,52 +2600,72 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   )
                 ) : (
                   <>
-                    {draftAttachment.extractedImages &&
-                      draftAttachment.extractedImages.length > 0 && (
-                        <div className="rounded-lg p-2.5 bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-950 space-y-1.5">
-                          <div className="flex items-center justify-between font-semibold">
-                            <span className="flex items-center gap-1.5 text-emerald-800">
-                              <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                              Мультимодальность активна: извлечено{' '}
-                              {draftAttachment.extractedImages.length}{' '}
-                              {draftAttachment.extractedImages.length === 1
-                                ? 'визуальный материал'
-                                : draftAttachment.extractedImages.length < 5
-                                  ? 'визуальных материала'
-                                  : 'визуальных материалов'}
-                            </span>
-                            <span className="text-[10px] text-emerald-700">
-                              ИИ увидит слайды и картинки
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2 overflow-x-auto pt-1 pb-1 scrollbar-thin">
-                            {draftAttachment.extractedImages
-                              .slice(0, 8)
-                              .map((img, idx) => (
-                                <div
-                                  key={img.id || idx}
-                                  className="relative shrink-0 rounded border border-emerald-300/60 overflow-hidden bg-white shadow-2xs"
-                                >
-                                  <img
-                                    src={img.dataUrl}
-                                    alt={img.name}
-                                    className="w-12 h-9 object-cover"
-                                  />
-                                  <div className="absolute inset-x-0 bottom-0 bg-black/60 px-0.5 text-[8px] text-white truncate text-center">
-                                    {img.sourceSlide
-                                      ? `Сл. ${img.sourceSlide}`
-                                      : `${idx + 1}`}
-                                  </div>
-                                </div>
-                              ))}
-                            {draftAttachment.extractedImages.length > 8 && (
-                              <span className="text-[10px] text-emerald-800 font-semibold shrink-0">
-                                +{draftAttachment.extractedImages.length - 8} ещё
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      )}
+                    {(() => {
+                      const totalExtracted = draftAttachment.extractedImages
+                        ? draftAttachment.extractedImages.length
+                        : 0;
+                      const willSend = Math.min(totalExtracted, 50);
+                      const isPresentation = ['pptx', 'ppt'].includes(
+                        (draftAttachment.extension || '').toLowerCase()
+                      );
+
+                      return (
+                        <>
+                          {totalExtracted > 0 && (
+                            <div className="rounded-lg p-2.5 bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-950 space-y-2">
+                              <div className="flex items-center justify-between font-semibold flex-wrap gap-1">
+                                <span className="flex items-center gap-1.5 text-emerald-900 font-bold">
+                                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                  <span>
+                                    {isPresentation
+                                      ? `Успешно распознано ${totalExtracted} страниц (все будут отправлены ИИ)`
+                                      : `Извлечено ${totalExtracted} изображений (будут отправлены ${willSend})`}
+                                  </span>
+                                </span>
+                                <span className="text-[10px] text-emerald-700">
+                                  ИИ увидит все слайды и визуал
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 overflow-x-auto pt-0.5 pb-1 scrollbar-thin">
+                                {draftAttachment.extractedImages!
+                                  .slice(0, 12)
+                                  .map((img, idx) => (
+                                    <div
+                                      key={img.id || idx}
+                                      className="relative shrink-0 rounded border border-emerald-300/60 overflow-hidden bg-white shadow-2xs"
+                                    >
+                                      <img
+                                        src={img.dataUrl}
+                                        alt={img.name}
+                                        className="w-12 h-9 object-cover"
+                                      />
+                                      <div className="absolute inset-x-0 bottom-0 bg-black/60 px-0.5 text-[8px] text-white truncate text-center">
+                                        {img.sourceSlide
+                                          ? `Сл. ${img.sourceSlide}`
+                                          : `${idx + 1}`}
+                                      </div>
+                                    </div>
+                                  ))}
+                                {totalExtracted > 12 && (
+                                  <span className="text-[10px] text-emerald-800 font-semibold shrink-0">
+                                    +{totalExtracted - 12} ещё
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {isPresentation && totalExtracted === 0 && (
+                            <div className="rounded-lg p-2.5 bg-sky-50 border border-sky-200 text-[11px] text-sky-950 flex items-start gap-2">
+                              <Info className="w-3.5 h-3.5 text-[#00A8B5] shrink-0 mt-0.5" />
+                              <div className="font-semibold text-slate-900">
+                                Текст всех слайдов извлечён и будет отправлен ИИ.
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
 
                     {draftAttachment.warning && (
                       <div className="rounded-lg p-2 bg-amber-50 border border-amber-200 text-[11px] text-amber-900">

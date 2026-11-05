@@ -12,6 +12,14 @@ import {
   parseDocumentFile,
 } from '../utils/documentParser';
 
+import {
+  OPENROUTER_MULTIMODAL_PRIORITY_MODELS,
+  OpenRouterMultimodalModelId,
+} from './aiProviderManager';
+
+export { OPENROUTER_MULTIMODAL_PRIORITY_MODELS };
+export type { OpenRouterMultimodalModelId };
+
 export interface PreparedApiDocumentItem {
   id: string;
   name: string;
@@ -62,6 +70,8 @@ export interface IDocumentProvider {
     sendableDocuments: PreparedApiDocumentItem[];
     sendableImages: PreparedApiImageItem[];
     skippedNoTextDocuments: string[];
+    hasMultimodalImages: boolean;
+    suggestedOpenRouterModels: readonly string[];
   };
 }
 
@@ -295,10 +305,16 @@ export const documentProvider: IDocumentProvider = {
       }
     }
 
+    const hasMultimodalImages = sendableImages.length > 0;
+
     return {
       sendableDocuments,
       sendableImages,
       skippedNoTextDocuments,
+      hasMultimodalImages,
+      suggestedOpenRouterModels: hasMultimodalImages
+        ? OPENROUTER_MULTIMODAL_PRIORITY_MODELS
+        : OPENROUTER_MULTIMODAL_PRIORITY_MODELS,
     };
   },
 };

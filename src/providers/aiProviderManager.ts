@@ -14,7 +14,23 @@ import {
   GeminiChatMetrics,
   GeminiEndpointMode,
   GenerationStage,
+  PreparedApiImageItem,
 } from './geminiProvider';
+
+/**
+ * Priority array of free multimodal models for OpenRouter file analysis (text + images).
+ * OpenRouter automatically tries the primary model and cascades down the fallback list
+ * if rate limits (429) or temporary server errors (503) occur.
+ */
+export const OPENROUTER_MULTIMODAL_PRIORITY_MODELS = [
+  'nvidia/nemotron-3.5-super-vl:free', // Основная
+  'qwen/qwen2.5-vl-72b-instruct:free', // Резервная 1
+  'google/gemma-4-26b-a4b-it:free',    // Резервная 2
+  'stealth/ox-alpha',                  // Резервная 3
+] as const;
+
+export type OpenRouterMultimodalModelId =
+  (typeof OPENROUTER_MULTIMODAL_PRIORITY_MODELS)[number];
 
 export interface AIProviderStatusDescriptor {
   id: AIProviderId;
@@ -45,6 +61,7 @@ export interface AIProviderRequestOptions {
   sessionId: string;
   messages: GeminiChatMessageInput[];
   selectedDocuments?: PreparedApiDocumentItem[];
+  selectedImages?: PreparedApiImageItem[];
   knowledgeBaseContext?: PreparedKnowledgeContextItem[];
   pixelContext?: PixelRelevantContextBundle;
   externalApiConsentConfirmed?: boolean;
@@ -120,7 +137,19 @@ export function formatMessageProviderAttribution(
   const cleanModel = (modelName || fallbackModel || '').trim();
   if (providerId === 'openrouter') {
     if (!cleanModel || cleanModel === 'openrouter/free') {
-      return 'OpenRouter · openrouter/free';
+      return 'OpenRouter · Auto Free Fallback';
+    }
+    if (cleanModel.includes('nemotron-3.5-super-vl')) {
+      return 'OpenRouter · Nemotron 3.5 Super VL (Мультимодальная)';
+    }
+    if (cleanModel.includes('qwen2.5-vl-72b')) {
+      return 'OpenRouter · Qwen 2.5 VL 72B (Мультимодальная)';
+    }
+    if (cleanModel.includes('gemma-4-26b')) {
+      return 'OpenRouter · Gemma 4 26B (Мультимодальная)';
+    }
+    if (cleanModel.includes('ox-alpha')) {
+      return 'OpenRouter · OX-Alpha (Мультимодальная)';
     }
     return `OpenRouter · ${cleanModel}`;
   }

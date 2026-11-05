@@ -350,6 +350,7 @@ export default function App() {
   const [isParsingChatFile, setIsParsingChatFile] = useState(false);
   const [chatParsingStatus, setChatParsingStatus] =
     useState<DocumentProcessingStatus | null>(null);
+  const [chatParsingLabel, setChatParsingLabel] = useState<string | null>(null);
   const [stagedChatFileModal, setStagedChatFileModal] =
     useState<StagedChatFileModalState | null>(null);
 
@@ -1321,6 +1322,9 @@ export default function App() {
     const now = new Date();
     setIsParsingChatFile(true);
     setChatParsingStatus('queued');
+    setChatParsingLabel(
+      ext === 'pptx' ? 'Конвертация PPTX в PDF для полного анализа...' : null
+    );
 
     try {
       let dataUrl: string | undefined;
@@ -1352,9 +1356,15 @@ export default function App() {
         extractedText = '';
         warning = undefined;
       } else {
-        parsedResult = await documentProvider.parseFile(file, (nextStatus) => {
-          setChatParsingStatus(nextStatus);
-        });
+        parsedResult = await documentProvider.parseFile(
+          file,
+          (nextStatus: DocumentProcessingStatus, customLabel?: string) => {
+            setChatParsingStatus(nextStatus);
+            if (customLabel) {
+              setChatParsingLabel(customLabel);
+            }
+          }
+        );
         status = parsedResult.status;
         extractedText = parsedResult.extractedText;
         warning = parsedResult.warning;
@@ -1414,6 +1424,7 @@ export default function App() {
     } finally {
       setIsParsingChatFile(false);
       setChatParsingStatus(null);
+      setChatParsingLabel(null);
     }
   };
 
@@ -3469,9 +3480,10 @@ export default function App() {
                   highlightedMessageId={highlightedMessageId}
                   isParsingFile={isParsingChatFile}
                   parsingStatusLabel={
-                    chatParsingStatus
+                    chatParsingLabel ||
+                    (chatParsingStatus
                       ? documentProvider.getStatusLabel(chatParsingStatus)
-                      : null
+                      : null)
                   }
                   onOpenVoiceSettings={handleOpenRightPanelVoiceSettings}
                   onHandoffTaskToSpecialist={handleHandoffTaskToSpecialist}
@@ -3563,9 +3575,10 @@ export default function App() {
         stagedDraftAttachment={draftAttachment}
         isParsingDialogueFile={isParsingChatFile}
         parsingStatusLabel={
-          chatParsingStatus
+          chatParsingLabel ||
+          (chatParsingStatus
             ? documentProvider.getStatusLabel(chatParsingStatus)
-            : null
+            : null)
         }
         geminiStatus={geminiStatus}
         providersState={providersState}

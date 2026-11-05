@@ -135,6 +135,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('files:deleteChatFiles', chatId, school),
     extractMultimodalContent: (filePath: string, fileType?: string) =>
       ipcRenderer.invoke('files:extractMultimodalContent', filePath, fileType),
+    convertPptxToPdf: (payload: { buffer?: ArrayBuffer | Uint8Array; filePath?: string }) =>
+      ipcRenderer.invoke('files:convertPptxToPdf', payload),
   },
 });
+
 

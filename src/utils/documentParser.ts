@@ -2,6 +2,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import mammoth from 'mammoth';
 import JSZip from 'jszip';
+import { Ream } from 'reamkit';
 import {
   DocumentProcessingStatus,
   ExtractedDocumentImage,
@@ -262,7 +263,7 @@ async function renderPdfPageToDataUrl(
       viewport,
     }).promise;
 
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.60);
     canvas.width = 0;
     canvas.height = 0;
     return dataUrl;
@@ -440,6 +441,83 @@ export async function extractDocxMultimodal(
 }
 
 /**
+ * Converts a PPTX ArrayBuffer into a PDF ArrayBuffer using reamkit in-memory parser/converter.
+ * Does not require LibreOffice or external software.
+ */
+export async function convertPptxToPdf(
+  buffer: ArrayBuffer
+): Promise<{
+  success: boolean;
+  pdfBuffer?: ArrayBuffer;
+  error?: string;
+  message?: string;
+}> {
+  // 1. Local pure-JS/TS conversion using reamkit (no LibreOffice required)
+  try {
+    const bytes = new Uint8Array(buffer);
+    const doc = Ream.parse(bytes);
+    const pdfUint8 = await doc.convert('pdf');
+    if (pdfUint8 && pdfUint8.byteLength > 0) {
+      const raw = pdfUint8.buffer.slice(
+        pdfUint8.byteOffset,
+        pdfUint8.byteOffset + pdfUint8.byteLength
+      );
+      return { success: true, pdfBuffer: raw as ArrayBuffer };
+    }
+  } catch (reamErr) {
+    console.warn('[Reamkit local conversion notice, trying IPC]', reamErr);
+  }
+
+  // 2. Electron desktop IPC fallback
+  if (typeof window !== 'undefined') {
+    const electronApi = (window as unknown as {
+      electronAPI?: {
+        files?: {
+          convertPptxToPdf?: (payload: { buffer: ArrayBuffer }) => Promise<{
+            success: boolean;
+            pdfBuffer?: ArrayBuffer | Uint8Array;
+            error?: string;
+            message?: string;
+          }>;
+        };
+      };
+    })?.electronAPI;
+
+    if (electronApi?.files && typeof electronApi.files.convertPptxToPdf === 'function') {
+      try {
+        const res = await electronApi.files.convertPptxToPdf({ buffer });
+        if (res.success && res.pdfBuffer) {
+          const raw =
+            res.pdfBuffer instanceof Uint8Array
+              ? res.pdfBuffer.buffer.slice(
+                  res.pdfBuffer.byteOffset,
+                  res.pdfBuffer.byteOffset + res.pdfBuffer.byteLength
+                )
+              : res.pdfBuffer;
+          return { success: true, pdfBuffer: raw as ArrayBuffer };
+        }
+        return {
+          success: false,
+          error: res.error,
+          message:
+            res.message ||
+            'Не удалось автоматически конвертировать презентацию. Пожалуйста, сохраните её в PDF вручную',
+        };
+      } catch (err) {
+        console.warn('[Electron PPTX-to-PDF IPC error]', err);
+      }
+    }
+  }
+
+  return {
+    success: false,
+    error: 'CONVERSION_FAILED',
+    message:
+      'Не удалось автоматически конвертировать презентацию. Пожалуйста, сохраните её в PDF вручную',
+  };
+}
+
+/**
  * Extracts slide text, speaker notes, embedded media images, and color themes from a PPTX file using JSZip.
  */
 async function extractPptxTextAndVisuals(buffer: ArrayBuffer): Promise<{
@@ -472,27 +550,62 @@ async function extractPptxTextAndVisuals(buffer: ArrayBuffer): Promise<{
 
   slideEntries.sort((a, b) => a.num - b.num);
 
-  // 1. Extract embedded media images from ppt/media/*
+  // 1. Extract embedded media images from ppt/media/* (including icons, vectors, and embedded visuals)
   const mediaImages = new Map<string, { base64: string; mimeType: string }>();
   const mediaPaths: string[] = [];
-  zip.forEach((path) => {
-    if (path.toLowerCase().startsWith('ppt/media/')) {
-      mediaPaths.push(path);
+  zip.forEach((rawPath) => {
+    const norm = rawPath.replace(/\\/g, '/');
+    const lower = norm.toLowerCase();
+    if (
+      lower.startsWith('ppt/media/') ||
+      lower.includes('/ppt/media/') ||
+      lower.startsWith('media/') ||
+      lower.includes('/media/')
+    ) {
+      mediaPaths.push(norm);
     }
   });
 
-  for (const mediaPath of mediaPaths.slice(0, 35)) {
+  // Natural sort so slide 1 media precedes slide 2, etc. (e.g. image1, image2, image10)
+  mediaPaths.sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  );
+
+  const SYSTEM_MEDIA_PATTERNS = [
+    /^thumb/i,
+    /_thumb/i,
+    /\.bin$/i,
+    /\.wmf$/i,
+    /\.emf$/i,
+    /\.xml$/i,
+    /\.rels$/i,
+    /\.tmp$/i,
+    /\.ds_store$/i,
+  ];
+
+  for (const mediaPath of mediaPaths) {
     const mediaFile = zip.file(mediaPath);
     if (!mediaFile) continue;
     const fileName = mediaPath.split('/').pop() || 'image.png';
+
+    // Filter out system files, thumbnails, dummy binaries, and macOS metadata
+    if (
+      fileName.startsWith('.') ||
+      mediaPath.includes('__MACOSX') ||
+      SYSTEM_MEDIA_PATTERNS.some((p) => p.test(fileName))
+    ) {
+      continue;
+    }
+
     const ext = fileName.split('.').pop()?.toLowerCase() || 'png';
-    if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)) {
+    if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'jfif', 'bmp'].includes(ext)) {
       try {
         const base64 = await mediaFile.async('base64');
+        if (!base64 || base64.length < 32) continue; // Skip empty or corrupted items
         const mimeType = getMimeTypeFromExt(ext);
         mediaImages.set(fileName, { base64, mimeType });
       } catch {
-        // ignore
+        // ignore unreadable media file
       }
     }
   }
@@ -539,13 +652,17 @@ async function extractPptxTextAndVisuals(buffer: ArrayBuffer): Promise<{
       if (m[1]) addHex(m[1]);
     }
 
-    // Collect text from <a:t> nodes
-    const pNodes = Array.from(xmlDoc.getElementsByTagName('a:p'));
+    // Collect text from <a:p> and <p> nodes
     const lines: string[] = [];
+    const pNodes = Array.from(xmlDoc.getElementsByTagName('a:p')).concat(
+      Array.from(xmlDoc.getElementsByTagName('p'))
+    );
 
     if (pNodes.length > 0) {
       for (const p of pNodes) {
-        const tNodes = Array.from(p.getElementsByTagName('a:t'));
+        const tNodes = Array.from(p.getElementsByTagName('a:t')).concat(
+          Array.from(p.getElementsByTagName('t'))
+        );
         const line = tNodes
           .map((t) => t.textContent || '')
           .join('')
@@ -554,13 +671,37 @@ async function extractPptxTextAndVisuals(buffer: ArrayBuffer): Promise<{
         if (line) lines.push(line);
       }
     } else {
-      const allT = Array.from(xmlDoc.getElementsByTagName('a:t'));
+      const allT = Array.from(xmlDoc.getElementsByTagName('a:t')).concat(
+        Array.from(xmlDoc.getElementsByTagName('t'))
+      );
       const fallback = allT
         .map((t) => t.textContent || '')
         .join(' ')
         .replace(/\s+/g, ' ')
         .trim();
       if (fallback) lines.push(fallback);
+    }
+
+    // Fallback: regex extraction to guarantee no text loss on text-only slides
+    if (lines.length === 0) {
+      const tMatches = xmlStr.matchAll(/<(?:a:)?t(?:\s+[^>]*)?>([\s\S]*?)<\/(?:a:)?t>/gi);
+      const regexTokens: string[] = [];
+      for (const m of tMatches) {
+        if (m[1]) {
+          const unescaped = m[1]
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&apos;/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (unescaped) regexTokens.push(unescaped);
+        }
+      }
+      if (regexTokens.length > 0) {
+        lines.push(regexTokens.join(' '));
+      }
     }
 
     // Speaker notes
@@ -586,8 +727,11 @@ async function extractPptxTextAndVisuals(buffer: ArrayBuffer): Promise<{
     }
 
     // Map images for this specific slide via slide relationships
-    const relsPath = `ppt/slides/_rels/slide${entry.num}.xml.rels`;
-    const relsFile = zip.file(relsPath);
+    const slideFileName = entry.path.split('/').pop() || `slide${entry.num}.xml`;
+    let relsFile = zip.file(`ppt/slides/_rels/${slideFileName}.rels`);
+    if (!relsFile) {
+      relsFile = zip.file(`ppt/slides/_rels/slide${entry.num}.xml.rels`);
+    }
     const slideImageUrls: string[] = [];
 
     if (relsFile) {
@@ -597,7 +741,7 @@ async function extractPptxTextAndVisuals(buffer: ArrayBuffer): Promise<{
         const relNodes = Array.from(relsDoc.getElementsByTagName('Relationship'));
         for (const rel of relNodes) {
           const target = rel.getAttribute('Target') || '';
-          const targetFileName = target.split('/').pop() || '';
+          const targetFileName = target.split('/').pop()?.split('\\').pop() || '';
           const foundImg = mediaImages.get(targetFileName);
           if (foundImg) {
             slideImageUrls.push(
@@ -635,6 +779,12 @@ async function extractPptxTextAndVisuals(buffer: ArrayBuffer): Promise<{
       dataUrl: `data:${item.mimeType};base64,${item.base64}`,
       mimeType: item.mimeType,
     });
+  }
+
+  if (extractedImages.length > 5) {
+    console.warn(
+      `[PPTX Parser] Из файла извлечено ${extractedImages.length} визуальных элементов (превышает 5). В ИИ будет отправлена адаптивная выборка из 10 ключевых изображений (обложка, концовка и середина).`
+    );
   }
 
   return {
@@ -1160,9 +1310,80 @@ export async function parseDocumentFile(
     }
 
     // =========================================================================
-    // 8. PPTX
+    // 8. PPTX (Automatic Conversion to PDF for Vector & Visual Rendering)
     // =========================================================================
     if (ext === 'pptx') {
+      onStatusChange?.(
+        'processing',
+        'Конвертация PPTX в PDF для полного анализа...'
+      );
+
+      let pdfExtracted: {
+        text: string;
+        pageCount: number;
+        emptyPagesCount: number;
+        images: string[];
+        extractedImages: ExtractedDocumentImage[];
+      } | null = null;
+      let conversionWarning: string | undefined;
+
+      try {
+        const conv = await convertPptxToPdf(buffer);
+        if (conv.success && conv.pdfBuffer) {
+          pdfExtracted = await extractPdfMultimodal(conv.pdfBuffer, 50);
+        } else if (conv.message) {
+          conversionWarning = conv.message;
+        } else {
+          conversionWarning =
+            'Не удалось автоматически конвертировать презентацию. Пожалуйста, сохраните её в PDF вручную';
+        }
+      } catch (convErr) {
+        console.warn(
+          '[PPTX conversion failed, falling back to direct parse]',
+          convErr
+        );
+        conversionWarning =
+          'Не удалось автоматически конвертировать презентацию. Пожалуйста, сохраните её в PDF вручную';
+      }
+
+      // Also extract slide text and colors directly from PPTX XML
+      const pptxRes = await extractPptxTextAndVisuals(buffer);
+
+      // If PDF rendering succeeded:
+      if (pdfExtracted && pdfExtracted.extractedImages.length > 0) {
+        const text = (
+          pdfExtracted.text.trim().length > 0
+            ? pdfExtracted.text
+            : pptxRes.text
+        ).trim();
+        const combinedPalette = [
+          ...pptxRes.colorPalette,
+          ...extractHexColorsFromText(text),
+        ].filter(
+          (c, i, arr) => arr.findIndex((x) => x.hex === c.hex) === i
+        );
+
+        const pageCount = pdfExtracted.pageCount || pptxRes.slideCount;
+
+        return {
+          name: file.name,
+          extension: ext,
+          sizeBytes: file.size,
+          status: 'processed',
+          statusLabel: `Успешно распознано ${pageCount} страниц`,
+          extractedText: text,
+          pageCount,
+          fileType: 'presentation',
+          mimeType:
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          warning: undefined,
+          slides: pptxRes.slides,
+          extractedImages: pdfExtracted.extractedImages,
+          colorPalette: combinedPalette.length > 0 ? combinedPalette : undefined,
+        };
+      }
+
+      // Fallback if LibreOffice was not available / conversion returned no pages:
       const {
         text,
         slideCount,
@@ -1170,7 +1391,7 @@ export async function parseDocumentFile(
         slides,
         extractedImages,
         colorPalette,
-      } = await extractPptxTextAndVisuals(buffer);
+      } = pptxRes;
 
       const combinedPalette = [
         ...colorPalette,
@@ -1193,27 +1414,28 @@ export async function parseDocumentFile(
           fileType: 'presentation',
           mimeType:
             'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-          warning: `Презентация PPTX (${slideCount} сл.) не содержит распознаваемого текста или медиа-файлов.`,
+          warning:
+            conversionWarning ||
+            `Презентация PPTX (${slideCount} сл.) не содержит распознаваемого текста или медиа-файлов.`,
         };
       }
-
-      const partialWarning =
-        emptySlidesCount > 0
-          ? `Извлечён текст с ${slideCount - emptySlidesCount} из ${slideCount} слайдов. Сохранено ${extractedImages.length} встроенных изображений.`
-          : `Извлечено ${slideCount} слайдов и ${extractedImages.length} встроенных изображений.`;
 
       return {
         name: file.name,
         extension: ext,
         sizeBytes: file.size,
         status: 'processed',
-        statusLabel: getStatusLabelRu('processed'),
+        statusLabel: `Успешно распознано ${slideCount} страниц`,
         extractedText: text,
         pageCount: slideCount,
         fileType: 'presentation',
         mimeType:
           'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        warning: partialWarning,
+        warning:
+          conversionWarning ||
+          (extractedImages.length > 0
+            ? `Извлечено ${extractedImages.length} медиа-изображений из слайдов.`
+            : undefined),
         slides,
         extractedImages,
         colorPalette: combinedPalette.length > 0 ? combinedPalette : undefined,
@@ -1307,7 +1529,7 @@ export async function extractMultimodalContent(
 
   // 1. PDF
   if (ext === 'pdf') {
-    const res = await extractPdfMultimodal(buffer, 10);
+    const res = await extractPdfMultimodal(buffer, 50);
     return {
       text: res.text,
       images: res.images,
@@ -1316,6 +1538,18 @@ export async function extractMultimodalContent(
 
   // 2. PPTX
   if (ext === 'pptx') {
+    try {
+      const conv = await convertPptxToPdf(buffer);
+      if (conv.success && conv.pdfBuffer) {
+        const res = await extractPdfMultimodal(conv.pdfBuffer, 50);
+        return {
+          text: res.text,
+          images: res.images,
+        };
+      }
+    } catch {
+      // fallback to internal parser
+    }
     const res = await extractPptxTextAndVisuals(buffer);
     return {
       text: res.text,

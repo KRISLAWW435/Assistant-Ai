@@ -51,6 +51,18 @@ export const OPENROUTER_DEFAULT_FREE_MODEL =
     rawEnvOpenRouterModel.endsWith(':free'))
     ? rawEnvOpenRouterModel
     : 'openrouter/free';
+
+/**
+ * Priority array of free multimodal models for OpenRouter file analysis (text + images).
+ * OpenRouter automatically executes client-side fallback across these models in order.
+ */
+export const OPENROUTER_MULTIMODAL_PRIORITY_MODELS = [
+  'nvidia/nemotron-3.5-super-vl:free', // Основная
+  'qwen/qwen2.5-vl-72b-instruct:free', // Резервная 1
+  'google/gemma-4-26b-a4b-it:free',    // Резервная 2
+  'stealth/ox-alpha',                  // Резервная 3
+] as const;
+
 export const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'
 ).replace(/\/+$/, '');
@@ -657,6 +669,13 @@ export function isStrictlyFreeOpenRouterModelId(modelId: string): boolean {
   if (!normalized) return false;
   if (normalized === 'openrouter/free') return true;
   if (normalized.endsWith(':free')) return true;
+  if (
+    OPENROUTER_MULTIMODAL_PRIORITY_MODELS.some(
+      (m) => m.toLowerCase() === normalized
+    )
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -1340,36 +1359,80 @@ async function executeOpenRouterFreeGeneration(params: {
   systemInstruction: string;
   messages: IncomingChatMessage[];
   signal: AbortSignal;
+  selectedImages?: IncomingSelectedImage[];
+  hasImages?: boolean;
 }): Promise<{ text: string; model: string }> {
   const apiKey = getOpenRouterApiKey();
   if (!apiKey || apiKey === 'MY_OPENROUTER_API_KEY') {
     throw new Error('MISSING_OPENROUTER_API_KEY');
   }
 
-  let requestedModel = (
-    process.env.OPENROUTER_MODEL || 'openrouter/free'
-  ).trim();
+  const hasImages = Boolean(
+    params.hasImages ||
+      (params.selectedImages && params.selectedImages.length > 0)
+  );
 
-  // Strict Zero-Cost Guard (Part 4): block any model ID that is not `openrouter/free` or `:free`
-  if (!isStrictlyFreeOpenRouterModelId(requestedModel)) {
-    requestedModel = 'openrouter/free';
-  }
+  // Priority free multimodal models array for file/image analysis
+  // When 'models' array is provided, OpenRouter cascades automatically
+  const candidateModels: string[] = hasImages
+    ? [...OPENROUTER_MULTIMODAL_PRIORITY_MODELS]
+    : [
+        process.env.OPENROUTER_MODEL?.trim() || OPENROUTER_DEFAULT_FREE_MODEL,
+        ...OPENROUTER_MULTIMODAL_PRIORITY_MODELS,
+      ].filter((m, idx, arr) => m && arr.indexOf(m) === idx);
 
-  // If a specific `:free` model is configured, verify against live catalog that pricing is 0/0
-  if (requestedModel !== 'openrouter/free') {
-    const freeCatalog = await fetchOpenRouterFreeCatalog(params.signal);
-    if (freeCatalog.length > 1 && !freeCatalog.includes(requestedModel)) {
-      requestedModel = 'openrouter/free';
+  // Filter models to strictly verified free models
+  const safeModels = candidateModels.filter((m) =>
+    isStrictlyFreeOpenRouterModelId(m)
+  );
+  const modelsPayload =
+    safeModels.length > 0 ? safeModels : ['openrouter/free'];
+
+  // Construct OpenAI-compatible messages with multimodal support
+  const openAiMessages: Array<{
+    role: string;
+    content:
+      | string
+      | Array<{ type: string; text?: string; image_url?: { url: string } }>;
+  }> = [{ role: 'system', content: params.systemInstruction }];
+
+  const rawMessages = params.messages.map((m) => ({
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: m.content.trim().slice(0, MAX_SINGLE_MESSAGE_CHARS),
+  }));
+
+  if (hasImages && params.selectedImages && params.selectedImages.length > 0) {
+    const lastUserIdx = rawMessages.map((m) => m.role).lastIndexOf('user');
+    for (let idx = 0; idx < rawMessages.length; idx++) {
+      if (idx === lastUserIdx || (lastUserIdx === -1 && idx === rawMessages.length - 1)) {
+        const textContent =
+          rawMessages[idx].content ||
+          'Пожалуйста, внимательно проанализируй прикреплённые материалы и изображения.';
+        const contentParts: Array<{
+          type: string;
+          text?: string;
+          image_url?: { url: string };
+        }> = [{ type: 'text', text: textContent }];
+
+        for (const img of params.selectedImages) {
+          const url = img.base64Data.startsWith('data:')
+            ? img.base64Data
+            : `data:${img.mimeType || 'image/jpeg'};base64,${img.base64Data}`;
+          contentParts.push({
+            type: 'image_url',
+            image_url: { url },
+          });
+        }
+        openAiMessages.push({ role: 'user', content: contentParts });
+      } else {
+        openAiMessages.push(rawMessages[idx]);
+      }
+    }
+  } else {
+    for (const m of rawMessages) {
+      openAiMessages.push(m);
     }
   }
-
-  const openAiMessages = [
-    { role: 'system', content: params.systemInstruction },
-    ...params.messages.map((m) => ({
-      role: m.role === 'user' ? 'user' : 'assistant',
-      content: m.content.trim().slice(0, MAX_SINGLE_MESSAGE_CHARS),
-    })),
-  ];
 
   const timeoutController = new AbortController();
   const timer = setTimeout(
@@ -1389,7 +1452,8 @@ async function executeOpenRouterFreeGeneration(params: {
         'X-Title': 'KIBERONE & RENDERIA Business Assistant',
       },
       body: JSON.stringify({
-        model: requestedModel,
+        models: modelsPayload,
+        model: modelsPayload[0],
         messages: openAiMessages,
       }),
       signal: timeoutController.signal,
@@ -1428,7 +1492,7 @@ async function executeOpenRouterFreeGeneration(params: {
       throw new Error('EMPTY_MODEL_RESPONSE');
     }
 
-    const actualModel = String(data?.model || requestedModel).trim();
+    const actualModel = String(data?.model || modelsPayload[0]).trim();
     return {
       text,
       model: actualModel,
@@ -2172,14 +2236,11 @@ export async function startServer(
       .slice(0, 10);
     const hasImages = validImages.length > 0;
 
-    if (
-      hasImages &&
-      (requestedSelection === 'ollama' || requestedSelection === 'openrouter')
-    ) {
+    if (hasImages && requestedSelection === 'ollama') {
       res.status(400).json({
         error: {
           code: 'IMAGE_UNSUPPORTED_BY_PROVIDER',
-          message: `Выбранный провайдер (${PROVIDER_LABELS_RU[requestedSelection]}) не поддерживает визуальный анализ изображений. Пожалуйста, выберите «Автовыбор ИИ» или «Google Gemini Free» для отправки изображений.`,
+          message: `Локальный провайдер Ollama не поддерживает визуальный анализ изображений. Пожалуйста, выберите «Автовыбор ИИ», «Google Gemini Free» или «OpenRouter Free» для отправки изображений.`,
         },
       });
       return;
@@ -2264,7 +2325,11 @@ export async function startServer(
 
     let candidateProviders: AIProviderId[];
     if (hasImages) {
-      candidateProviders = ['gemini'];
+      if (requestedSelection === 'openrouter') {
+        candidateProviders = ['openrouter', 'gemini'];
+      } else {
+        candidateProviders = ['gemini', 'openrouter'];
+      }
     } else if (requestedSelection !== 'auto') {
       // Put requested provider first, followed by the remaining configured providers in failover order
       candidateProviders = [
@@ -2469,6 +2534,8 @@ export async function startServer(
             attemptResult = await executeOpenRouterFreeGeneration({
               systemInstruction,
               messages: normalizedRawMessages,
+              selectedImages: validImages,
+              hasImages,
               signal: abortController.signal,
             });
           } else {

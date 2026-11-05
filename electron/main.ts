@@ -22,6 +22,7 @@ import {
   setServerCloudflareCredentials,
   RunningAssistantServer,
 } from '../server';
+import { convertPptxToPdfBuffer } from '../src/server/pptxConverter.ts';
 import type {
   AIConnectionProfile,
   AIConnectionStatus,
@@ -1131,6 +1132,45 @@ function registerIpcHandlers(): void {
     'files:extractMultimodalContent',
     async (_event, sourcePath: string, fileType?: string) => {
       return extractMultimodalContent(sourcePath, fileType);
+    }
+  );
+
+  ipcMain.handle(
+    'files:convertPptxToPdf',
+    async (
+      _event,
+      payload: { buffer?: ArrayBuffer | Uint8Array; filePath?: string }
+    ) => {
+      try {
+        let inputBuf: Buffer | null = null;
+        if (payload?.buffer) {
+          inputBuf = Buffer.from(
+            payload.buffer instanceof Uint8Array
+              ? payload.buffer
+              : new Uint8Array(payload.buffer)
+          );
+        } else if (payload?.filePath && fs.existsSync(payload.filePath)) {
+          inputBuf = fs.readFileSync(payload.filePath);
+        }
+
+        if (!inputBuf || inputBuf.length === 0) {
+          return {
+            success: false,
+            error: 'EMPTY_INPUT',
+            message: 'Файл PPTX пуст или не передан.',
+          };
+        }
+
+        return await convertPptxToPdfBuffer(inputBuf);
+      } catch (err: unknown) {
+        const msg =
+          err instanceof Error ? err.message : 'Ошибка конвертации PPTX в PDF';
+        return {
+          success: false,
+          error: 'CONVERSION_EXCEPTION',
+          message: msg,
+        };
+      }
     }
   );
 }

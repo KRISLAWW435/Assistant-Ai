@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { LoadingAnimation } from './LoadingAnimation';
 import {
   AlertCircle,
   ArrowRight,
@@ -3097,37 +3098,20 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
                       {msg.isStreaming ? (
                         <div className="space-y-2">
-                          <div className="rounded-xl p-2 bg-slate-50 border border-slate-200/80 space-y-1.5">
-                            <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-slate-800">
-                              <span className="inline-flex items-center gap-1.5">
-                                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00A8B5] shrink-0" />
-                                <span>
-                                  {getGenerationStageLabelRu(
-                                    pixelGenerationStage
-                                  )}
-                                </span>
-                              </span>
-                              <span className="font-mono-tabular text-[10px] text-slate-500">
-                                {pixelElapsedSec} с
-                              </span>
+                          <LoadingAnimation elapsedSec={pixelElapsedSec} variant="compact" />
+                          {pixelSlowWarning && (
+                            <div className="rounded-xl p-2 bg-amber-50 border border-amber-200 text-[10px] text-amber-950 flex items-center justify-between gap-2 shadow-xs">
+                              <span>Формирую ответ... Можно выждать или остановить.</span>
+                              <button
+                                type="button"
+                                onClick={handleStopPixelGeneration}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-600 text-white font-bold hover:bg-red-700 transition-colors shrink-0 cursor-pointer"
+                              >
+                                <Square className="w-2.5 h-2.5 fill-current" />
+                                <span>Остановить</span>
+                              </button>
                             </div>
-                            {pixelSlowWarning && (
-                              <div className="rounded-lg p-2 bg-amber-50 border border-amber-200 text-[10px] text-amber-950 space-y-1">
-                                <div>
-                                  Модель пока формирует ответ. Можно продолжить
-                                  ожидание или остановить запрос
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={handleStopPixelGeneration}
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-600 text-white font-semibold"
-                                >
-                                  <Square className="w-2.5 h-2.5 fill-current" />
-                                  <span>Остановить</span>
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                          )}
                           {msg.content && (
                             <div>
                               <MarkdownMessageContent
