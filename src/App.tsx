@@ -257,7 +257,6 @@ const DATA_URL_PREVIEW_EXTENSIONS = new Set([
   'gif',
   'jfif',
   'svg',
-  'pdf',
 ]);
 
 const IMAGE_ONLY_EXTENSIONS = new Set([
@@ -331,9 +330,41 @@ export default function App() {
     );
 
   // Dialogue-scoped attachments & search highlight state
-  const [draftAttachment, setDraftAttachment] = useState<ChatAttachment | null>(
-    null
-  );
+  const [draftAttachments, setDraftAttachments] = useState<ChatAttachment[]>([]);
+  const draftAttachment = draftAttachments[0] || null;
+
+  const setDraftAttachment = (att: ChatAttachment | null) => {
+    if (!att) {
+      setDraftAttachments([]);
+    } else {
+      setDraftAttachments((prev) =>
+        prev.some((a) => a.id === att.id)
+          ? prev.map((a) => (a.id === att.id ? att : a))
+          : [...prev, att]
+      );
+    }
+  };
+
+  const handleStageFilesForDraft = async (files: File[]) => {
+    if (!files || files.length === 0) return;
+    setIsParsingChatFile(true);
+    try {
+      for (const file of files) {
+        await prepareChatFileWithPreviewModal(file, 'draft');
+      }
+    } finally {
+      setIsParsingChatFile(false);
+      setChatParsingStatus(null);
+      setChatParsingLabel(null);
+    }
+  };
+
+  const handleRemoveDraftAttachment = (attachmentId: string) => {
+    setDraftAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+    if (selectedAttachmentId === attachmentId) {
+      setSelectedAttachmentId(null);
+    }
+  };
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<
     string | null
   >(null);
@@ -1389,6 +1420,11 @@ export default function App() {
         currentSession?.id || 'general'
       );
 
+      const resolvedThumbnailUrl =
+        parsedResult?.thumbnailUrl ||
+        (parsedResult?.extractedImages && parsedResult.extractedImages[0]?.dataUrl) ||
+        (dataUrl && IMAGE_ONLY_EXTENSIONS.has(ext) ? dataUrl : undefined);
+
       const attachment: ChatAttachment = {
         id: `att-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
         name: file.name,
@@ -1403,15 +1439,19 @@ export default function App() {
         createdAt: formatTimeNow(now),
         createdAtMs: now.getTime(),
         dataUrl,
+        thumbnailUrl: resolvedThumbnailUrl,
         filePath: diskResult?.absolutePath,
         diskFolderPath: diskResult?.folderPath,
         extractedImages: parsedResult?.extractedImages,
         slides: parsedResult?.slides,
       };
 
-      // Stage images directly to draft preview without a blocking document-text modal
-      if (IMAGE_ONLY_EXTENSIONS.has(ext) && target === 'draft') {
-        setDraftAttachment(attachment);
+      // Stage draft attachments directly without blocking preview modal
+      if (target === 'draft') {
+        setDraftAttachments((prev) => {
+          if (prev.some((a) => a.id === attachment.id)) return prev;
+          return [...prev, attachment];
+        });
         setSelectedAttachmentId(attachment.id);
         return;
       }
@@ -1683,12 +1723,46 @@ export default function App() {
     const userMsgId = `msg-user-${nowUserMs}-${Math.random().toString(36).slice(2, 6)}`;
     const assistantMsgId = `msg-assistant-${nowAssistantMs}-${Math.random().toString(36).slice(2, 6)}`;
 
-    const linkedAttachment: ChatAttachment | null = attachment
+    const outgoingDrafts: ChatAttachment[] =
+      draftAttachments.length > 0
+        ? draftAttachments
+        : attachment
+          ? [attachment]
+          : [];
+
+    const firstAttachment = outgoingDrafts[0] || null;
+    const linkedAttachment: ChatAttachment | null = firstAttachment
       ? {
-          ...attachment,
+          ...firstAttachment,
           messageId: userMsgId,
         }
       : null;
+
+    // Prepare strictly isolated active-school Knowledge Base & explicitly selected documents
+    const kbContext = documentProvider.prepareKnowledgeContextForSchool(
+      targetSchool,
+      knowledgeBase,
+      contextOptions.includeKnowledgeBase
+    );
+
+    const { sendableDocuments, sendableImages: docImages, skippedNoTextDocuments } =
+      documentProvider.prepareSelectedDocumentsForApi({
+        draftAttachments: outgoingDrafts,
+        dialogueAttachments: baseSession.attachments || [],
+        selectedDialogueAttachmentIds:
+          contextOptions.selectedDialogueAttachmentIds,
+        schoolDocuments: uploadedDocuments,
+        selectedSchoolDocumentIds: contextOptions.selectedSchoolDocumentIds,
+        activeSchool: targetSchool,
+      });
+
+    const combinedImages = (docImages || []).slice(0, 500);
+    const actualSentImagesCount = combinedImages.length;
+
+    const attachmentNameDisplay =
+      outgoingDrafts.length > 1
+        ? `Прикреплено файлов (${outgoingDrafts.length} шт.): ${outgoingDrafts.map((d) => d.name).join(', ')}`
+        : linkedAttachment?.name;
 
     const userMsg: ChatMessage = {
       id: userMsgId,
@@ -1699,73 +1773,27 @@ export default function App() {
       createdAtMs: nowUserMs,
       schoolId: targetSchool,
       mode: targetMode,
-      attachmentName: linkedAttachment?.name,
+      attachmentName: attachmentNameDisplay,
+      sentImagesCount: actualSentImagesCount,
       attachmentMeta: linkedAttachment
         ? {
             id: linkedAttachment.id,
-            name: linkedAttachment.name,
+            name: attachmentNameDisplay || linkedAttachment.name,
             extension: linkedAttachment.extension,
             sizeBytes: linkedAttachment.sizeBytes,
             mimeType: linkedAttachment.mimeType,
             createdAt: linkedAttachment.createdAt,
             status: linkedAttachment.status,
             dataUrl: linkedAttachment.dataUrl,
+            thumbnailUrl: linkedAttachment.thumbnailUrl,
             filePath: linkedAttachment.filePath,
             diskFolderPath: linkedAttachment.diskFolderPath,
             extractedImages: linkedAttachment.extractedImages,
             extractedImagesCount: linkedAttachment.extractedImages?.length || 0,
+            sentImagesCount: actualSentImagesCount,
           }
         : undefined,
     };
-
-    // Prepare strictly isolated active-school Knowledge Base & explicitly selected documents
-    const kbContext = documentProvider.prepareKnowledgeContextForSchool(
-      targetSchool,
-      knowledgeBase,
-      contextOptions.includeKnowledgeBase
-    );
-
-    const isLinkedImage = Boolean(
-      linkedAttachment?.dataUrl &&
-        (linkedAttachment.mimeType?.startsWith('image/') ||
-          IMAGE_ONLY_EXTENSIONS.has(linkedAttachment.extension))
-    );
-
-    const selectedImages =
-      isLinkedImage && linkedAttachment?.dataUrl
-        ? [
-            {
-              id: linkedAttachment.id,
-              name: linkedAttachment.name,
-              mimeType:
-                linkedAttachment.mimeType ||
-                (linkedAttachment.extension === 'png'
-                  ? 'image/png'
-                  : linkedAttachment.extension === 'webp'
-                    ? 'image/webp'
-                    : 'image/jpeg'),
-              base64Data: linkedAttachment.dataUrl.includes(',')
-                ? linkedAttachment.dataUrl.split(',')[1]
-                : linkedAttachment.dataUrl,
-            },
-          ]
-        : [];
-
-    const { sendableDocuments, sendableImages: docImages, skippedNoTextDocuments } =
-      documentProvider.prepareSelectedDocumentsForApi({
-        draftAttachment: isLinkedImage ? null : linkedAttachment,
-        dialogueAttachments: baseSession.attachments || [],
-        selectedDialogueAttachmentIds:
-          contextOptions.selectedDialogueAttachmentIds,
-        schoolDocuments: uploadedDocuments,
-        selectedSchoolDocumentIds: contextOptions.selectedSchoolDocumentIds,
-        activeSchool: targetSchool,
-      });
-
-    const combinedImages = [
-      ...selectedImages,
-      ...(docImages || []),
-    ].slice(0, 10);
 
     const usedContextSummary: string[] = [
       `Школа: ${schoolCfg.name}`,
@@ -1776,8 +1804,19 @@ export default function App() {
         `База знаний ${schoolCfg.name} (${kbContext.length} разд.)`
       );
     }
-    for (const img of combinedImages) {
-      usedContextSummary.push(`Визуальный материал: «${img.name}»`);
+    if (outgoingDrafts.length > 0) {
+      usedContextSummary.push(`Файлов в запросе: ${outgoingDrafts.length} шт.`);
+    }
+    if (combinedImages.length > 0) {
+      usedContextSummary.push(
+        `Визуальных материалов передано ИИ: ${combinedImages.length} шт.`
+      );
+      for (const img of combinedImages.slice(0, 10)) {
+        usedContextSummary.push(`Визуальный материал: «${img.name}»`);
+      }
+      if (combinedImages.length > 10) {
+        usedContextSummary.push(`…и ещё ${combinedImages.length - 10} материалов`);
+      }
     }
     for (const doc of sendableDocuments) {
       usedContextSummary.push(`Документ: «${doc.name}»`);
@@ -1785,6 +1824,22 @@ export default function App() {
     for (const skippedName of skippedNoTextDocuments) {
       usedContextSummary.push(`Без текстового слоя: «${skippedName}»`);
     }
+
+    const initialEstimatedProvider: AIProviderId =
+      combinedImages.length > 10 || outgoingDrafts.length > 1
+        ? 'openrouter'
+        : (contextOptions.providerSelection === 'openrouter'
+            ? 'openrouter'
+            : contextOptions.providerSelection === 'ollama'
+              ? 'ollama'
+              : 'gemini');
+
+    const initialEstimatedModel =
+      initialEstimatedProvider === 'openrouter'
+        ? 'nvidia/nemotron-3.5-super-vl:free'
+        : initialEstimatedProvider === 'ollama'
+          ? 'llama3.2'
+          : (geminiStatus?.model || 'gemini-3.8-flash');
 
     const initialAssistantReply: ChatMessage = {
       id: assistantMsgId,
@@ -1795,21 +1850,22 @@ export default function App() {
       schoolId: targetSchool,
       mode: targetMode,
       content: '',
+      sentImagesCount: actualSentImagesCount,
       usedContextSummary,
       isStreaming: true,
-      modelName: geminiStatus?.model || 'gemini-3.8-flash',
+      providerId: initialEstimatedProvider,
+      modelName: initialEstimatedModel,
     };
 
     const nextTitleFromText =
       text.slice(0, 46) + (text.length > 46 ? '…' : '');
 
     const existingAttachments = baseSession.attachments || [];
-    const mergedAttachments = linkedAttachment
-      ? [
-          linkedAttachment,
-          ...existingAttachments.filter((a) => a.id !== linkedAttachment.id),
-        ]
-      : existingAttachments;
+    const draftIdsSet = new Set(outgoingDrafts.map((d) => d.id));
+    const mergedAttachments = [
+      ...outgoingDrafts,
+      ...existingAttachments.filter((a) => !draftIdsSet.has(a.id)),
+    ];
 
     const initialUpdatedSession: ChatSession = {
       ...baseSession,
@@ -1846,11 +1902,14 @@ export default function App() {
     sessionsRef.current = nextList;
     setSessions(nextList);
 
+    // Clear staged attachments now that they have been committed to session
+    setDraftAttachments([]);
+    setDraftAttachment(null);
     if (linkedAttachment) {
       setSelectedAttachmentId(linkedAttachment.id);
     }
 
-    // Save user message immediately to IndexedDB (without storing a stuck isStreaming=true placeholder)
+    // Save user message immediately to IndexedDB
     if (!isStorageLoading) {
       storageProvider
         .saveSessionAndMessages(initialUpdatedSession, [
@@ -1944,11 +2003,14 @@ export default function App() {
         onSlowWarning: () => {
           setChatSlowWarning(true);
         },
-        onDelta: (_delta, accumulated) => {
+        onDelta: (_delta, accumulated, meta) => {
           updateAssistantMessageInSession(
             {
               content: accumulated,
               isStreaming: true,
+              ...(meta?.model ? { modelName: meta.model } : {}),
+              ...(meta?.providerId ? { providerId: meta.providerId } : {}),
+              ...(meta?.providerLabel ? { providerLabel: meta.providerLabel } : {}),
             },
             false
           );
@@ -1998,11 +2060,27 @@ export default function App() {
         err instanceof Error
           ? err.message
           : 'Не удалось получить ответ от серверного маршрута ИИ-провайдера.';
+
+      let friendlyError = errorMsg;
+      if (
+        errorMsg.includes('REQUEST_TIMEOUT') ||
+        errorMsg.includes('таймаут') ||
+        errorMsg.includes('timed out') ||
+        errorMsg.includes('timeout')
+      ) {
+        friendlyError =
+          initialEstimatedProvider === 'openrouter'
+            ? 'OpenRouter перегружен или время ожидания истекло. Рекомендуется прикрепить меньше файлов (2-3 шт.) или повторить запрос.'
+            : 'Превышено время ожидания ответа (таймаут). Попробуйте отправить меньше файлов (2-3 шт.) или повторить запрос.';
+      }
+
       updateAssistantMessageInSession(
         {
-          content: `Ошибка запроса: ${errorMsg}`,
+          content: `Ошибка запроса: ${friendlyError}`,
           isStreaming: false,
           isError: true,
+          providerId: initialEstimatedProvider,
+          modelName: initialEstimatedModel,
           consentRequiredFallbackProvider:
             err instanceof ProviderDocumentConsentRequiredError
               ? err.targetProvider
@@ -3472,8 +3550,11 @@ export default function App() {
                   knowledgeBase={knowledgeBase}
                   uploadedDocuments={uploadedDocuments}
                   draftAttachment={draftAttachment}
+                  draftAttachments={draftAttachments}
                   onStageFileForDraft={handleStageFileForDraft}
-                  onClearDraftAttachment={() => setDraftAttachment(null)}
+                  onStageFilesForDraft={handleStageFilesForDraft}
+                  onClearDraftAttachment={() => setDraftAttachments([])}
+                  onRemoveDraftAttachment={handleRemoveDraftAttachment}
                   onInspectAttachmentInRightPanel={
                     handleInspectAttachmentInRightPanel
                   }

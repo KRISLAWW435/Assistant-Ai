@@ -132,6 +132,7 @@ export interface ChatAttachment {
   createdAt?: string;
   createdAtMs?: number;
   dataUrl?: string;
+  thumbnailUrl?: string;
   messageId?: string;
   schoolId?: SchoolId;
   uploadedAt?: string;
@@ -150,10 +151,12 @@ export interface ChatAttachmentMeta {
   mimeType?: string;
   createdAt?: string;
   dataUrl?: string;
+  thumbnailUrl?: string;
   filePath?: string;
   diskFolderPath?: string;
   extractedImages?: ExtractedDocumentImage[];
   extractedImagesCount?: number;
+  sentImagesCount?: number;
 }
 
 export type AIProviderId = 'gemini' | 'openrouter' | 'ollama';
@@ -445,6 +448,7 @@ export interface ChatMessage {
   mode: AgentMode;
   attachmentName?: string;
   attachmentMeta?: ChatAttachmentMeta;
+  sentImagesCount?: number;
   usedContextSummary?: string[];
   isStreaming?: boolean;
   isError?: boolean;

@@ -273,18 +273,21 @@ async function renderPdfPageToDataUrl(
   }
 }
 
+export const MAX_DOCUMENT_PAGES_TO_RENDER = 200;
+
 /**
  * Extracts text and renders pages/slides into compressed base64 images from a PDF file using pdfjs-dist.
  */
 export async function extractPdfMultimodal(
   buffer: ArrayBuffer,
-  maxPagesToRender = 50
+  maxPagesToRender = MAX_DOCUMENT_PAGES_TO_RENDER
 ): Promise<{
   text: string;
   pageCount: number;
   emptyPagesCount: number;
   images: string[];
   extractedImages: ExtractedDocumentImage[];
+  thumbnailUrl?: string;
 }> {
   const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(buffer),
@@ -295,8 +298,10 @@ export async function extractPdfMultimodal(
   let emptyPagesCount = 0;
   const images: string[] = [];
   const extractedImages: ExtractedDocumentImage[] = [];
+  let thumbnailUrl: string | undefined;
 
   const pagesToRender = Math.min(pageCount, maxPagesToRender);
+  const docUid = Math.random().toString(36).slice(2, 8);
 
   for (let i = 1; i <= pageCount; i++) {
     const page = await pdf.getPage(i);
@@ -318,14 +323,23 @@ export async function extractPdfMultimodal(
       emptyPagesCount++;
     }
 
-    // 2. Render page to compressed image if within limit
+    // 2. Generate lightweight 100px thumbnail for page 1 preview
+    if (i === 1 && typeof document !== 'undefined') {
+      try {
+        thumbnailUrl = await renderPdfPageToDataUrl(page, 100);
+      } catch {
+        thumbnailUrl = undefined;
+      }
+    }
+
+    // 3. Render page to compressed image if within limit
     if (i <= pagesToRender && typeof document !== 'undefined') {
       try {
         const pageDataUrl = await renderPdfPageToDataUrl(page, 512);
         if (pageDataUrl) {
           images.push(pageDataUrl);
           extractedImages.push({
-            id: `pdf-page-${i}`,
+            id: `pdf-page-${docUid}-${i}`,
             name: `Страница ${i}`,
             dataUrl: pageDataUrl,
             mimeType: 'image/jpeg',
@@ -344,6 +358,7 @@ export async function extractPdfMultimodal(
     emptyPagesCount,
     images,
     extractedImages,
+    thumbnailUrl: thumbnailUrl || extractedImages[0]?.dataUrl,
   };
 }
 
@@ -413,6 +428,7 @@ export async function extractDocxMultimodal(
   });
 
   let imgIdx = 1;
+  const docxDocUid = Math.random().toString(36).slice(2, 8);
   for (const mediaPath of mediaPaths.slice(0, 25)) {
     const file = zip.file(mediaPath);
     if (!file) continue;
@@ -426,7 +442,7 @@ export async function extractDocxMultimodal(
         const resizedUrl = await resizeImageBase64(dataUrl, 1024);
         images.push(resizedUrl);
         extractedImages.push({
-          id: `docx-img-${imgIdx++}`,
+          id: `docx-img-${docxDocUid}-${imgIdx++}`,
           name: fileName,
           dataUrl: resizedUrl,
           mimeType: mimeType.startsWith('image/') ? mimeType : 'image/jpeg',
@@ -771,10 +787,11 @@ async function extractPptxTextAndVisuals(buffer: ArrayBuffer): Promise<{
 
   // Compile extracted images list
   const extractedImages: ExtractedDocumentImage[] = [];
+  const pptxDocUid = Math.random().toString(36).slice(2, 8);
   let imgCounter = 1;
   for (const [imgName, item] of mediaImages.entries()) {
     extractedImages.push({
-      id: `img-pptx-${imgCounter++}`,
+      id: `img-pptx-${pptxDocUid}-${imgCounter++}`,
       name: imgName,
       dataUrl: `data:${item.mimeType};base64,${item.base64}`,
       mimeType: item.mimeType,
@@ -1213,8 +1230,8 @@ export async function parseDocumentFile(
     // 6. PDF (Multimodal: text + rendered page slides)
     // =========================================================================
     if (ext === 'pdf') {
-      const { text, pageCount, emptyPagesCount, extractedImages } =
-        await extractPdfMultimodal(buffer, 10);
+      const { text, pageCount, emptyPagesCount, extractedImages, thumbnailUrl } =
+        await extractPdfMultimodal(buffer, 200);
       const palette = extractHexColorsFromText(text);
 
       const hasContent = text.trim().length > 0 || extractedImages.length > 0;
@@ -1255,6 +1272,7 @@ export async function parseDocumentFile(
         pageCount,
         fileType: 'document',
         mimeType: 'application/pdf',
+        thumbnailUrl: thumbnailUrl || extractedImages[0]?.dataUrl,
         warning: partialWarning,
         extractedImages:
           extractedImages.length > 0 ? extractedImages : undefined,
@@ -1318,19 +1336,13 @@ export async function parseDocumentFile(
         'Конвертация PPTX в PDF для полного анализа...'
       );
 
-      let pdfExtracted: {
-        text: string;
-        pageCount: number;
-        emptyPagesCount: number;
-        images: string[];
-        extractedImages: ExtractedDocumentImage[];
-      } | null = null;
+      let pdfExtracted: (Awaited<ReturnType<typeof extractPdfMultimodal>>) | null = null;
       let conversionWarning: string | undefined;
 
       try {
         const conv = await convertPptxToPdf(buffer);
         if (conv.success && conv.pdfBuffer) {
-          pdfExtracted = await extractPdfMultimodal(conv.pdfBuffer, 50);
+          pdfExtracted = await extractPdfMultimodal(conv.pdfBuffer, 200);
         } else if (conv.message) {
           conversionWarning = conv.message;
         } else {
@@ -1376,6 +1388,9 @@ export async function parseDocumentFile(
           fileType: 'presentation',
           mimeType:
             'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          thumbnailUrl:
+            pdfExtracted.thumbnailUrl ||
+            pdfExtracted.extractedImages[0]?.dataUrl,
           warning: undefined,
           slides: pptxRes.slides,
           extractedImages: pdfExtracted.extractedImages,
@@ -1431,6 +1446,7 @@ export async function parseDocumentFile(
         fileType: 'presentation',
         mimeType:
           'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        thumbnailUrl: extractedImages[0]?.dataUrl,
         warning:
           conversionWarning ||
           (extractedImages.length > 0
@@ -1529,7 +1545,7 @@ export async function extractMultimodalContent(
 
   // 1. PDF
   if (ext === 'pdf') {
-    const res = await extractPdfMultimodal(buffer, 50);
+    const res = await extractPdfMultimodal(buffer, 200);
     return {
       text: res.text,
       images: res.images,
@@ -1541,7 +1557,7 @@ export async function extractMultimodalContent(
     try {
       const conv = await convertPptxToPdf(buffer);
       if (conv.success && conv.pdfBuffer) {
-        const res = await extractPdfMultimodal(conv.pdfBuffer, 50);
+        const res = await extractPdfMultimodal(conv.pdfBuffer, 200);
         return {
           text: res.text,
           images: res.images,

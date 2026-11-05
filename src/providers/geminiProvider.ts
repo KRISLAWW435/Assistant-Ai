@@ -82,7 +82,11 @@ export interface GeminiStreamRequestOptions {
   timeoutMs?: number;
   onStageChange?: (stage: GenerationStage) => void;
   onSlowWarning?: (isSlow: boolean) => void;
-  onDelta: (deltaText: string, accumulatedText: string) => void;
+  onDelta: (
+    deltaText: string,
+    accumulatedText: string,
+    meta?: { model?: string; providerId?: AIProviderId; providerLabel?: string }
+  ) => void;
 }
 
 export interface GeminiChatMetrics {
@@ -170,7 +174,7 @@ export interface IGeminiProvider {
 const activeRequestLocks = new Set<string>();
 
 export const SLOW_RESPONSE_THRESHOLD_MS = 20000; // 20 seconds before showing slow-response hint
-export const DEFAULT_CLIENT_TIMEOUT_MS = 75000; // 75 seconds hard client safety timeout
+export const DEFAULT_CLIENT_TIMEOUT_MS = 120000; // 120 seconds client safety timeout
 
 export const geminiProvider: IGeminiProvider = {
   async getStatus(): Promise<GeminiServerStatus> {
@@ -340,7 +344,11 @@ export const geminiProvider: IGeminiProvider = {
             }
             chunkCount += 1;
             accumulated += parsed.text;
-            options.onDelta(parsed.text, accumulated);
+            options.onDelta(parsed.text, accumulated, {
+              model: parsed.model || resolvedModel,
+              providerId: parsed.providerId || resolvedProviderId,
+              providerLabel: parsed.providerLabel || resolvedProviderLabel,
+            });
           }
         } else if (parsed.type === 'done') {
           receivedDoneEvent = true;

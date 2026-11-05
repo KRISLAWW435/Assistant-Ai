@@ -141,9 +141,12 @@ interface UnifiedChatViewProps {
   onTogglePinSession: (sessionId: string, isPinned: boolean) => Promise<boolean>;
   knowledgeBase: KnowledgeBaseBySchool;
   uploadedDocuments: UploadedDocumentRecord[];
-  draftAttachment: ChatAttachment | null;
-  onStageFileForDraft: (file: File) => Promise<void>;
+  draftAttachment?: ChatAttachment | null;
+  draftAttachments?: ChatAttachment[];
+  onStageFileForDraft?: (file: File) => Promise<void>;
+  onStageFilesForDraft?: (files: File[]) => Promise<void>;
   onClearDraftAttachment: () => void;
+  onRemoveDraftAttachment?: (id: string) => void;
   onInspectAttachmentInRightPanel: (attachmentId: string) => void;
   highlightedMessageId: string | null;
   isParsingFile?: boolean;
@@ -321,8 +324,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   knowledgeBase,
   uploadedDocuments,
   draftAttachment,
+  draftAttachments,
   onStageFileForDraft,
+  onStageFilesForDraft,
   onClearDraftAttachment,
+  onRemoveDraftAttachment,
   onInspectAttachmentInRightPanel,
   highlightedMessageId,
   isParsingFile = false,
@@ -389,9 +395,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   >([]);
   const [showDocPickerPopover, setShowDocPickerPopover] = useState(false);
   const [showProviderPopover, setShowProviderPopover] = useState(false);
-  const [consentedProviders, setConsentedProviders] = useState<AIProviderId[]>(
-    []
-  );
+  const [consentedProviders, setConsentedProviders] = useState<AIProviderId[]>([
+    'gemini',
+    'openrouter',
+    'ollama',
+  ]);
 
   // Collapsible input settings accordion (templates, school selector, model, format, knowledge base)
   const [isInputSettingsOpen, setIsInputSettingsOpen] = useState(false);
@@ -399,6 +407,15 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   // Header inline rename state
   const [isRenamingHeader, setIsRenamingHeader] = useState(false);
   const [headerRenameDraft, setHeaderRenameDraft] = useState('');
+
+  // Compact inspection modal for attachments and message context (ChatGPT style)
+  const [inspectedMessageForModal, setInspectedMessageForModal] =
+    useState<ChatMessage | null>(null);
+
+  // Set of attachment IDs whose image thumbnails failed to load (fall back to document badge)
+  const [failedThumbnailIds, setFailedThumbnailIds] = useState<Set<string>>(
+    new Set()
+  );
 
   // Delete confirmation modal state
   const [sessionPendingDelete, setSessionPendingDelete] =
@@ -693,23 +710,28 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     setShowDocPickerPopover(false);
   }, [activeSchool, currentSession?.id]);
 
+  const draftList = useMemo(() => {
+    if (Array.isArray(draftAttachments) && draftAttachments.length > 0) {
+      return draftAttachments;
+    }
+    return draftAttachment ? [draftAttachment] : [];
+  }, [draftAttachments, draftAttachment]);
+
   // Determine which documents/images are slated to be sent in this request
   const selectedDocNamesWithText = useMemo(() => {
     const names: string[] = [];
-    const isDraftSendable =
-      draftAttachment &&
-      (((draftAttachment.extractedText || '').trim().length > 0 &&
-        draftAttachment.status !== 'error') ||
-        (draftAttachment.extractedImages &&
-          draftAttachment.extractedImages.length > 0) ||
+    for (const att of draftList) {
+      const isSendable =
+        ((att.extractedText || '').trim().length > 0 && att.status !== 'error') ||
+        (att.extractedImages && att.extractedImages.length > 0) ||
         Boolean(
-          draftAttachment.dataUrl &&
-            (draftAttachment.mimeType?.startsWith('image/') ||
-              ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(draftAttachment.extension))
-        ));
-
-    if (draftAttachment && isDraftSendable) {
-      names.push(draftAttachment.name);
+          att.dataUrl &&
+            (att.mimeType?.startsWith('image/') ||
+              ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(att.extension.toLowerCase()))
+        );
+      if (isSendable && !names.includes(att.name)) {
+        names.push(att.name);
+      }
     }
     const selDialSet = new Set(selectedDialogueAttachmentIds);
     for (const att of dialogueAttachments) {
@@ -719,7 +741,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         Boolean(
           att.dataUrl &&
             (att.mimeType?.startsWith('image/') ||
-              ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(att.extension))
+              ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(att.extension.toLowerCase()))
         );
       if (selDialSet.has(att.id) && isSendable && !names.includes(att.name)) {
         names.push(att.name);
@@ -732,7 +754,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         Boolean(
           doc.dataUrl &&
             (doc.fileType === 'image' ||
-              ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(doc.extension))
+              ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(doc.extension.toLowerCase()))
         );
       if (selSchoolSet.has(doc.id) && isSendable && !names.includes(doc.name)) {
         names.push(doc.name);
@@ -740,7 +762,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     }
     return names;
   }, [
-    draftAttachment,
+    draftList,
     selectedDialogueAttachmentIds,
     dialogueAttachments,
     selectedSchoolDocumentIds,
@@ -750,12 +772,14 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   const hasSelectedDocsWithText = selectedDocNamesWithText.length > 0;
 
   const hasSelectedImages = useMemo(() => {
-    if (
-      draftAttachment?.dataUrl &&
-      (draftAttachment.mimeType?.startsWith('image/') ||
-        ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(draftAttachment.extension))
-    ) {
-      return true;
+    for (const att of draftList) {
+      if (
+        att.dataUrl &&
+        (att.mimeType?.startsWith('image/') ||
+          ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(att.extension.toLowerCase()))
+      ) {
+        return true;
+      }
     }
     const selSchoolSet = new Set(selectedSchoolDocumentIds);
     for (const doc of schoolDocuments) {
@@ -763,13 +787,13 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         selSchoolSet.has(doc.id) &&
         doc.dataUrl &&
         (doc.fileType === 'image' ||
-          ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(doc.extension))
+          ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(doc.extension.toLowerCase()))
       ) {
         return true;
       }
     }
     return false;
-  }, [draftAttachment, selectedSchoolDocumentIds, schoolDocuments]);
+  }, [draftList, selectedSchoolDocumentIds, schoolDocuments]);
 
   const primaryProviderForDocs: AIProviderId =
     providerSelection === 'auto' ? 'gemini' : providerSelection;
@@ -856,25 +880,40 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const fileArray = Array.from(files);
     e.target.value = '';
 
     setAttachmentNotice(null);
-    await onStageFileForDraft(file);
+    if (onStageFilesForDraft) {
+      await onStageFilesForDraft(fileArray);
+    } else if (onStageFileForDraft) {
+      for (const file of fileArray) {
+        await onStageFileForDraft(file);
+      }
+    }
   };
 
   const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const fileArray = Array.from(files);
     e.target.value = '';
 
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const isSupportedImage =
-      ['image/png', 'image/jpeg', 'image/webp'].includes(file.type) ||
-      ['png', 'jpg', 'jpeg', 'webp'].includes(ext);
+    const validImages: File[] = [];
+    for (const file of fileArray) {
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      const isSupportedImage =
+        ['image/png', 'image/jpeg', 'image/webp'].includes(file.type) ||
+        ['png', 'jpg', 'jpeg', 'webp'].includes(ext);
 
-    if (!isSupportedImage) {
+      if (isSupportedImage) {
+        validImages.push(file);
+      }
+    }
+
+    if (validImages.length === 0) {
       setAttachmentNotice(
         'Поддерживаются только изображения форматов PNG, JPG, JPEG и WEBP.'
       );
@@ -882,7 +921,13 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     }
 
     setAttachmentNotice(null);
-    await onStageFileForDraft(file);
+    if (onStageFilesForDraft) {
+      await onStageFilesForDraft(validImages);
+    } else if (onStageFileForDraft) {
+      for (const file of validImages) {
+        await onStageFileForDraft(file);
+      }
+    }
   };
 
   // Drag-and-drop file attachment support (Stage 1)
@@ -924,10 +969,16 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
 
     const files = e.dataTransfer?.files;
     if (!files || files.length === 0) return;
-    const file = files[0];
+    const fileArray = Array.from(files);
 
     setAttachmentNotice(null);
-    await onStageFileForDraft(file);
+    if (onStageFilesForDraft) {
+      await onStageFilesForDraft(fileArray);
+    } else if (onStageFileForDraft) {
+      for (const file of fileArray) {
+        await onStageFileForDraft(file);
+      }
+    }
   };
 
   const handleEvaluateImage = useCallback(
@@ -975,7 +1026,11 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
           const file = item.getAsFile();
           if (file) {
             e.preventDefault();
-            void onStageFileForDraft(file);
+            if (onStageFilesForDraft) {
+              void onStageFilesForDraft([file]);
+            } else if (onStageFileForDraft) {
+              void onStageFileForDraft(file);
+            }
             if (activeMode !== 'designer' && isFlowPanelOpen) {
               onChangeMode('designer');
             }
@@ -1043,43 +1098,49 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     if (isGenerating || isParsingFile) return;
 
     const trimmed = draftPrompt.trim();
-    if (!trimmed && !draftAttachment) return;
+    if (!trimmed && draftList.length === 0) return;
 
-    const isDraftImage = Boolean(
-      draftAttachment?.dataUrl &&
-        (draftAttachment.mimeType?.startsWith('image/') ||
-          ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(draftAttachment.extension))
+    const hasDraftImages = draftList.some(
+      (att) =>
+        att.dataUrl &&
+        (att.mimeType?.startsWith('image/') ||
+          ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(
+            att.extension.toLowerCase()
+          ))
     );
 
     if (
-      (isDraftImage || hasSelectedImages) &&
-      (providerSelection === 'ollama' || providerSelection === 'openrouter')
+      (hasDraftImages || hasSelectedImages) &&
+      providerSelection === 'ollama'
     ) {
       setAttachmentNotice(
-        `Выбранный провайдер (${PROVIDER_LABELS_RU[providerSelection]}) не поддерживает мультимодальный анализ изображений. Пожалуйста, переключите провайдера на «Автовыбор ИИ» или «Google Gemini Free».`
+        `Выбранный провайдер (${PROVIDER_LABELS_RU[providerSelection]}) не поддерживает мультимодальный анализ изображений. Пожалуйста, переключите провайдера на «Автовыбор ИИ», «Google Gemini Free» или «OpenRouter Free».`
       );
       return;
     }
 
-    if (
-      hasSelectedDocsWithText &&
-      !consentedProviders.includes(primaryProviderForDocs)
-    ) {
-      setAttachmentNotice(
-        primaryProviderForDocs === 'ollama'
-          ? 'Пожалуйста, подтвердите обработку текста выбранного документа локальной моделью Ollama (галочка ниже).'
-          : `Пожалуйста, подтвердите согласие на отправку извлечённого текста документа в ${PROVIDER_LABELS_RU[primaryProviderForDocs]} (галочка ниже) или отключите передачу документа.`
+    const firstAtt = draftList[0] || null;
+    let defaultPrompt = '';
+    if (draftList.length === 1) {
+      const isImg = Boolean(
+        firstAtt?.dataUrl &&
+          (firstAtt.mimeType?.startsWith('image/') ||
+            ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(
+              firstAtt.extension.toLowerCase()
+            ))
       );
-      return;
+      defaultPrompt = isImg
+        ? `Внимательно проанализируй прикреплённое изображение (${firstAtt?.name}) и дай подробный разбор.`
+        : `Проанализируй прикреплённый документ: ${firstAtt?.name}`;
+    } else if (draftList.length > 1) {
+      const names = draftList.map((d) => d.name).join(', ');
+      defaultPrompt = `Проанализируй прикреплённые файлы (${draftList.length} шт.): ${names}`;
     }
 
     setAttachmentNotice(null);
     onSendMessage(
-      trimmed ||
-        (isDraftImage
-          ? `Внимательно проанализируй прикреплённое изображение (${draftAttachment?.name}) и дай подробный разбор.`
-          : `Проанализируй прикреплённый документ: ${draftAttachment?.name}`),
-      draftAttachment,
+      trimmed || defaultPrompt,
+      firstAtt,
       {
         includeKnowledgeBase,
         selectedDialogueAttachmentIds,
@@ -1267,7 +1328,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
           onDrop={handleChatDrop}
         >
           {/* 2. Messages Viewport (ChatGPT-Style Centered Stream) */}
-          <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 bg-[#F9FAFB]/60">
+          <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 bg-[#F9FAFB]/60 min-h-0">
         <div className="max-w-3xl mx-auto">
           {currentMessages.length === 0 ? (
             /* Warm Personal Welcome Screen for Anna with Expressive Typographic School Badge */
@@ -1450,14 +1511,6 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                             : 'bg-white border border-slate-200/90 text-slate-800 shadow-2xs'
                       }`}
                     >
-                      {/* Unobtrusive Failover Notice Badge (Stage 3.3 Part 5) */}
-                      {!isUser && msg.failoverNotice && (
-                        <div className="mb-2.5 px-2.5 py-1.5 rounded-xl bg-amber-50/90 border border-amber-200/80 text-[11px] text-amber-900 flex items-center gap-1.5">
-                          <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>{msg.failoverNotice}</span>
-                        </div>
-                      )}
-
                       {(msg.attachmentMeta || msg.attachmentName) && (() => {
                         const matchedAttachment = msg.attachmentMeta
                           ? dialogueAttachments.find(
@@ -1472,16 +1525,19 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                           matchedAttachment?.extractedImages ||
                           [];
 
-                        return (
-                          <div
-                            className={`space-y-2 pb-2.5 mb-2.5 border-b ${
-                              isUser
-                                ? 'border-slate-700 text-[#F5B800]'
-                                : 'border-slate-100 text-[#00A8B5]'
-                            }`}
-                          >
-                            {imageDataUrl && (
-                              <div className="overflow-hidden rounded-xl border border-slate-200/30 bg-black/15">
+                        const isStandaloneImage =
+                          Boolean(imageDataUrl) && extractedDocImages.length === 0;
+
+                        if (isStandaloneImage) {
+                          return (
+                            <div
+                              className={`space-y-1.5 pb-2 mb-2 border-b ${
+                                isUser
+                                  ? 'border-slate-700 text-[#F5B800]'
+                                  : 'border-slate-100 text-[#00A8B5]'
+                              }`}
+                            >
+                              <div className="overflow-hidden rounded-xl border border-slate-200/30 bg-black/15 max-w-sm">
                                 <img
                                   src={imageDataUrl}
                                   alt={
@@ -1489,65 +1545,13 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                     msg.attachmentName ||
                                     'Прикреплённое изображение'
                                   }
-                                  className="max-h-72 w-auto max-w-full object-contain rounded-lg mx-auto"
+                                  className="max-h-56 w-auto max-w-full object-contain rounded-lg mx-auto"
                                 />
                               </div>
-                            )}
-                            <div className="flex items-center justify-between gap-3 text-xs">
-                              <div className="flex items-center gap-2 min-w-0">
-                                {imageDataUrl ? (
-                                  <ImageIcon className="w-3.5 h-3.5 shrink-0" />
-                                ) : (
-                                  <FileText className="w-3.5 h-3.5 shrink-0" />
-                                )}
+                              <div className="flex items-center justify-between gap-2 text-xs">
                                 <span className="truncate font-medium">
                                   {msg.attachmentMeta?.name || msg.attachmentName}
                                 </span>
-                                {msg.attachmentMeta && (
-                                  <span className="text-[10px] opacity-80 font-mono-tabular shrink-0">
-                                    ({formatFileSizeRu(msg.attachmentMeta.sizeBytes)})
-                                  </span>
-                                )}
-                              </div>
-
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                {imageDataUrl && (
-                                  <button
-                                    type="button"
-                                    disabled={isGenerating}
-                                    onClick={() => {
-                                      const attachmentToEval: ChatAttachment =
-                                        matchedAttachment || {
-                                          id:
-                                            msg.attachmentMeta?.id ||
-                                            `img-${msg.id}`,
-                                          name:
-                                            msg.attachmentMeta?.name ||
-                                            msg.attachmentName ||
-                                            'flow_result.png',
-                                          extension:
-                                            msg.attachmentMeta?.extension ||
-                                            'png',
-                                          sizeBytes:
-                                            msg.attachmentMeta?.sizeBytes || 0,
-                                          mimeType:
-                                            msg.attachmentMeta?.mimeType ||
-                                            'image/png',
-                                          extractedText: '',
-                                          dataUrl: imageDataUrl,
-                                          status: 'processed',
-                                          uploadedAt: msg.createdAt,
-                                        };
-                                      handleEvaluateImage(attachmentToEval);
-                                    }}
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-2xs transition-all cursor-pointer"
-                                    title="Отправить это изображение агенту «Дизайнер» для оценки качества визуала и поиска артефактов"
-                                  >
-                                    <Sparkles className="w-3 h-3 text-amber-300" />
-                                    <span>Оценить результат</span>
-                                  </button>
-                                )}
-
                                 {msg.attachmentMeta && (
                                   <button
                                     type="button"
@@ -1568,65 +1572,51 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                 )}
                               </div>
                             </div>
+                          );
+                        }
 
-                            {/* Multimodal Extracted Visuals Gallery (PDF Pages / PPTX Slides / DOCX Media) */}
-                            {extractedDocImages.length > 0 && (
-                              <div className="mt-2.5 pt-2 border-t border-slate-200/20 space-y-2">
-                                <div className="flex items-center justify-between text-[11px]">
-                                  <span
-                                    className={`inline-flex items-center gap-1.5 font-semibold ${
-                                      isUser ? 'text-amber-300' : 'text-[#00A8B5]'
-                                    }`}
-                                  >
-                                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                                    <span>
-                                      ИИ переданы текст и {extractedDocImages.length}{' '}
-                                      {extractedDocImages.length === 1
-                                        ? 'визуальный материал'
-                                        : extractedDocImages.length < 5
-                                          ? 'визуальных материала'
-                                          : 'визуальных материалов'}{' '}
-                                      (слайды/страницы/иллюстрации)
-                                    </span>
-                                  </span>
-                                  <span
-                                    className={`text-[10px] font-mono-tabular opacity-75 ${
-                                      isUser ? 'text-slate-300' : 'text-slate-500'
-                                    }`}
-                                  >
-                                    мультимодально 1024×1024
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-thin">
-                                  {extractedDocImages.map((imgItem, idx) => (
-                                    <div
-                                      key={imgItem.id || `thumb-${idx}`}
-                                      onClick={() => {
-                                        if (msg.attachmentMeta?.id) {
-                                          onInspectAttachmentInRightPanel(
-                                            msg.attachmentMeta.id
-                                          );
-                                        }
-                                      }}
-                                      className="relative group shrink-0 rounded-lg overflow-hidden border border-slate-300/30 bg-black/20 hover:border-amber-400 cursor-pointer transition-all shadow-2xs"
-                                      title={`${imgItem.name} — нажмите для просмотра`}
-                                    >
-                                      <img
-                                        src={imgItem.dataUrl}
-                                        alt={imgItem.name}
-                                        className="w-20 h-14 object-cover group-hover:scale-105 transition-transform"
-                                        loading="lazy"
-                                      />
-                                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent px-1 py-0.5 text-[9px] text-white truncate font-medium">
-                                        {imgItem.sourceSlide
-                                          ? `Слайд ${imgItem.sourceSlide}`
-                                          : `Стр. ${idx + 1}`}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                        // Compact ChatGPT-style attachment summary line for documents and multiple files
+                        const meta = msg.attachmentMeta;
+                        const name = meta?.name || msg.attachmentName || '';
+                        const totalSlides = extractedDocImages.length;
+                        const multiMatch = name.match(/Прикреплено файлов \((\d+)\s*шт\.\)/i);
+
+                        let summaryLabel = '';
+                        if (multiMatch) {
+                          const count = multiMatch[1];
+                          summaryLabel = `Прикреплено: ${count} файлов${
+                            totalSlides > 0 ? ` (${totalSlides} слайдов)` : ''
+                          }`;
+                        } else if (name) {
+                          const cleanName =
+                            name.length > 28 ? name.slice(0, 26) + '…' : name;
+                          summaryLabel = `${cleanName}${
+                            totalSlides > 0 ? ` (${totalSlides} сл.)` : ''
+                          }`;
+                        } else if (totalSlides > 0) {
+                          summaryLabel = `Прикреплено: ${totalSlides} слайдов`;
+                        } else {
+                          summaryLabel = 'Прикреплённый материал';
+                        }
+
+                        return (
+                          <div className="mb-2">
+                            <button
+                              type="button"
+                              onClick={() => setInspectedMessageForModal(msg)}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold transition-all border cursor-pointer ${
+                                isUser
+                                  ? 'bg-slate-800/90 hover:bg-slate-700 text-slate-200 border-slate-700 shadow-2xs'
+                                  : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-200 shadow-2xs'
+                              }`}
+                              title="Нажмите для просмотра страниц и деталей файла"
+                            >
+                              <Paperclip className="w-3.5 h-3.5 text-[#00A8B5] shrink-0" />
+                              <span className="truncate max-w-xs sm:max-w-md">
+                                {summaryLabel}
+                              </span>
+                              <Info className="w-3 h-3 text-slate-400 shrink-0 ml-0.5" />
+                            </button>
                           </div>
                         );
                       })()}
@@ -1678,18 +1668,24 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                       {!isUser &&
                         msg.usedContextSummary &&
                         msg.usedContextSummary.length > 0 && (
-                          <div className="mt-3 pt-2.5 border-t border-slate-100 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
-                            <span className="font-semibold text-slate-600">
-                              Использовано в запросе:
-                            </span>
-                            {msg.usedContextSummary.map((label, idx) => (
-                              <span
-                                key={`${msg.id}-ctx-${idx}`}
-                                className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium"
-                              >
-                                {label}
+                          <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                            <button
+                              type="button"
+                              onClick={() => setInspectedMessageForModal(msg)}
+                              className="inline-flex items-center gap-1.5 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer font-medium"
+                              title="Нажмите для просмотра использованных источников"
+                            >
+                              <BookOpen className="w-3.5 h-3.5 text-[#00A8B5]" />
+                              <span>
+                                Использовано источников: {msg.usedContextSummary.length}
                               </span>
-                            ))}
+                              <Info className="w-3 h-3 text-slate-400" />
+                            </button>
+                            {msg.modelName && (
+                              <span className="text-[10px] text-slate-400 font-mono-tabular">
+                                {msg.modelName}
+                              </span>
+                            )}
                           </div>
                         )}
 
@@ -2445,7 +2441,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       </div>
 
       {/* 3. Bottom Composer Area (ChatGPT Style) */}
-      <div className="shrink-0 border-t border-slate-200/80 bg-white px-3 sm:px-6 py-2 sm:py-2.5">
+      <div className="shrink-0 sticky bottom-0 z-20 border-t border-slate-200/80 bg-white px-3 sm:px-6 py-2 sm:py-2.5">
         <form
           onSubmit={handleSubmit}
           className="max-w-3xl mx-auto space-y-2"
@@ -2473,222 +2469,116 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             </div>
           )}
 
-          {/* Pre-send Attachment Preview Card (Image Thumbnail or Document Preview & Remove) */}
-          {draftAttachment && (() => {
-            const isDraftImage = Boolean(
-              draftAttachment.dataUrl &&
-                (draftAttachment.mimeType?.startsWith('image/') ||
-                  ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(
-                    draftAttachment.extension
-                  ))
-            );
-            return (
-              <div className="rounded-xl bg-slate-50 border border-slate-200/90 p-3 space-y-2 text-xs">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    {isDraftImage && draftAttachment.dataUrl ? (
-                      <img
-                        src={draftAttachment.dataUrl}
-                        alt={draftAttachment.name}
-                        className="w-14 h-14 rounded-xl object-cover border border-slate-200 bg-white shrink-0 shadow-2xs"
-                      />
-                    ) : (
-                      <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-[#00A8B5] shrink-0">
-                        <FileText className="w-4 h-4" />
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-slate-900 truncate">
-                          {draftAttachment.name}
-                        </span>
-                        {isDraftImage ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 text-[10px] font-bold">
-                            <ImageIcon className="w-3 h-3 text-emerald-700" />
-                            <span>Визуальный анализ ИИ</span>
-                          </span>
-                        ) : (
-                          renderStatusBadge(
-                            draftAttachment.status || 'processed'
-                          )
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono-tabular mt-0.5">
-                        <span className="uppercase font-bold text-slate-700">
-                          .{draftAttachment.extension || 'file'}
-                        </span>
-                        <span>·</span>
-                        <span>
-                          {formatFileSizeRu(draftAttachment.sizeBytes)}
-                        </span>
-                        {!isDraftImage && (
-                          <>
-                            <span>·</span>
-                            <span>
-                              Текст: {draftAttachment.extractedText.length} симв.
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+          {/* Pre-send Attachment Preview (ChatGPT Style Compact Square Cards) */}
+          {draftList.length > 0 && (
+            <div className="flex items-center gap-2 overflow-x-auto py-1 px-0.5 scrollbar-thin">
+              {draftList.map((att) => {
+                const isImageFile =
+                  att.mimeType?.startsWith('image/') ||
+                  ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'jfif'].includes(
+                    att.extension.toLowerCase()
+                  );
 
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {isDraftImage && (
-                      <button
-                        type="button"
-                        disabled={isGenerating}
-                        onClick={() => handleEvaluateImage(draftAttachment)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
-                        title="Отправить это изображение на оценку агенту «Дизайнер»"
-                      >
-                        <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                        <span>Оценить результат</span>
-                      </button>
-                    )}
-                    {!isDraftImage && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onInspectAttachmentInRightPanel(draftAttachment.id)
-                        }
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
-                      >
-                        <Eye className="w-3 h-3" />
-                        <span>Проверить текст</span>
-                      </button>
-                    )}
+                const isValidImageUri = (url?: string): boolean =>
+                  Boolean(
+                    url &&
+                      (url.startsWith('data:image/') ||
+                        url.startsWith('blob:') ||
+                        url.startsWith('http://') ||
+                        url.startsWith('https://'))
+                  );
+
+                const rawThumb =
+                  (isValidImageUri(att.thumbnailUrl) ? att.thumbnailUrl : undefined) ||
+                  (isImageFile && isValidImageUri(att.dataUrl) ? att.dataUrl : undefined) ||
+                  (isValidImageUri(att.extractedImages?.[0]?.dataUrl)
+                    ? att.extractedImages![0].dataUrl
+                    : undefined);
+
+                const hasFailed = failedThumbnailIds.has(att.id);
+                const displayThumbnail = !hasFailed ? rawThumb : undefined;
+
+                const totalSlides = att.extractedImages ? att.extractedImages.length : 0;
+                const ext = (att.extension || 'file').toUpperCase();
+
+                const badgeColor =
+                  ext === 'DOCX' || ext === 'DOC'
+                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                    : ext === 'TXT' || ext === 'MD' || ext === 'CSV' || ext === 'JSON'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : ext === 'PDF'
+                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                        : ext === 'PPTX' || ext === 'PPT'
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : 'bg-slate-50 text-slate-700 border-slate-200';
+
+                const shortName =
+                  att.name.length > 10 ? att.name.slice(0, 9) + '…' : att.name;
+
+                return (
+                  <div
+                    key={att.id}
+                    className="relative group shrink-0 w-16 h-16 rounded-xl border border-slate-200/90 bg-white shadow-2xs hover:border-slate-300 flex flex-col items-center justify-between p-1.5 transition-all select-none"
+                    title={`${att.name} (${formatFileSizeRu(att.sizeBytes)}${totalSlides > 0 ? `, ${totalSlides} сл.` : ''})`}
+                  >
+                    {/* Delete button (X) */}
                     <button
                       type="button"
-                      onClick={onClearDraftAttachment}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
-                      aria-label="Убрать прикреплённый файл"
-                      title="Удалить прикреплённое изображение или файл"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onRemoveDraftAttachment) {
+                          onRemoveDraftAttachment(att.id);
+                        } else {
+                          onClearDraftAttachment();
+                        }
+                      }}
+                      className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-slate-700 text-white flex items-center justify-center hover:bg-rose-600 hover:scale-110 shadow-xs transition-all z-10 cursor-pointer"
+                      title="Удалить файл"
                     >
-                      <X className="w-4 h-4" />
+                      <X className="w-2.5 h-2.5 stroke-[3]" />
                     </button>
-                  </div>
-                </div>
 
-                {isDraftImage ? (
-                  providerSelection === 'ollama' ||
-                  providerSelection === 'openrouter' ? (
-                    <div className="rounded-lg p-2.5 bg-amber-50 border border-amber-300 text-[11px] text-amber-950 flex flex-wrap items-center justify-between gap-2">
-                      <span>
-                        Выбранный провайдер (
-                        <strong>{PROVIDER_LABELS_RU[providerSelection]}</strong>
-                        ) не поддерживает анализ изображений. Для отправки
-                        картинки переключите режим на{' '}
-                        <strong>Автовыбор ИИ</strong> или{' '}
-                        <strong>Google Gemini Free</strong>.
-                      </span>
-                      {onChangeProviderSelection && (
-                        <button
-                          type="button"
-                          onClick={() => onChangeProviderSelection('auto')}
-                          className="px-2.5 py-1 rounded-lg bg-slate-900 text-white font-semibold text-[11px] hover:bg-slate-800 shrink-0"
+                    {/* Thumbnail / Document Icon Badge */}
+                    <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center shrink-0">
+                      {displayThumbnail ? (
+                        <img
+                          src={displayThumbnail}
+                          alt={att.name}
+                          className="w-full h-full object-cover rounded-md"
+                          onError={() => {
+                            setFailedThumbnailIds((prev) => new Set(prev).add(att.id));
+                          }}
+                        />
+                      ) : (
+                        <div
+                          className={`w-full h-full rounded-md border flex flex-col items-center justify-center gap-0.5 ${badgeColor}`}
                         >
-                          Включить Автовыбор ИИ
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="rounded-lg p-2 bg-emerald-50/70 border border-emerald-200/80 text-[11px] text-emerald-950">
-                      Изображение будет передано модели как визуальные данные
-                      вместе с вашим вопросом после нажатия «Отправить».
-                    </div>
-                  )
-                ) : (
-                  <>
-                    {(() => {
-                      const totalExtracted = draftAttachment.extractedImages
-                        ? draftAttachment.extractedImages.length
-                        : 0;
-                      const willSend = Math.min(totalExtracted, 50);
-                      const isPresentation = ['pptx', 'ppt'].includes(
-                        (draftAttachment.extension || '').toLowerCase()
-                      );
-
-                      return (
-                        <>
-                          {totalExtracted > 0 && (
-                            <div className="rounded-lg p-2.5 bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-950 space-y-2">
-                              <div className="flex items-center justify-between font-semibold flex-wrap gap-1">
-                                <span className="flex items-center gap-1.5 text-emerald-900 font-bold">
-                                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                  <span>
-                                    {isPresentation
-                                      ? `Успешно распознано ${totalExtracted} страниц (все будут отправлены ИИ)`
-                                      : `Извлечено ${totalExtracted} изображений (будут отправлены ${willSend})`}
-                                  </span>
-                                </span>
-                                <span className="text-[10px] text-emerald-700">
-                                  ИИ увидит все слайды и визуал
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2 overflow-x-auto pt-0.5 pb-1 scrollbar-thin">
-                                {draftAttachment.extractedImages!
-                                  .slice(0, 12)
-                                  .map((img, idx) => (
-                                    <div
-                                      key={img.id || idx}
-                                      className="relative shrink-0 rounded border border-emerald-300/60 overflow-hidden bg-white shadow-2xs"
-                                    >
-                                      <img
-                                        src={img.dataUrl}
-                                        alt={img.name}
-                                        className="w-12 h-9 object-cover"
-                                      />
-                                      <div className="absolute inset-x-0 bottom-0 bg-black/60 px-0.5 text-[8px] text-white truncate text-center">
-                                        {img.sourceSlide
-                                          ? `Сл. ${img.sourceSlide}`
-                                          : `${idx + 1}`}
-                                      </div>
-                                    </div>
-                                  ))}
-                                {totalExtracted > 12 && (
-                                  <span className="text-[10px] text-emerald-800 font-semibold shrink-0">
-                                    +{totalExtracted - 12} ещё
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          )}
-
-                          {isPresentation && totalExtracted === 0 && (
-                            <div className="rounded-lg p-2.5 bg-sky-50 border border-sky-200 text-[11px] text-sky-950 flex items-start gap-2">
-                              <Info className="w-3.5 h-3.5 text-[#00A8B5] shrink-0 mt-0.5" />
-                              <div className="font-semibold text-slate-900">
-                                Текст всех слайдов извлечён и будет отправлен ИИ.
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-
-                    {draftAttachment.warning && (
-                      <div className="rounded-lg p-2 bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
-                        {draftAttachment.warning}
-                      </div>
-                    )}
-
-                    {(!draftAttachment.extractedText ||
-                      draftAttachment.extractedText.trim().length === 0) &&
-                      (!draftAttachment.extractedImages ||
-                        draftAttachment.extractedImages.length === 0) && (
-                        <div className="rounded-lg p-2 bg-slate-100 border border-slate-200 text-[11px] text-slate-700">
-                          Ограничение: в этом файле отсутствует извлечённый
-                          текстовый слой (например, скан без OCR). Он сохранится в
-                          материалах диалога, но его текст не может быть передан в
-                          текстовый запрос.
+                          <FileText className="w-3.5 h-3.5 shrink-0" />
+                          <span className="font-extrabold text-[7.5px] tracking-tight uppercase leading-none">
+                            {ext.slice(0, 4)}
+                          </span>
                         </div>
                       )}
-                  </>
-                )}
-              </div>
-            );
-          })()}
+                    </div>
+
+                    {/* Short File Name */}
+                    <div className="w-full text-center truncate">
+                      <span className="text-[9.5px] font-medium text-slate-700 block truncate leading-tight">
+                        {shortName}
+                      </span>
+                    </div>
+
+                    {/* Slide count indicator */}
+                    {totalSlides > 0 && (
+                      <div className="absolute bottom-0.5 right-0.5 px-1 py-0.2 rounded bg-black/60 text-white text-[7.5px] font-mono-tabular">
+                        {totalSlides} сл.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Collapsible Accordion: Settings, Templates, Knowledge Base, School & Designer Controls */}
           {isInputSettingsOpen && (
@@ -3408,6 +3298,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 <input
                   ref={imageInputRef}
                   type="file"
+                  multiple
                   accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
                   onChange={handleImageChange}
                   className="hidden"
@@ -3417,15 +3308,16 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   disabled={isParsingFile || isGenerating}
                   onClick={() => imageInputRef.current?.click()}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-900 border border-slate-200/80 disabled:opacity-60 transition-colors cursor-pointer"
-                  title="Прикрепить изображение (PNG, JPG, JPEG, WEBP) для визуального анализа специалистом"
+                  title="Прикрепить одно или несколько изображений (PNG, JPG, JPEG, WEBP) для визуального анализа"
                 >
                   <ImageIcon className="w-4 h-4 text-emerald-600" />
-                  <span>Изображение</span>
+                  <span>Изображения</span>
                 </button>
 
                 <input
                   ref={fileInputRef}
                   type="file"
+                  multiple
                   accept=".pdf,.docx,.pptx,.txt,.md,.csv"
                   onChange={handleFileChange}
                   className="hidden"
@@ -4066,6 +3958,174 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
               >
                 <ExternalLink className="w-3.5 h-3.5" />
                 <span>Открыть Google Flow в новой вкладке</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pop-up Context & Attachment Inspection Modal (ChatGPT Style) */}
+      {inspectedMessageForModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150"
+          onClick={() => setInspectedMessageForModal(null)}
+        >
+          <div
+            className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden text-slate-800"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50/80">
+              <div className="flex items-center gap-2 min-w-0">
+                <Paperclip className="w-4 h-4 text-[#00A8B5] shrink-0" />
+                <h3 className="font-bold text-sm text-slate-900 truncate">
+                  {inspectedMessageForModal.role === 'assistant'
+                    ? 'Использованные источники и контекст'
+                    : 'Прикреплённые материалы к сообщению'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectedMessageForModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
+                title="Закрыть"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+              {/* Attachment summary box */}
+              {inspectedMessageForModal.attachmentName && (
+                <div className="rounded-xl p-3 bg-slate-50 border border-slate-200/80 space-y-1">
+                  <div className="font-semibold text-slate-600">
+                    Переданные файлы:
+                  </div>
+                  <div className="text-slate-900 font-medium break-words leading-relaxed">
+                    {inspectedMessageForModal.attachmentName}
+                  </div>
+                  {inspectedMessageForModal.attachmentMeta && (
+                    <div className="text-[11px] text-slate-500 font-mono-tabular pt-1">
+                      Размер:{' '}
+                      {formatFileSizeRu(
+                        inspectedMessageForModal.attachmentMeta.sizeBytes
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Extracted slides and multimodal images */}
+              {(() => {
+                const matchedAtt = inspectedMessageForModal.attachmentMeta
+                  ? dialogueAttachments.find(
+                      (a) => a.id === inspectedMessageForModal.attachmentMeta!.id
+                    )
+                  : undefined;
+                const extracted =
+                  inspectedMessageForModal.attachmentMeta?.extractedImages ||
+                  matchedAtt?.extractedImages ||
+                  [];
+                const sentCount =
+                  inspectedMessageForModal.attachmentMeta?.sentImagesCount ??
+                  inspectedMessageForModal.sentImagesCount ??
+                  extracted.length;
+
+                if (extracted.length === 0) return null;
+
+                return (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-slate-700 font-semibold flex-wrap gap-1">
+                      <span>
+                        Распознанные страницы / слайды ({extracted.length} шт.,{' '}
+                        {sentCount < extracted.length
+                          ? `передано в анализ: ${sentCount}`
+                          : 'все переданы в анализ'}
+                        )
+                      </span>
+                      {inspectedMessageForModal.attachmentMeta?.id && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onInspectAttachmentInRightPanel(
+                              inspectedMessageForModal.attachmentMeta!.id
+                            );
+                            setInspectedMessageForModal(null);
+                          }}
+                          className="text-[#00A8B5] hover:underline font-semibold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Открыть полный текст в панели</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-72 overflow-y-auto p-1 border border-slate-100 rounded-xl bg-slate-50/50 scrollbar-thin">
+                      {extracted.map((img, idx) => (
+                        <div
+                          key={img.id || `modal-slide-${idx}`}
+                          className="rounded-lg overflow-hidden border border-slate-200 bg-white shadow-2xs group relative"
+                        >
+                          <img
+                            src={img.dataUrl}
+                            alt={img.name}
+                            className="w-full h-20 object-cover"
+                            loading="lazy"
+                          />
+                          <div className="p-1 text-[10px] text-slate-600 truncate bg-white font-medium flex items-center justify-between">
+                            <span className="truncate">
+                              {img.sourceSlide
+                                ? `Слайд ${img.sourceSlide}`
+                                : `Стр. ${idx + 1}`}
+                            </span>
+                            {idx < sentCount && (
+                              <span className="text-emerald-700 text-[9px] font-bold bg-emerald-50 px-1 rounded">
+                                В ИИ
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Assistant Context Sources List */}
+              {inspectedMessageForModal.usedContextSummary &&
+                inspectedMessageForModal.usedContextSummary.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="font-semibold text-slate-700 flex items-center gap-1.5">
+                      <BookOpen className="w-3.5 h-3.5 text-[#00A8B5]" />
+                      <span>
+                        Использованные источники ({inspectedMessageForModal.usedContextSummary.length}):
+                      </span>
+                    </div>
+                    <div className="max-h-60 overflow-y-auto space-y-1.5 p-2 rounded-xl bg-slate-50 border border-slate-200/80 scrollbar-thin">
+                      {inspectedMessageForModal.usedContextSummary.map(
+                        (source, idx) => (
+                          <div
+                            key={`ctx-modal-${idx}`}
+                            className="p-2 rounded-lg bg-white border border-slate-200/70 text-slate-800 text-[11px] font-medium"
+                          >
+                            {source}
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/50 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setInspectedMessageForModal(null)}
+                className="px-4 py-1.5 rounded-xl bg-slate-900 text-white font-semibold text-xs hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                Закрыть
               </button>
             </div>
           </div>

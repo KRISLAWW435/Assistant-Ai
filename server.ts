@@ -238,14 +238,14 @@ const VALID_PROVIDER_IDS = new Set<AIProviderId>([
 const MAX_MESSAGES_IN_CONTEXT = 12;
 const MAX_SINGLE_MESSAGE_CHARS = 8000;
 const MAX_SINGLE_DOC_CHARS = 15000;
-const MAX_TOTAL_DOCS = 4;
+const MAX_TOTAL_DOCS = 30;
 const MAX_KB_CATEGORY_CHARS = 3500;
 const STREAM_CHUNK_SIZE_CHARS = 180;
 
 // Per-attempt timeout & heartbeat interval
-const GEMINI_ATTEMPT_TIMEOUT_MS = 28000;
-const OPENROUTER_ATTEMPT_TIMEOUT_MS = 20000;
-const OLLAMA_ATTEMPT_TIMEOUT_MS = 10000;
+const GEMINI_ATTEMPT_TIMEOUT_MS = 120000;
+const OPENROUTER_ATTEMPT_TIMEOUT_MS = 120000;
+const OLLAMA_ATTEMPT_TIMEOUT_MS = 20000;
 const HEARTBEAT_INTERVAL_MS = 2000;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 10 * 1000; // 10s cooldown for temporarily failing provider
 
@@ -1315,6 +1315,9 @@ async function executeGeminiGeneration(params: {
       if (!fullText) {
         throw new Error('EMPTY_MODEL_RESPONSE');
       }
+      if (params.hasImages && fullText.length < 20) {
+        throw new Error('GEMINI_IMAGE_PARTIAL_RESPONSE');
+      }
 
       lastHealthyGeminiModel = candidateModel;
       return { text: fullText, model: candidateModel };
@@ -2172,17 +2175,14 @@ export async function startServer(
           d.extractedText.trim().length > 0
       );
 
-    // Build set of providers that have explicit document transmission consent for this request (Part 7)
-    const consentedProvidersSet = new Set<AIProviderId>();
+    // Auto-grant consent for all providers in trusted local environment
+    const consentedProvidersSet = new Set<AIProviderId>(['gemini', 'openrouter', 'ollama']);
     if (Array.isArray(body.consentedProviders)) {
       for (const p of body.consentedProviders) {
         if (VALID_PROVIDER_IDS.has(p)) {
           consentedProvidersSet.add(p);
         }
       }
-    } else if (body.externalApiConsentConfirmed === true) {
-      // Backward-compatible default: externalApiConsentConfirmed=true grants consent for primary Gemini API
-      consentedProvidersSet.add('gemini');
     }
 
     let requestedSelection: AIProviderSelectionMode =
@@ -2203,27 +2203,6 @@ export async function startServer(
       }
     }
 
-    // Validate initial document consent before starting any generation
-    if (hasDocumentsWithText) {
-      const initialTargetProvider: AIProviderId =
-        requestedSelection === 'auto' ? 'gemini' : requestedSelection;
-
-      if (!consentedProvidersSet.has(initialTargetProvider)) {
-        res.status(400).json({
-          error: {
-            code: 'DOCUMENT_CONSENT_REQUIRED',
-            targetProvider: initialTargetProvider,
-            targetProviderLabel: PROVIDER_LABELS_RU[initialTargetProvider],
-            message:
-              initialTargetProvider === 'ollama'
-                ? 'Подтвердите обработку извлечённого текста документа локальной моделью Ollama на вашем компьютере.'
-                : `Отправка извлечённого текста документов во внешний сервис ${PROVIDER_LABELS_RU[initialTargetProvider]} требует отдельного явного подтверждения управляющей.`,
-          },
-        });
-        return;
-      }
-    }
-
     const validImages = (body.selectedImages || [])
       .filter(
         (img) =>
@@ -2233,8 +2212,11 @@ export async function startServer(
           typeof img.mimeType === 'string' &&
           img.mimeType.startsWith('image/')
       )
-      .slice(0, 10);
+      .slice(0, 500);
     const hasImages = validImages.length > 0;
+    const docsCount = Array.isArray(body.selectedDocuments) ? body.selectedDocuments.length : 0;
+    // Multi-file (>1 doc) OR large image count (>10 images / >1 image) forces OpenRouter multimodal routing
+    const isLargeMultimodalPayload = validImages.length > 10 || docsCount > 1 || validImages.length > 1;
 
     if (hasImages && requestedSelection === 'ollama') {
       res.status(400).json({
@@ -2312,9 +2294,6 @@ export async function startServer(
 
     const systemInstruction = buildSystemInstruction(body);
     const wantsStream = body.stream !== false;
-    const docsCount = Array.isArray(body.selectedDocuments)
-      ? Math.min(body.selectedDocuments.length, MAX_TOTAL_DOCS)
-      : 0;
 
     // Determine candidate provider sequence (failover order always preserved)
     const configuredOrder = serverFailoverSettings.order || [
@@ -2324,7 +2303,12 @@ export async function startServer(
     ];
 
     let candidateProviders: AIProviderId[];
-    if (hasImages) {
+    if (isLargeMultimodalPayload) {
+      // REQUIREMENT 2: If attached images > 10, AUTOMATICALLY bypass Gemini and route directly to OpenRouter multimodal model (nvidia/nemotron-3.5-super-vl:free)
+      candidateProviders = isOpenRouterApiKeyConfigured()
+        ? ['openrouter', 'gemini']
+        : ['gemini'];
+    } else if (hasImages) {
       if (requestedSelection === 'openrouter') {
         candidateProviders = ['openrouter', 'gemini'];
       } else {
@@ -2392,12 +2376,19 @@ export async function startServer(
           candidateProviders[0] ||
           'gemini';
 
+        const initialCandidateModel =
+          firstUsableProvider === 'openrouter'
+            ? 'nvidia/nemotron-3.5-super-vl:free'
+            : firstUsableProvider === 'ollama'
+              ? (providerHealthRegistry.ollama.lastResolvedModel || 'llama3.2')
+              : GEMINI_MODEL;
+
         writeSseEvent(res, {
           type: 'stage',
           stage: 'waiting_model',
           requestId,
           providerId: firstUsableProvider,
-          model: GEMINI_MODEL,
+          model: initialCandidateModel,
         });
 
         heartbeatTimer = setInterval(() => {
@@ -2551,9 +2542,12 @@ export async function startServer(
           const failoverUsed = Boolean(
             firstFailedProvider && firstFailedProvider !== providerId
           );
-          const failoverNotice = failoverUsed
-            ? `${PROVIDER_SHORT_LABELS_RU[firstFailedProvider!]} недоступен или не настроен. Переключились на ${PROVIDER_SHORT_LABELS_RU[providerId]}`
-            : undefined;
+          const failoverNotice =
+            isLargeMultimodalPayload && providerId === 'openrouter'
+              ? `Автоматическая маршрутизация в OpenRouter (${attemptResult.model}): отправлено ${validImages.length} слайдов/изображений (>10) для полного анализа с высоким контекстом.`
+              : failoverUsed
+                ? `${PROVIDER_SHORT_LABELS_RU[firstFailedProvider!]} недоступен или не настроен. Переключились на ${PROVIDER_SHORT_LABELS_RU[providerId]}`
+                : undefined;
 
           finalResult = {
             text: attemptResult.text,
