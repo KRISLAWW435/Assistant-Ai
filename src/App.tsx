@@ -276,8 +276,8 @@ interface StagedChatFileModalState {
 }
 
 export default function App() {
-  // Open directly in the ChatGPT-style AI Assistant workspace ('marketer')
-  const [activeSection, setActiveSection] = useState<NavSection>('marketer');
+  // Open directly on the Overview dashboard ('home')
+  const [activeSection, setActiveSection] = useState<NavSection>('home');
   const [activeSchool, setActiveSchool] = useState<SchoolId>(() =>
     readInitialActiveSchool()
   );
@@ -3774,6 +3774,12 @@ export default function App() {
                   }
                   sessions={sessions}
                   knowledgeBase={knowledgeBase}
+                  tasks={companionTasks}
+                  onSaveTask={handleSaveCompanionTask}
+                  onOpenSpecialistChat={(mode, schoolId) => {
+                    handleSelectSchool(schoolId);
+                    handleChangeChatMode(mode);
+                  }}
                 />
               )}
 

@@ -21,6 +21,7 @@ import {
 } from '../types/assistant';
 import {
   createEmptyKnowledgeBase,
+  DEFAULT_GENERAL_BUSINESS_INFO,
   KNOWLEDGE_CATEGORIES,
 } from '../config/schoolsAndModes';
 
@@ -432,10 +433,16 @@ function assembleLoadedWorkspaceData(
       knowledgeBase[rec.schoolId][rec.categoryKey] = rec.content ?? '';
     } else if (
       rec.schoolId === 'all' &&
-      (rec.categoryKey === 'general_business' || (rec.categoryKey as string) === 'general_business_info')
+      ((rec.categoryKey as string) === 'general_business' || (rec.categoryKey as string) === 'general_business_info')
     ) {
       if (rec.content && rec.content.trim().length > 0) {
-        knowledgeBase.generalBusinessInfo = rec.content;
+        const isLegacyDefault =
+          rec.content.includes('подростки 12–18 лет') ||
+          (rec.content.includes('Экосистема объединяет два взаимодополняющих') &&
+            !rec.content.includes('Формат обучения (обе школы)'));
+        knowledgeBase.generalBusinessInfo = isLegacyDefault
+          ? DEFAULT_GENERAL_BUSINESS_INFO
+          : rec.content;
       }
     }
   }

@@ -24,6 +24,7 @@ import {
   Pin,
   PinOff,
   Search,
+  Settings,
   Trash2,
   X,
 } from 'lucide-react';
@@ -63,6 +64,10 @@ interface SpecialistItem {
   label: string;
   sublabel: string;
   icon: React.ComponentType<{ className?: string }>;
+  activeBg: string;
+  activeText: string;
+  pastelBg: string;
+  pastelText: string;
 }
 
 interface AppSectionItem {
@@ -84,40 +89,54 @@ const SPECIALIST_ITEMS: SpecialistItem[] = [
     label: 'Маркетолог',
     sublabel: 'Посты VK, реклама, видео',
     icon: Megaphone,
+    activeBg: 'bg-amber-400',
+    activeText: 'text-slate-950',
+    pastelBg: 'bg-amber-100 hover:bg-amber-200/80',
+    pastelText: 'text-amber-800',
   },
   {
     id: 'manager',
     label: 'Менеджер',
     sublabel: 'Родители и возражения',
     icon: MessageSquareHeart,
+    activeBg: 'bg-rose-500',
+    activeText: 'text-white',
+    pastelBg: 'bg-rose-100 hover:bg-rose-200/80',
+    pastelText: 'text-rose-800',
   },
   {
     id: 'methodist',
     label: 'Методист',
     sublabel: 'Уроки и мастер-классы',
     icon: GraduationCap,
+    activeBg: 'bg-purple-600',
+    activeText: 'text-white',
+    pastelBg: 'bg-purple-100 hover:bg-purple-200/80',
+    pastelText: 'text-purple-800',
   },
   {
     id: 'analyst',
     label: 'Аналитик',
     sublabel: 'Заявки, конверсия, отчёты',
     icon: BarChart3,
+    activeBg: 'bg-blue-600',
+    activeText: 'text-white',
+    pastelBg: 'bg-blue-100 hover:bg-blue-200/80',
+    pastelText: 'text-blue-800',
   },
   {
     id: 'designer',
     label: 'Дизайнер',
     sublabel: 'Концепции, баннеры, креативы',
     icon: Palette,
+    activeBg: 'bg-emerald-500',
+    activeText: 'text-white',
+    pastelBg: 'bg-emerald-100 hover:bg-emerald-200/80',
+    pastelText: 'text-emerald-800',
   },
 ];
 
-const APP_SECTION_ITEMS: AppSectionItem[] = [
-  {
-    id: 'home',
-    label: 'Обзор кабинета',
-    sublabel: 'Быстрый старт и сводка',
-    icon: Home,
-  },
+const SECONDARY_NAV_ITEMS: AppSectionItem[] = [
   {
     id: 'tasks',
     label: 'Мои задачи',
@@ -138,9 +157,9 @@ const APP_SECTION_ITEMS: AppSectionItem[] = [
   },
   {
     id: 'connections',
-    label: 'Настройки и ИИ',
+    label: 'Настройки',
     sublabel: 'Ключи, голос Пикселя, тесты',
-    icon: Cpu,
+    icon: Settings,
   },
 ];
 
@@ -427,6 +446,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* New Chat Button + Enlarged School Switcher */}
       {isCollapsedMode ? (
         <div className="px-2 py-3 border-b border-slate-200/70 flex flex-col items-center gap-2.5">
+          {/* Top Home Button (Домик) */}
+          <div className="relative group">
+            <button
+              type="button"
+              onClick={() => handleNavClick('home')}
+              title="Обзор кабинета"
+              aria-label="Обзор кабинета"
+              className={`w-11 h-11 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+                activeSection === 'home'
+                  ? 'bg-[#00A8B5] text-white shadow-md ring-2 ring-[#00A8B5]/30 ring-offset-2 scale-105 font-bold'
+                  : 'bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/80 shadow-2xs'
+              }`}
+            >
+              <Home
+                className={`w-5 h-5 ${
+                  activeSection === 'home' ? 'text-white' : 'text-slate-600'
+                }`}
+              />
+            </button>
+            <div
+              role="tooltip"
+              className="pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 absolute left-full top-1/2 -translate-y-1/2 ml-2.5 z-50 px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium whitespace-nowrap shadow-md"
+            >
+              Обзор кабинета
+            </div>
+          </div>
+
           {/* Collapsed New Chat */}
           <div className="relative group">
             <button
@@ -492,6 +538,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       ) : (
         <div className="p-3 border-b border-slate-200/70 space-y-2.5">
+          {/* Top Home Button (Домик) */}
+          <button
+            type="button"
+            onClick={() => handleNavClick('home')}
+            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl font-display font-bold text-xs tracking-wide transition-all cursor-pointer border ${
+              activeSection === 'home'
+                ? 'bg-[#00A8B5] text-white border-[#00A8B5] shadow-xs'
+                : 'bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 border-slate-200/90 shadow-2xs'
+            }`}
+          >
+            <Home
+              className={`w-4 h-4 shrink-0 ${
+                activeSection === 'home' ? 'text-white' : 'text-slate-500'
+              }`}
+            />
+            <span className="truncate">Обзор кабинета</span>
+          </button>
+
           {/* Prominent New Chat Button (Monolithic Style) */}
           <button
             type="button"
@@ -543,7 +607,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Main Scrollable Area: Specialists + Dialogue History + App Sections */}
       {isCollapsedMode ? (
         <div className="flex-1 py-3 px-2 flex flex-col items-center justify-between">
-          <div className="space-y-1.5 flex flex-col items-center w-full">
+          <div className="space-y-2 flex flex-col items-center w-full">
             {SPECIALIST_ITEMS.map((spec) => {
               const Icon = spec.icon;
               const isChatActive =
@@ -555,13 +619,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     type="button"
                     onClick={() => handleNavClick(spec.id)}
                     aria-label={spec.label}
-                    className={`w-11 h-11 rounded-xl flex items-center justify-center transition-colors ${
+                    className={`w-11 h-11 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
                       isChatActive
-                        ? 'bg-slate-900 text-white shadow-2xs'
-                        : 'text-slate-600 hover:bg-slate-200/70 hover:text-slate-900'
+                        ? `${spec.activeBg} ${spec.activeText} ring-2 ring-slate-900/30 ring-offset-2 scale-105 shadow-md font-bold`
+                        : `${spec.pastelBg} ${spec.pastelText} border border-slate-200/60 shadow-2xs hover:scale-105`
                     }`}
                   >
-                    <Icon className="w-4 h-4" />
+                    <Icon className="w-5 h-5" />
                   </button>
                   <div
                     role="tooltip"
@@ -575,7 +639,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           <div className="space-y-1.5 flex flex-col items-center w-full pt-3 border-t border-slate-200/70">
-            {APP_SECTION_ITEMS.map((sec) => {
+            {SECONDARY_NAV_ITEMS.map((sec) => {
               const Icon = sec.icon;
               const isActive = activeSection === sec.id;
               return (
@@ -584,10 +648,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     type="button"
                     onClick={() => handleNavClick(sec.id)}
                     aria-label={sec.label}
-                    className={`relative w-11 h-11 rounded-xl flex items-center justify-center transition-colors ${
+                    className={`relative w-11 h-11 rounded-xl flex items-center justify-center transition-colors border ${
                       isActive
-                        ? 'bg-slate-900 text-white shadow-2xs'
-                        : 'text-slate-600 hover:bg-slate-200/70 hover:text-slate-900'
+                        ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                        : 'bg-white/80 text-slate-500 border-slate-200/80 hover:bg-slate-100 hover:text-slate-800'
                     }`}
                   >
                     <Icon className="w-4 h-4" />
@@ -877,12 +941,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
 
-          {/* 3. Application Sections (Only Overview, Knowledge Base, Backups) */}
+          {/* 3. Secondary Application Sections */}
           <div className="space-y-1 pt-2 border-t border-slate-200/70">
             <div className="px-2 pb-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-              Разделы приложения
+              Сервисы и настройки
             </div>
-            {APP_SECTION_ITEMS.map((item) => {
+            {SECONDARY_NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const isActive = activeSection === item.id;
               return (

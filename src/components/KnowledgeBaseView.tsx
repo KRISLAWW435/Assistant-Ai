@@ -1118,8 +1118,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6 relative min-h-screen"
     >
       {/* Top Header & View Scope Switcher */}
-      <div className="glass-panel rounded-2xl p-5 sm:p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-5 border border-slate-200/90 shadow-2xs">
-        <div className="space-y-1.5 max-w-2xl">
+      <div className="glass-panel rounded-2xl p-5 sm:p-6 flex flex-col lg:flex-row justify-between gap-6 border border-slate-200/90 shadow-2xs">
+        <div className="space-y-1.5 max-w-2xl min-w-0">
           <div className="inline-flex items-center gap-2 flex-wrap">
             <span
               className={`px-3 py-1 rounded-xl font-display font-extrabold text-xs sm:text-sm tracking-wide shadow-2xs ${
@@ -1130,29 +1130,34 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                     : 'bg-[#84CC16] text-slate-950'
               }`}
             >
-              {activeSchool === 'all'
-                ? 'Область: Все материалы (Общие + KIBERONE + RENDERIA)'
-                : activeSchool === 'kiberone'
-                  ? 'Область: KIBERONE (+ общие материалы)'
-                  : 'Область: RENDERIA (+ общие материалы)'}
+              {activeSchool === 'all' ? (
+                <>
+                  <span className="block">Область: Все материалы</span>
+                  <span className="block">(Общие + KIBERONE + RENDERIA)</span>
+                </>
+              ) : activeSchool === 'kiberone' ? (
+                'Область: KIBERONE (+ общие материалы)'
+              ) : (
+                'Область: RENDERIA (+ общие материалы)'
+              )}
             </span>
             <span className="text-xs font-medium text-slate-500">
               · Единая база знаний экосистемы
             </span>
           </div>
-          <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-900">
+          <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-900 break-words min-w-0">
             База знаний и визуальная библиотека
           </h1>
-          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed break-words min-w-0">
             Хранение документов (PDF, DOCX, TXT), презентаций (PPTX), архивов (ZIP),
             видео (MP4) и брендбуков. Раздельный доступ к <strong>KIBERONE</strong> и <strong>RENDERIA</strong> с поддержкой общих материалов <code>ALL</code> для обеих школ.
           </p>
         </div>
 
         {/* View Scope Switcher & Actions Strip */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+        <div className="flex flex-col gap-3">
           {/* Scope Switcher Tabs */}
-          <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200/90 shadow-inner">
+          <div className="flex flex-wrap gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200/90 shadow-inner">
             {(
               [
                 { id: 'all', label: 'Все материалы' },
@@ -1185,7 +1190,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           </div>
 
           {/* Backup & Folder Actions */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={onTriggerExportBackup}
