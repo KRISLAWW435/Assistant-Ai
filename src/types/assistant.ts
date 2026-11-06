@@ -37,7 +37,9 @@ export type SchoolKnowledgeFields = Record<KnowledgeCategoryKey, string>;
 
 export type KnowledgeBaseSchoolId = 'kiberone' | 'renderia';
 
-export type KnowledgeBaseBySchool = Record<KnowledgeBaseSchoolId, SchoolKnowledgeFields>;
+export type KnowledgeBaseBySchool = Record<KnowledgeBaseSchoolId, SchoolKnowledgeFields> & {
+  generalBusinessInfo?: string;
+};
 
 export type DocumentProcessingStatus =
   | 'uploading'

@@ -430,6 +430,13 @@ function assembleLoadedWorkspaceData(
       rec.categoryKey in knowledgeBase[rec.schoolId]
     ) {
       knowledgeBase[rec.schoolId][rec.categoryKey] = rec.content ?? '';
+    } else if (
+      rec.schoolId === 'all' &&
+      (rec.categoryKey === 'general_business' || (rec.categoryKey as string) === 'general_business_info')
+    ) {
+      if (rec.content && rec.content.trim().length > 0) {
+        knowledgeBase.generalBusinessInfo = rec.content;
+      }
     }
   }
 

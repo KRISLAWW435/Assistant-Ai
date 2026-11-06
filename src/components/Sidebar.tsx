@@ -325,7 +325,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  const kbRatio = `${filledCategoriesCount[activeSchool]}/${totalCategoriesCount}`;
+  const kbRatio =
+    activeSchool === 'all'
+      ? `${filledCategoriesCount.all}/16`
+      : `${filledCategoriesCount[activeSchool]}/${totalCategoriesCount}`;
 
   const renderSidebarContent = (
     isCollapsedMode: boolean,

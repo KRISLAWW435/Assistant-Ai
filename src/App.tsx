@@ -3192,14 +3192,30 @@ export default function App() {
   ): Promise<boolean> => {
     if (isStorageLoading) return false;
     try {
-      await storageProvider.saveKnowledgeCategory(schoolId, categoryKey, value);
-      setKnowledgeBase((prev) => ({
-        ...prev,
-        [schoolId]: {
-          ...prev[schoolId],
-          [categoryKey]: value,
-        },
-      }));
+      if ((categoryKey as string) === 'general_business') {
+        await storageProvider.saveKnowledgeCategory('all', 'general_business' as any, value);
+        setKnowledgeBase((prev) => ({
+          ...prev,
+          generalBusinessInfo: value,
+        }));
+      } else if (schoolId === 'all') {
+        await storageProvider.saveKnowledgeCategory('kiberone', categoryKey, value);
+        await storageProvider.saveKnowledgeCategory('renderia', categoryKey, value);
+        setKnowledgeBase((prev) => ({
+          ...prev,
+          kiberone: { ...prev.kiberone, [categoryKey]: value },
+          renderia: { ...prev.renderia, [categoryKey]: value },
+        }));
+      } else {
+        await storageProvider.saveKnowledgeCategory(schoolId, categoryKey, value);
+        setKnowledgeBase((prev) => ({
+          ...prev,
+          [schoolId]: {
+            ...prev[schoolId],
+            [categoryKey]: value,
+          },
+        }));
+      }
       setStorageError(null);
       return true;
     } catch (err) {
@@ -3225,18 +3241,43 @@ export default function App() {
     try {
       await storageProvider.saveDocument(doc);
       if (categoryUpdate) {
-        await storageProvider.saveKnowledgeCategory(
-          categoryUpdate.schoolId,
-          categoryUpdate.categoryKey,
-          categoryUpdate.nextCategoryText
-        );
-        setKnowledgeBase((prev) => ({
-          ...prev,
-          [categoryUpdate.schoolId]: {
-            ...prev[categoryUpdate.schoolId],
-            [categoryUpdate.categoryKey]: categoryUpdate.nextCategoryText,
-          },
-        }));
+        if (categoryUpdate.schoolId === 'all') {
+          await storageProvider.saveKnowledgeCategory(
+            'kiberone',
+            categoryUpdate.categoryKey,
+            categoryUpdate.nextCategoryText
+          );
+          await storageProvider.saveKnowledgeCategory(
+            'renderia',
+            categoryUpdate.categoryKey,
+            categoryUpdate.nextCategoryText
+          );
+          setKnowledgeBase((prev) => ({
+            ...prev,
+            kiberone: {
+              ...prev.kiberone,
+              [categoryUpdate.categoryKey]: categoryUpdate.nextCategoryText,
+            },
+            renderia: {
+              ...prev.renderia,
+              [categoryUpdate.categoryKey]: categoryUpdate.nextCategoryText,
+            },
+          }));
+        } else {
+          const targetSch = categoryUpdate.schoolId as 'kiberone' | 'renderia';
+          await storageProvider.saveKnowledgeCategory(
+            targetSch,
+            categoryUpdate.categoryKey,
+            categoryUpdate.nextCategoryText
+          );
+          setKnowledgeBase((prev) => ({
+            ...prev,
+            [targetSch]: {
+              ...prev[targetSch],
+              [categoryUpdate.categoryKey]: categoryUpdate.nextCategoryText,
+            },
+          }));
+        }
       }
 
       setUploadedDocuments((prev) =>

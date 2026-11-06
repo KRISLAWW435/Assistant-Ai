@@ -113,6 +113,12 @@ interface StagedKnowledgeDocument {
 }
 
 const DEFAULT_BRAND_COLORS: Record<SchoolId, VisualColorSample[]> = {
+  all: [
+    { hex: '#FFD700', label: 'Жёлтый (KIBERone)' },
+    { hex: '#00A8B5', label: 'Бирюзовый (KIBERone)' },
+    { hex: '#84CC16', label: 'Лайм (RENDERIA)' },
+    { hex: '#65A30D', label: 'Зелёный (RENDERIA)' },
+  ],
   kiberone: [
     { hex: '#FFD700', label: 'Фирменный жёлтый' },
     { hex: '#00A8B5', label: 'Бирюзовый акцент' },
@@ -284,29 +290,96 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     };
   }, []);
 
-  const [subKBSchool, setSubKBSchool] = useState<'kiberone' | 'renderia'>('kiberone');
-  const targetEditingSchool: 'kiberone' | 'renderia' =
-    activeSchool === 'all' ? subKBSchool : activeSchool;
-  const schoolConfig = SCHOOLS[targetEditingSchool];
-  const confirmedSchoolData = knowledgeBase[targetEditingSchool];
+  // General Business Info State (Ecosystem-wide, internal code 'all')
+  const [generalBusinessDraft, setGeneralBusinessDraft] = useState<string>(
+    knowledgeBase.generalBusinessInfo ?? ''
+  );
+  const [isGeneralBusinessDirty, setIsGeneralBusinessDirty] = useState(false);
+  const [isGeneralBusinessSaving, setIsGeneralBusinessSaving] = useState(false);
+  const [generalBusinessSavedFlash, setGeneralBusinessSavedFlash] = useState(false);
+  const generalBusinessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Eligible documents for active view: matches activeSchool OR marked 'all'
+  // Sync general business info from outside if not currently edited
+  useEffect(() => {
+    if (!isGeneralBusinessDirty) {
+      setGeneralBusinessDraft(knowledgeBase.generalBusinessInfo ?? '');
+    }
+  }, [knowledgeBase.generalBusinessInfo, isGeneralBusinessDirty]);
+
+  const handleGeneralBusinessChange = (val: string) => {
+    setGeneralBusinessDraft(val);
+    setIsGeneralBusinessDirty(val !== (knowledgeBase.generalBusinessInfo ?? ''));
+    if (generalBusinessSavedFlash) {
+      if (generalBusinessTimerRef.current) clearTimeout(generalBusinessTimerRef.current);
+      setGeneralBusinessSavedFlash(false);
+    }
+  };
+
+  const handleSaveGeneralBusiness = async () => {
+    setIsGeneralBusinessSaving(true);
+    try {
+      const ok = await onUpdateCategory('all', 'general_business' as any, generalBusinessDraft);
+      if (ok) {
+        setIsGeneralBusinessDirty(false);
+        setGeneralBusinessSavedFlash(true);
+        if (generalBusinessTimerRef.current) clearTimeout(generalBusinessTimerRef.current);
+        generalBusinessTimerRef.current = setTimeout(() => {
+          setGeneralBusinessSavedFlash(false);
+        }, 2600);
+      }
+    } finally {
+      setIsGeneralBusinessSaving(false);
+    }
+  };
+
+  const handleClearGeneralBusiness = async () => {
+    setGeneralBusinessDraft('');
+    setIsGeneralBusinessSaving(true);
+    try {
+      const ok = await onUpdateCategory('all', 'general_business' as any, '');
+      if (ok) {
+        setIsGeneralBusinessDirty(false);
+        setGeneralBusinessSavedFlash(true);
+        if (generalBusinessTimerRef.current) clearTimeout(generalBusinessTimerRef.current);
+        generalBusinessTimerRef.current = setTimeout(() => {
+          setGeneralBusinessSavedFlash(false);
+        }, 2600);
+      }
+    } finally {
+      setIsGeneralBusinessSaving(false);
+    }
+  };
+
+  // Sub-filters when viewing 'all' materials
+  const [visualScopeFilter, setVisualScopeFilter] = useState<'all' | 'common' | 'kiberone' | 'renderia'>('all');
+  const [filesScopeFilter, setFilesScopeFilter] = useState<'all' | 'common' | 'kiberone' | 'renderia'>('all');
+
+  // Eligible documents for active view:
+  // - 'all': all uploaded documents
+  // - 'kiberone': kiberone + general materials (all), excludes renderia
+  // - 'renderia': renderia + general materials (all), excludes kiberone
   const eligibleSchoolDocs = useMemo(() => {
+    if (activeSchool === 'all') {
+      return uploadedDocuments;
+    }
     return uploadedDocuments.filter(
-      (d) =>
-        activeSchool === 'all' ||
-        d.schoolId === activeSchool ||
-        d.schoolId === 'all'
+      (d) => d.schoolId === activeSchool || d.schoolId === 'all'
     );
   }, [uploadedDocuments, activeSchool]);
 
   // Visual Library Items
   const visualLibraryItems = useMemo(() => {
     return uploadedDocuments.filter((d) => {
-      // School filter
-      if (schoolScopeFilter === 'current' && d.schoolId !== activeSchool && d.schoolId !== 'all') {
-        return false;
+      // Primary view scope isolation
+      if (activeSchool !== 'all') {
+        if (d.schoolId !== activeSchool && d.schoolId !== 'all') return false;
+      } else {
+        // Quick sub-filter when viewing 'all'
+        if (visualScopeFilter === 'common' && d.schoolId !== 'all') return false;
+        if (visualScopeFilter === 'kiberone' && d.schoolId !== 'kiberone') return false;
+        if (visualScopeFilter === 'renderia' && d.schoolId !== 'renderia') return false;
       }
+
       // Must be visual: image, presentation, pdf, pptx, docx or have extracted images/slides/dataUrl/thumbnail
       const extLower = (d.extension || '').toLowerCase();
       const isVisual =
@@ -337,14 +410,21 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
       return true;
     });
-  }, [uploadedDocuments, activeSchool, schoolScopeFilter, visualRoleFilter, searchQuery]);
+  }, [uploadedDocuments, activeSchool, visualScopeFilter, visualRoleFilter, searchQuery]);
 
   // All Files List (with full filtering)
   const filteredAllFiles = useMemo(() => {
     return uploadedDocuments.filter((d) => {
-      if (schoolScopeFilter === 'current' && d.schoolId !== activeSchool && d.schoolId !== 'all') {
-        return false;
+      // Primary view scope isolation
+      if (activeSchool !== 'all') {
+        if (d.schoolId !== activeSchool && d.schoolId !== 'all') return false;
+      } else {
+        // Quick sub-filter when viewing 'all'
+        if (filesScopeFilter === 'common' && d.schoolId !== 'all') return false;
+        if (filesScopeFilter === 'kiberone' && d.schoolId !== 'kiberone') return false;
+        if (filesScopeFilter === 'renderia' && d.schoolId !== 'renderia') return false;
       }
+
       if (fileTypeFilter !== 'all') {
         if (d.fileType !== fileTypeFilter) return false;
       }
@@ -357,7 +437,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       }
       return true;
     });
-  }, [uploadedDocuments, activeSchool, schoolScopeFilter, fileTypeFilter, searchQuery]);
+  }, [uploadedDocuments, activeSchool, filesScopeFilter, fileTypeFilter, searchQuery]);
 
   // Brandbook Palette & Documents with Custom Management Support
   const brandbookData = useMemo(() => {
@@ -411,11 +491,22 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     };
   }, [activeSchool, eligibleSchoolDocs, paletteOverrides]);
 
-  const filledCount = KNOWLEDGE_CATEGORIES.filter(
-    (c) => (confirmedSchoolData[c.key] || '').trim().length > 0
+  const kiberFilledCount = KNOWLEDGE_CATEGORIES.filter(
+    (c) => (knowledgeBase.kiberone[c.key] || '').trim().length > 0
   ).length;
 
-  const triggerSavedFlash = (schoolId: SchoolId, key: KnowledgeCategoryKey) => {
+  const renderiaFilledCount = KNOWLEDGE_CATEGORIES.filter(
+    (c) => (knowledgeBase.renderia[c.key] || '').trim().length > 0
+  ).length;
+
+  const totalCategoriesBadgeText =
+    activeSchool === 'all'
+      ? `KIBER: ${kiberFilledCount}/8 · RENDER: ${renderiaFilledCount}/8`
+      : activeSchool === 'kiberone'
+        ? `${kiberFilledCount}/8`
+        : `${renderiaFilledCount}/8`;
+
+  const triggerSavedFlash = (schoolId: 'kiberone' | 'renderia', key: KnowledgeCategoryKey) => {
     const compositeKey: CompositeCategoryKey = `${schoolId}:${key}`;
     const prevTimer = saveTimersRef.current[compositeKey];
     if (prevTimer) clearTimeout(prevTimer);
@@ -426,14 +517,14 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     }, 2600);
   };
 
-  const handleDraftChange = (schoolId: SchoolId, key: KnowledgeCategoryKey, value: string) => {
-    const compositeKey: CompositeCategoryKey = `${schoolId}:${key}`;
-    const confirmedVal = knowledgeBase[schoolId][key] ?? '';
+  const handleDraftChange = (targetSchool: 'kiberone' | 'renderia', key: KnowledgeCategoryKey, value: string) => {
+    const compositeKey: CompositeCategoryKey = `${targetSchool}:${key}`;
+    const confirmedVal = knowledgeBase[targetSchool]?.[key] ?? '';
 
     setDraftFieldsBySchool((prev) => ({
       ...prev,
-      [schoolId]: {
-        ...prev[schoolId],
+      [targetSchool]: {
+        ...prev[targetSchool],
         [key]: value,
       },
     }));
@@ -450,38 +541,38 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     }
   };
 
-  const handleConfirmCategoryField = async (schoolId: SchoolId, key: KnowledgeCategoryKey) => {
-    const compositeKey: CompositeCategoryKey = `${schoolId}:${key}`;
+  const handleConfirmCategoryField = async (targetSchool: 'kiberone' | 'renderia', key: KnowledgeCategoryKey) => {
+    const compositeKey: CompositeCategoryKey = `${targetSchool}:${key}`;
     const isDirty = Boolean(dirtyByKey[compositeKey]);
     const valueToCommit = isDirty
-      ? draftFieldsBySchool[schoolId][key] ?? ''
-      : knowledgeBase[schoolId][key] ?? '';
+      ? draftFieldsBySchool[targetSchool]?.[key] ?? ''
+      : knowledgeBase[targetSchool]?.[key] ?? '';
 
     setSavingByKey((prev) => ({ ...prev, [compositeKey]: true }));
     try {
-      const ok = await onUpdateCategory(schoolId, key, valueToCommit);
+      const ok = await onUpdateCategory(targetSchool, key, valueToCommit);
       if (ok) {
         setDirtyByKey((prev) => ({ ...prev, [compositeKey]: false }));
         setDraftFieldsBySchool((prev) => ({
           ...prev,
-          [schoolId]: {
-            ...prev[schoolId],
+          [targetSchool]: {
+            ...prev[targetSchool],
             [key]: valueToCommit,
           },
         }));
-        triggerSavedFlash(schoolId, key);
+        triggerSavedFlash(targetSchool, key);
       }
     } finally {
       setSavingByKey((prev) => ({ ...prev, [compositeKey]: false }));
     }
   };
 
-  const handleClearCategoryField = async (schoolId: SchoolId, key: KnowledgeCategoryKey) => {
-    const compositeKey: CompositeCategoryKey = `${schoolId}:${key}`;
+  const handleClearCategoryField = async (targetSchool: 'kiberone' | 'renderia', key: KnowledgeCategoryKey) => {
+    const compositeKey: CompositeCategoryKey = `${targetSchool}:${key}`;
     setDraftFieldsBySchool((prev) => ({
       ...prev,
-      [schoolId]: {
-        ...prev[schoolId],
+      [targetSchool]: {
+        ...prev[targetSchool],
         [key]: '',
       },
     }));
@@ -492,10 +583,10 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
     setSavingByKey((prev) => ({ ...prev, [compositeKey]: true }));
     try {
-      const ok = await onUpdateCategory(schoolId, key, '');
+      const ok = await onUpdateCategory(targetSchool, key, '');
       if (ok) {
         setDirtyByKey((prev) => ({ ...prev, [compositeKey]: false }));
-        triggerSavedFlash(schoolId, key);
+        triggerSavedFlash(targetSchool, key);
       }
     } finally {
       setSavingByKey((prev) => ({ ...prev, [compositeKey]: false }));
@@ -601,10 +692,10 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       description,
     } = stagedDoc;
 
-    const targetSchoolForCategory: SchoolId =
-      schoolId === 'all' ? activeSchool : schoolId;
+    const targetSchoolForCategory: 'kiberone' | 'renderia' =
+      schoolId === 'renderia' ? 'renderia' : 'kiberone';
     const existingText = (
-      knowledgeBase[targetSchoolForCategory][categoryKey] || ''
+      knowledgeBase[targetSchoolForCategory]?.[categoryKey] || ''
     ).trim();
     const cleanedDocText = editableText.trim();
 
@@ -1026,12 +1117,12 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       onDrop={handleKBDrop}
       className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6 relative min-h-screen"
     >
-      {/* Top Header & School Switcher */}
-      <div className="glass-panel rounded-2xl p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+      {/* Top Header & View Scope Switcher */}
+      <div className="glass-panel rounded-2xl p-5 sm:p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-5 border border-slate-200/90 shadow-2xs">
         <div className="space-y-1.5 max-w-2xl">
-          <div className="inline-flex items-center gap-2">
+          <div className="inline-flex items-center gap-2 flex-wrap">
             <span
-              className={`px-3.5 py-1 rounded-xl font-display font-extrabold text-sm tracking-wide transition-colors ${
+              className={`px-3 py-1 rounded-xl font-display font-extrabold text-xs sm:text-sm tracking-wide shadow-2xs ${
                 activeSchool === 'all'
                   ? 'bg-[#00A8B5] text-white'
                   : activeSchool === 'kiberone'
@@ -1039,118 +1130,159 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                     : 'bg-[#84CC16] text-slate-950'
               }`}
             >
-              {schoolConfig.name}
+              {activeSchool === 'all'
+                ? 'Область: Все материалы (Общие + KIBERONE + RENDERIA)'
+                : activeSchool === 'kiberone'
+                  ? 'Область: KIBERONE (+ общие материалы)'
+                  : 'Область: RENDERIA (+ общие материалы)'}
             </span>
             <span className="text-xs font-medium text-slate-500">
-              · Полноценное хранилище знаний, брендбуков и медиа
+              · Единая база знаний экосистемы
             </span>
           </div>
           <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-900">
-            База знаний и визуальная библиотека школ
+            База знаний и визуальная библиотека
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
             Хранение документов (PDF, DOCX, TXT), презентаций (PPTX), архивов (ZIP),
-            видео (MP4) и брендбуков. Изоляция <strong>KIBERONE</strong> и <strong>RENDERIA</strong>,
-            с поддержкой общих материалов <code>ALL</code> и передачей в ИИ.
+            видео (MP4) и брендбуков. Раздельный доступ к <strong>KIBERONE</strong> и <strong>RENDERIA</strong> с поддержкой общих материалов <code>ALL</code> для обеих школ.
           </p>
         </div>
 
-        {/* School Switcher & Backups */}
-        <div className="flex flex-wrap items-center gap-3 shrink-0">
-          <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
-            {(['all', 'kiberone', 'renderia'] as SchoolId[]).map((id) => {
-              const s = SCHOOLS[id];
-              const isSelected = activeSchool === id;
-              const activeColor =
-                id === 'all'
+        {/* View Scope Switcher & Actions Strip */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+          {/* Scope Switcher Tabs */}
+          <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200/90 shadow-inner">
+            {(
+              [
+                { id: 'all', label: 'Все материалы' },
+                { id: 'kiberone', label: 'KIBERONE' },
+                { id: 'renderia', label: 'RENDERIA' },
+              ] as const
+            ).map((item) => {
+              const isSelected = activeSchool === item.id;
+              const activeClass =
+                item.id === 'all'
                   ? 'bg-[#00A8B5] text-white shadow-xs'
-                  : id === 'kiberone'
+                  : item.id === 'kiberone'
                     ? 'bg-[#FFD700] text-slate-950 shadow-xs'
                     : 'bg-[#84CC16] text-slate-950 shadow-xs';
               return (
                 <button
-                  key={id}
+                  key={item.id}
                   type="button"
-                  onClick={() => onSelectSchool(id)}
-                  className={`px-3 sm:px-4 py-2 rounded-lg font-display font-extrabold text-xs sm:text-sm tracking-wide transition-colors whitespace-nowrap cursor-pointer ${
+                  onClick={() => onSelectSchool(item.id)}
+                  className={`px-3 sm:px-4 py-2 rounded-lg font-display font-extrabold text-xs sm:text-sm tracking-wide transition-all whitespace-nowrap cursor-pointer ${
                     isSelected
-                      ? activeColor
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                      ? activeClass
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
                   }`}
                 >
-                  {s.name}
+                  {item.label}
                 </button>
               );
             })}
           </div>
 
-          <button
-            type="button"
-            onClick={onTriggerExportBackup}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition-colors whitespace-nowrap shadow-2xs cursor-pointer"
-          >
-            <Download className="w-4 h-4 text-[#FFD700]" />
-            <span>Резервная копия</span>
-          </button>
+          {/* Backup & Folder Actions */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onTriggerExportBackup}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition-colors whitespace-nowrap shadow-2xs cursor-pointer"
+              title="Экспорт резервной копии базы знаний (.json)"
+            >
+              <Download className="w-3.5 h-3.5 text-[#FFD700]" />
+              <span>Резервная копия</span>
+            </button>
 
-          <input
-            ref={backupInputRef}
-            type="file"
-            accept=".json"
-            onChange={handleBackupFileChange}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={() => backupInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold glass-button text-slate-800 hover:bg-white transition-colors whitespace-nowrap cursor-pointer"
-          >
-            <Upload className="w-4 h-4 text-[#165B73]" />
-            <span>Импорт (.json)</span>
-          </button>
+            <input
+              ref={backupInputRef}
+              type="file"
+              accept=".json"
+              onChange={handleBackupFileChange}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => backupInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors whitespace-nowrap cursor-pointer"
+              title="Импорт базы знаний из .json файла"
+            >
+              <Upload className="w-3.5 h-3.5 text-[#165B73]" />
+              <span>Импорт (.json)</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() =>
-              openLocalFolder({
-                school: activeSchool,
-                category: activeSubTab === 'brandbooks' ? 'Brandbook' : 'Knowledge_Base',
-              })
-            }
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#00A8B5] text-white hover:bg-[#00929E] transition-colors whitespace-nowrap shadow-2xs cursor-pointer"
-            title="Открыть папку с локальными файлами в Проводнике Windows (NotebookLM style)"
-          >
-            <FolderOpen className="w-4 h-4 text-white" />
-            <span>Открыть папку Базы знаний</span>
-          </button>
+            <button
+              type="button"
+              onClick={() =>
+                openLocalFolder({
+                  school: activeSchool,
+                  category: activeSubTab === 'brandbooks' ? 'Brandbook' : 'Knowledge_Base',
+                })
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#00A8B5] text-white hover:bg-[#00929E] transition-colors whitespace-nowrap shadow-2xs cursor-pointer"
+              title="Открыть локальную папку в Проводнике Windows"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-white" />
+              <span>Папка базы знаний</span>
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Local Files Path Banner */}
-      <div className="glass-panel rounded-xl px-4 py-2.5 border border-slate-200/90 bg-slate-50/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-700">
-        <div className="flex items-center gap-2">
+      <div className="glass-panel rounded-xl px-4 py-2.5 border border-slate-200/90 bg-slate-50/90 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-700">
+        <div className="flex items-center gap-2 flex-wrap">
           <FolderOpen className="w-4 h-4 text-[#00A8B5] shrink-0" />
           <span>
             Локальная папка файлов:{' '}
             <code className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
-              Документы/BusinessAssistant/{activeSchool.toUpperCase()}/
-              {activeSubTab === 'brandbooks' ? 'Brandbook' : 'Knowledge_Base'}
+              {activeSchool === 'all'
+                ? 'Документы/BusinessAssistant/ (Общие материалы / KIBERONE / RENDERIA)'
+                : `Документы/BusinessAssistant/${activeSchool.toUpperCase()}/${
+                    activeSubTab === 'brandbooks' ? 'Brandbook' : 'Knowledge_Base'
+                  }`}
             </code>
           </span>
         </div>
-        <button
-          type="button"
-          onClick={() =>
-            openLocalFolder({
-              school: activeSchool,
-              category: activeSubTab === 'brandbooks' ? 'Brandbook' : 'Knowledge_Base',
-            })
-          }
-          className="inline-flex items-center gap-1 text-[#00A8B5] font-bold hover:underline cursor-pointer"
-        >
-          <span>Открыть в Проводнике</span>
-          <ExternalLink className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-2">
+          {activeSchool === 'all' ? (
+            <>
+              <button
+                type="button"
+                onClick={() => openLocalFolder({ school: 'kiberone', category: 'Knowledge_Base' })}
+                className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-950 font-bold cursor-pointer text-[11px]"
+              >
+                <span>KIBERONE</span>
+                <ExternalLink className="w-3 h-3 text-[#FFD700]" />
+              </button>
+              <span className="text-slate-300">|</span>
+              <button
+                type="button"
+                onClick={() => openLocalFolder({ school: 'renderia', category: 'Knowledge_Base' })}
+                className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-950 font-bold cursor-pointer text-[11px]"
+              >
+                <span>RENDERIA</span>
+                <ExternalLink className="w-3 h-3 text-[#84CC16]" />
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() =>
+                openLocalFolder({
+                  school: activeSchool,
+                  category: activeSubTab === 'brandbooks' ? 'Brandbook' : 'Knowledge_Base',
+                })
+              }
+              className="inline-flex items-center gap-1 text-[#00A8B5] font-bold hover:underline cursor-pointer"
+            >
+              <span>Открыть в Проводнике</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {statusBanner && (
@@ -1179,9 +1311,9 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             }`}
           >
             <Layers className="w-4 h-4 text-[#FFD700]" />
-            <span>Разделы школы (8 тем)</span>
-            <span className="px-1.5 py-0.2 rounded-md bg-white/20 text-[11px] font-mono-tabular">
-              {filledCount}/8
+            <span>Разделы базы знаний</span>
+            <span className="px-2 py-0.5 rounded-md bg-white/20 text-[11px] font-mono-tabular">
+              {totalCategoriesBadgeText}
             </span>
           </button>
 
@@ -1196,7 +1328,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           >
             <ImageIcon className="w-4 h-4 text-[#00A8B5]" />
             <span>Визуальная библиотека</span>
-            <span className="px-1.5 py-0.2 rounded-md bg-white/20 text-[11px] font-mono-tabular">
+            <span className="px-2 py-0.5 rounded-md bg-white/20 text-[11px] font-mono-tabular">
               {visualLibraryItems.length}
             </span>
           </button>
@@ -1212,7 +1344,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           >
             <Palette className="w-4 h-4 text-[#84CC16]" />
             <span>Брендбуки и стиль</span>
-            <span className="px-1.5 py-0.2 rounded-md bg-white/20 text-[11px] font-mono-tabular">
+            <span className="px-2 py-0.5 rounded-md bg-white/20 text-[11px] font-mono-tabular">
               {brandbookData.brandDocs.length}
             </span>
           </button>
@@ -1228,7 +1360,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           >
             <FolderOpen className="w-4 h-4 text-[#165B73]" />
             <span>Все документы и медиа</span>
-            <span className="px-1.5 py-0.2 rounded-md bg-white/20 text-[11px] font-mono-tabular">
+            <span className="px-2 py-0.5 rounded-md bg-white/20 text-[11px] font-mono-tabular">
               {eligibleSchoolDocs.length}
             </span>
           </button>
@@ -1282,186 +1414,382 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       </div>
 
       {/* ====================================================================
-          TAB 1: ТЕКСТОВЫЕ РАЗДЕЛЫ ШКОЛЫ (8 КАТЕГОРИЙ)
+          TAB 1: ТЕКСТОВЫЕ РАЗДЕЛЫ БАЗЫ ЗНАНИЙ
          ==================================================================== */}
       {activeSubTab === 'categories' && (
         <div className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 bg-white p-4 rounded-xl border border-slate-200/80">
-            <div className="flex items-center gap-3 flex-wrap">
-              <div>
-                Школа: <strong>{schoolConfig.name}</strong> · Заполнено{' '}
-                <span className="font-bold font-mono-tabular text-slate-900">
-                  {filledCount}
-                </span>{' '}
-                из {KNOWLEDGE_CATEGORIES.length} разделов
-              </div>
-              {activeSchool === 'all' && (
-                <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
-                  <span className="text-[11px] font-semibold text-slate-500 px-1.5">
-                    Редактировать:
+          {/* GENERAL BUSINESS INFORMATION SECTION (ALL) */}
+          <div className="rounded-2xl p-5 sm:p-6 bg-gradient-to-br from-white via-sky-50/40 to-teal-50/30 border-2 border-[#00A8B5]/50 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-3 py-0.5 rounded-full bg-[#00A8B5] text-white text-[11px] font-black uppercase tracking-wider shadow-2xs">
+                    Общие материалы экосистемы (ALL)
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => setSubKBSchool('kiberone')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                      targetEditingSchool === 'kiberone'
-                        ? 'bg-[#FFD700] text-slate-950 shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-                    }`}
-                  >
-                    KIBERONE
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSubKBSchool('renderia')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                      targetEditingSchool === 'renderia'
-                        ? 'bg-[#84CC16] text-slate-950 shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-                    }`}
-                  >
-                    RENDERIA
-                  </button>
+                  <span className="text-xs font-bold text-slate-600">
+                    Доступно обеим школам: KIBERONE и RENDERIA
+                  </span>
                 </div>
-              )}
+                <h3 className="font-display font-bold text-base sm:text-lg text-slate-900">
+                  Общие сведения о бизнесе, управление Анны и правила экосистемы
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed max-w-3xl">
+                  Связь KIBERONE и RENDERIA, общая информация об управлении Анны, стратегия развития, совместное использование помещения, принципы кросс-маркетинга, правила перенаправления клиентов и общие регламенты. Хранится один раз и автоматически передаётся в контекст ИИ для обеих школ.
+                </p>
+              </div>
+              <span className="text-xs text-slate-500 font-mono-tabular shrink-0">
+                {isGeneralBusinessDirty
+                  ? `Черновик (${generalBusinessDraft.length} симв.)`
+                  : generalBusinessDraft.trim().length > 0
+                    ? `${generalBusinessDraft.length} симв.`
+                    : 'Пусто'}
+              </span>
             </div>
-            <div className="text-slate-500">
-              Базы знаний хранятся раздельно для каждой школы, обеспечивая чистоту данных.
+
+            <div className="rounded-xl bg-amber-50/90 border border-amber-200/90 px-3.5 py-2 text-[11px] text-amber-900 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>Внимание:</strong> Не вносите сюда расписания, прайс-листы и учебные модули конкретной школы — для них используются собственные разделы KIBERONE и RENDERIA ниже.
+              </span>
             </div>
-          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {KNOWLEDGE_CATEGORIES.map((category) => {
-              const compositeKey: CompositeCategoryKey = `${targetEditingSchool}:${category.key}`;
-              const confirmedValue = confirmedSchoolData[category.key] ?? '';
-              const isDirty = Boolean(dirtyByKey[compositeKey]);
-              const displayedValue = isDirty
-                ? draftFieldsBySchool[targetEditingSchool][category.key] ?? ''
-                : confirmedValue;
+            <textarea
+              rows={7}
+              value={generalBusinessDraft}
+              onChange={(e) => handleGeneralBusinessChange(e.target.value)}
+              placeholder="Опишите структуру управления Анны, стратегию взаимодействия KIBERONE и RENDERIA, совместное помещение, кросс-маркетинг и правила перенаправления..."
+              className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] leading-relaxed resize-y shadow-2xs font-sans"
+            />
 
-              const hasUnsavedChanges = isDirty && displayedValue !== confirmedValue;
-              const isConfirmedFilled = confirmedValue.trim().length > 0;
-              const isDraftOrConfirmedFilled = displayedValue.trim().length > 0 || isConfirmedFilled;
-              const isRecentlySaved = Boolean(savedIndicatorByKey[compositeKey]);
-              const isSaving = Boolean(savingByKey[compositeKey]);
-              const categoryDocsCount = eligibleSchoolDocs.filter(
-                (d) => d.categoryKey === category.key
-              ).length;
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-slate-200/80">
+              <div className="text-[11px] text-slate-500">
+                {isGeneralBusinessSaving ? (
+                  <span className="inline-flex items-center gap-1.5 text-[#00A8B5] font-semibold">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Сохранение общих сведений в IndexedDB...
+                  </span>
+                ) : generalBusinessSavedFlash ? (
+                  <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
+                    <Check className="w-3.5 h-3.5" />
+                    Общие сведения успешно сохранены и применены для обеих школ
+                  </span>
+                ) : isGeneralBusinessDirty ? (
+                  <span className="inline-flex items-center gap-1 text-amber-700 font-medium">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Есть несохранённые изменения в общих сведениях
+                  </span>
+                ) : generalBusinessDraft.trim().length > 0 ? (
+                  <span className="text-slate-500">
+                    Общие правила синхронизированы и доступны в ИИ-диалогах
+                  </span>
+                ) : (
+                  <span className="text-slate-400">Сведения пока не заполнены</span>
+                )}
+              </div>
 
-              return (
-                <div
-                  key={compositeKey}
-                  className={`glass-panel rounded-2xl p-5 flex flex-col justify-between gap-3 border ${
-                    targetEditingSchool === 'renderia' && isConfirmedFilled
-                      ? 'border-[#84CC16]/60'
-                      : 'border-slate-200/80'
-                  }`}
+              <div className="flex items-center gap-2">
+                {generalBusinessDraft.trim().length > 0 && (
+                  <button
+                    type="button"
+                    disabled={isGeneralBusinessSaving}
+                    onClick={handleClearGeneralBusiness}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-500 hover:text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
+                  >
+                    Очистить
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={isGeneralBusinessSaving || !isGeneralBusinessDirty}
+                  onClick={handleSaveGeneralBusiness}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-[#00A8B5] text-white hover:bg-[#00929E] disabled:opacity-40 transition-colors shadow-xs cursor-pointer"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-display font-bold text-base text-slate-900">
-                          {category.title}
-                        </h3>
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            activeSchool === 'kiberone'
-                              ? 'bg-[#F5B800]/30 text-slate-900'
-                              : 'bg-[#84CC16]/35 text-[#365314]'
-                          }`}
-                        >
-                          {schoolConfig.name}
-                        </span>
-                        {categoryDocsCount > 0 && (
-                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-mono-tabular font-semibold">
-                            Документов: {categoryDocsCount}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        {category.subtitle}
-                      </p>
-                    </div>
-                    <span className="text-xs text-slate-500 font-mono-tabular shrink-0">
-                      {hasUnsavedChanges
-                        ? `Черновик (${displayedValue.length} симв.)`
-                        : isConfirmedFilled
-                          ? `${confirmedValue.length} симв.`
-                          : 'Пусто'}
-                    </span>
-                  </div>
-
-                  <textarea
-                    rows={5}
-                    value={displayedValue}
-                    onChange={(e) =>
-                      handleDraftChange(targetEditingSchool, category.key, e.target.value)
-                    }
-                    placeholder={category.placeholder}
-                    className="w-full rounded-xl border border-slate-200/90 bg-white/90 px-3.5 py-2.5 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] leading-relaxed resize-y"
-                  />
-
-                  <div className="flex items-center justify-between gap-2 pt-1">
-                    <div className="text-[11px] text-slate-500">
-                      {isSaving ? (
-                        <span className="text-slate-700 font-medium">
-                          Запись в IndexedDB ({schoolConfig.name})...
-                        </span>
-                      ) : hasUnsavedChanges ? (
-                        <span className="text-amber-700 font-medium">
-                          Черновик ({schoolConfig.name}) изменён — нажмите «Сохранить»
-                        </span>
-                      ) : isRecentlySaved ? (
-                        <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
-                          <Check className="w-3.5 h-3.5" />
-                          Сохранено в IndexedDB для {schoolConfig.name}
-                        </span>
-                      ) : isConfirmedFilled ? (
-                        <span className="font-medium text-slate-700">
-                          Сохранено в IndexedDB для {schoolConfig.name}
-                        </span>
-                      ) : (
-                        <span>
-                          Нет данных ({schoolConfig.name}) — ИИ задаст уточняющий вопрос
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      {isDraftOrConfirmedFilled && (
-                        <button
-                          type="button"
-                          disabled={isSaving}
-                          onClick={() =>
-                            handleClearCategoryField(targetEditingSchool, category.key)
-                          }
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs text-slate-500 hover:text-red-700 hover:bg-red-50 disabled:opacity-40 transition-colors cursor-pointer"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>Очистить</span>
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleConfirmCategoryField(targetEditingSchool, category.key)
-                        }
-                        disabled={!hasUnsavedChanges || isSaving}
-                        className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                          hasUnsavedChanges && !isSaving
-                            ? 'bg-slate-900 text-white hover:bg-slate-800'
-                            : 'bg-slate-100 text-slate-400 cursor-default'
-                        }`}
-                      >
-                        <Save className="w-3 h-3 text-white" />
-                        <span>{isSaving ? 'Сохранение...' : 'Сохранить'}</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Сохранить для обеих школ</span>
+                </button>
+              </div>
+            </div>
           </div>
+
+          {/* SCHOOL SECTIONS: KIBERONE AND/OR RENDERIA */}
+          {(activeSchool === 'all' || activeSchool === 'kiberone') && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200/90 shadow-2xs">
+                <div className="flex items-center gap-2.5">
+                  <span className="px-2.5 py-1 rounded-xl text-xs font-black uppercase tracking-wider bg-[#FFD700] text-slate-950 border border-[#EAB308]">
+                    KIBERONE
+                  </span>
+                  <h3 className="font-display font-bold text-sm sm:text-base text-slate-900">
+                    Собственная база знаний KIBERONE (8 разделов)
+                  </h3>
+                  <span className="text-xs text-slate-500 font-mono-tabular">
+                    (Заполнено: {kiberFilledCount} из 8)
+                  </span>
+                </div>
+                <span className="text-xs text-slate-500">
+                  Учебные модули, прайс, расписание и регламенты только KIBERONE
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {KNOWLEDGE_CATEGORIES.map((category) => {
+                  const compositeKey: CompositeCategoryKey = `kiberone:${category.key}`;
+                  const confirmedValue = knowledgeBase.kiberone[category.key] ?? '';
+                  const isDirty = Boolean(dirtyByKey[compositeKey]);
+                  const displayedValue = isDirty
+                    ? draftFieldsBySchool.kiberone[category.key] ?? ''
+                    : confirmedValue;
+
+                  const hasUnsavedChanges = isDirty && displayedValue !== confirmedValue;
+                  const isConfirmedFilled = confirmedValue.trim().length > 0;
+                  const isRecentlySaved = Boolean(savedIndicatorByKey[compositeKey]);
+                  const isSaving = Boolean(savingByKey[compositeKey]);
+                  const categoryDocsCount = uploadedDocuments.filter(
+                    (d) => d.schoolId === 'kiberone' && d.categoryKey === category.key
+                  ).length;
+
+                  return (
+                    <div
+                      key={compositeKey}
+                      className={`rounded-2xl p-5 flex flex-col justify-between gap-3 bg-white border transition-all shadow-2xs ${
+                        hasUnsavedChanges
+                          ? 'border-amber-300 ring-1 ring-amber-200'
+                          : isConfirmedFilled
+                            ? 'border-[#FFD700]/70'
+                            : 'border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-display font-bold text-sm sm:text-base text-slate-900 truncate">
+                              {category.title}
+                            </h4>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-[#FFD700] text-slate-950">
+                              KIBERONE
+                            </span>
+                            {categoryDocsCount > 0 && (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-mono-tabular font-semibold">
+                                Файлов: {categoryDocsCount}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5 leading-snug">
+                            {category.subtitle}
+                          </p>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-mono-tabular shrink-0">
+                          {hasUnsavedChanges
+                            ? `Черновик (${displayedValue.length} симв.)`
+                            : isConfirmedFilled
+                              ? `${confirmedValue.length} симв.`
+                              : 'Пусто'}
+                        </span>
+                      </div>
+
+                      <textarea
+                        rows={5}
+                        value={displayedValue}
+                        onChange={(e) =>
+                          handleDraftChange('kiberone', category.key, e.target.value)
+                        }
+                        placeholder={category.placeholder}
+                        className="w-full rounded-xl border border-slate-200/90 bg-white/95 px-3.5 py-2.5 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] leading-relaxed resize-y"
+                      />
+
+                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                        <div className="text-[11px] text-slate-500">
+                          {isSaving ? (
+                            <span className="inline-flex items-center gap-1.5 text-[#00A8B5] font-semibold">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Запись в IndexedDB...
+                            </span>
+                          ) : isRecentlySaved ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
+                              <Check className="w-3.5 h-3.5" />
+                              Сохранено для KIBERONE
+                            </span>
+                          ) : hasUnsavedChanges ? (
+                            <span className="inline-flex items-center gap-1 text-amber-700 font-medium">
+                              <AlertTriangle className="w-3.5 h-3.5" />
+                              Несохранённые изменения
+                            </span>
+                          ) : isConfirmedFilled ? (
+                            <span className="text-slate-400">Синхронизировано</span>
+                          ) : (
+                            <span className="text-slate-400">Раздел пока не заполнен</span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {displayedValue.trim().length > 0 && (
+                            <button
+                              type="button"
+                              disabled={isSaving}
+                              onClick={() => handleClearCategoryField('kiberone', category.key)}
+                              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-500 hover:text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
+                            >
+                              Очистить
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            disabled={isSaving || !hasUnsavedChanges}
+                            onClick={() => handleConfirmCategoryField('kiberone', category.key)}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 transition-colors shadow-2xs cursor-pointer"
+                          >
+                            <Save className="w-3.5 h-3.5 text-[#FFD700]" />
+                            <span>Сохранить</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {(activeSchool === 'all' || activeSchool === 'renderia') && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200/90 shadow-2xs">
+                <div className="flex items-center gap-2.5">
+                  <span className="px-2.5 py-1 rounded-xl text-xs font-black uppercase tracking-wider bg-[#84CC16] text-slate-950 border border-[#65A30D]">
+                    RENDERIA
+                  </span>
+                  <h3 className="font-display font-bold text-sm sm:text-base text-slate-900">
+                    Собственная база знаний RENDERIA (8 разделов)
+                  </h3>
+                  <span className="text-xs text-slate-500 font-mono-tabular">
+                    (Заполнено: {renderiaFilledCount} из 8)
+                  </span>
+                </div>
+                <span className="text-xs text-slate-500">
+                  Учебные модули, прайс, расписание и регламенты только RENDERIA
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {KNOWLEDGE_CATEGORIES.map((category) => {
+                  const compositeKey: CompositeCategoryKey = `renderia:${category.key}`;
+                  const confirmedValue = knowledgeBase.renderia[category.key] ?? '';
+                  const isDirty = Boolean(dirtyByKey[compositeKey]);
+                  const displayedValue = isDirty
+                    ? draftFieldsBySchool.renderia[category.key] ?? ''
+                    : confirmedValue;
+
+                  const hasUnsavedChanges = isDirty && displayedValue !== confirmedValue;
+                  const isConfirmedFilled = confirmedValue.trim().length > 0;
+                  const isRecentlySaved = Boolean(savedIndicatorByKey[compositeKey]);
+                  const isSaving = Boolean(savingByKey[compositeKey]);
+                  const categoryDocsCount = uploadedDocuments.filter(
+                    (d) => d.schoolId === 'renderia' && d.categoryKey === category.key
+                  ).length;
+
+                  return (
+                    <div
+                      key={compositeKey}
+                      className={`rounded-2xl p-5 flex flex-col justify-between gap-3 bg-white border transition-all shadow-2xs ${
+                        hasUnsavedChanges
+                          ? 'border-amber-300 ring-1 ring-amber-200'
+                          : isConfirmedFilled
+                            ? 'border-[#84CC16]/70'
+                            : 'border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-display font-bold text-sm sm:text-base text-slate-900 truncate">
+                              {category.title}
+                            </h4>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-[#84CC16] text-slate-950">
+                              RENDERIA
+                            </span>
+                            {categoryDocsCount > 0 && (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-mono-tabular font-semibold">
+                                Файлов: {categoryDocsCount}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5 leading-snug">
+                            {category.subtitle}
+                          </p>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-mono-tabular shrink-0">
+                          {hasUnsavedChanges
+                            ? `Черновик (${displayedValue.length} симв.)`
+                            : isConfirmedFilled
+                              ? `${confirmedValue.length} симв.`
+                              : 'Пусто'}
+                        </span>
+                      </div>
+
+                      <textarea
+                        rows={5}
+                        value={displayedValue}
+                        onChange={(e) =>
+                          handleDraftChange('renderia', category.key, e.target.value)
+                        }
+                        placeholder={category.placeholder}
+                        className="w-full rounded-xl border border-slate-200/90 bg-white/95 px-3.5 py-2.5 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00A8B5] leading-relaxed resize-y"
+                      />
+
+                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                        <div className="text-[11px] text-slate-500">
+                          {isSaving ? (
+                            <span className="inline-flex items-center gap-1.5 text-[#00A8B5] font-semibold">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Запись в IndexedDB...
+                            </span>
+                          ) : isRecentlySaved ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
+                              <Check className="w-3.5 h-3.5" />
+                              Сохранено для RENDERIA
+                            </span>
+                          ) : hasUnsavedChanges ? (
+                            <span className="inline-flex items-center gap-1 text-amber-700 font-medium">
+                              <AlertTriangle className="w-3.5 h-3.5" />
+                              Несохранённые изменения
+                            </span>
+                          ) : isConfirmedFilled ? (
+                            <span className="text-slate-400">Синхронизировано</span>
+                          ) : (
+                            <span className="text-slate-400">Раздел пока не заполнен</span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {displayedValue.trim().length > 0 && (
+                            <button
+                              type="button"
+                              disabled={isSaving}
+                              onClick={() => handleClearCategoryField('renderia', category.key)}
+                              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-500 hover:text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
+                            >
+                              Очистить
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            disabled={isSaving || !hasUnsavedChanges}
+                            onClick={() => handleConfirmCategoryField('renderia', category.key)}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 transition-colors shadow-2xs cursor-pointer"
+                          >
+                            <Save className="w-3.5 h-3.5 text-[#84CC16]" />
+                            <span>Сохранить</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1522,15 +1850,39 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             </div>
 
             {/* School Scope Filter & Add Button */}
-            <div className="flex items-center gap-2">
-              <select
-                value={schoolScopeFilter}
-                onChange={(e) => setSchoolScopeFilter(e.target.value as any)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
-              >
-                <option value="current">Только {schoolConfig.name} + ALL</option>
-                <option value="all_schools">Обе школы (KIBERone & Renderia)</option>
-              </select>
+            <div className="flex items-center gap-2 flex-wrap">
+              {activeSchool === 'all' ? (
+                <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-xl border border-slate-200">
+                  {(
+                    [
+                      { id: 'all', label: 'Все области' },
+                      { id: 'common', label: 'Общие (ALL)' },
+                      { id: 'kiberone', label: 'KIBERONE' },
+                      { id: 'renderia', label: 'RENDERIA' },
+                    ] as const
+                  ).map((f) => {
+                    const isSelected = visualScopeFilter === f.id;
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setVisualScopeFilter(f.id)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-white text-slate-900 shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200/80">
+                  Область: {activeSchool === 'kiberone' ? 'KIBERONE + Общие (ALL)' : 'RENDERIA + Общие (ALL)'}
+                </span>
+              )}
 
               <input
                 ref={imageInputRef}
@@ -1637,8 +1989,10 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                           }`}
                         >
                           {doc.schoolId === 'all'
-                            ? 'Обе школы'
-                            : SCHOOLS[doc.schoolId]?.name || doc.schoolId}
+                            ? 'Общий (ALL)'
+                            : doc.schoolId === 'renderia'
+                              ? 'RENDERIA'
+                              : 'KIBERONE'}
                         </span>
 
                         <span
@@ -1734,7 +2088,14 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               <div>
                 <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
                   <Palette className="w-4 h-4 text-[#00A8B5]" />
-                  <span>Фирменные цвета и палитра: {schoolConfig.name}</span>
+                  <span>
+                    Фирменные цвета и палитра:{' '}
+                    {activeSchool === 'all'
+                      ? 'Экосистема (KIBERONE + RENDERIA)'
+                      : activeSchool === 'kiberone'
+                        ? 'KIBERONE'
+                        : 'RENDERIA'}
+                  </span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Нажмите на образец цвета для копирования HEX. Наведите для удаления цвета из палитры.
@@ -1834,7 +2195,15 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             {brandbookData.brandDocs.length === 0 ? (
               <div className="p-6 rounded-xl bg-slate-50/70 border border-dashed border-slate-200 text-center text-xs text-slate-500 space-y-2">
                 <p>
-                  Для школы <strong>{schoolConfig.name}</strong> пока не отмечены отдельные брендбук-материалы.
+                  Для выбранной области{' '}
+                  <strong>
+                    {activeSchool === 'all'
+                      ? '«Все материалы»'
+                      : activeSchool === 'kiberone'
+                        ? '«KIBERONE»'
+                        : '«RENDERIA»'}
+                  </strong>{' '}
+                  пока не загружены отдельные брендбук-материалы.
                 </p>
                 <p className="text-[11px] text-slate-400">
                   Вы можете загрузить PDF-гайдлайн, презентацию PPTX или логотип и назначить роль «Брендбук» или «Логотип».
@@ -1866,9 +2235,22 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                             {doc.name}
                           </span>
                         </div>
-                        <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 text-[10px] font-bold uppercase shrink-0">
-                          {doc.visualRole || 'Бренд'}
-                        </span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-black uppercase ${
+                              doc.schoolId === 'all'
+                                ? 'bg-[#00A8B5] text-white'
+                                : doc.schoolId === 'renderia'
+                                  ? 'bg-[#84CC16] text-slate-950'
+                                  : 'bg-[#FFD700] text-slate-950'
+                            }`}
+                          >
+                            {doc.schoolId === 'all' ? 'ALL' : doc.schoolId.toUpperCase()}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 text-[10px] font-bold uppercase">
+                            {doc.visualRole || 'Бренд'}
+                          </span>
+                        </div>
                       </div>
 
                       {doc.description && (
@@ -1965,14 +2347,41 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               </div>
             </div>
 
-            <select
-              value={schoolScopeFilter}
-              onChange={(e) => setSchoolScopeFilter(e.target.value as any)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00A8B5]"
-            >
-              <option value="current">Только {schoolConfig.name} + ALL</option>
-              <option value="all_schools">Обе школы (KIBERone & Renderia)</option>
-            </select>
+            {/* Scope Filter for All Files */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {activeSchool === 'all' ? (
+                <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-xl border border-slate-200">
+                  {(
+                    [
+                      { id: 'all', label: 'Все области' },
+                      { id: 'common', label: 'Общие (ALL)' },
+                      { id: 'kiberone', label: 'KIBERONE' },
+                      { id: 'renderia', label: 'RENDERIA' },
+                    ] as const
+                  ).map((f) => {
+                    const isSelected = filesScopeFilter === f.id;
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setFilesScopeFilter(f.id)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-white text-slate-900 shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200/80">
+                  Область: {activeSchool === 'kiberone' ? 'KIBERONE + Общие (ALL)' : 'RENDERIA + Общие (ALL)'}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Files Grid / List */}
@@ -2033,7 +2442,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                           </div>
                         </div>
 
-                        {/* School Badge */}
+                        {/* School Scope Badge */}
                         <span
                           className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase shrink-0 ${
                             doc.schoolId === 'all'
@@ -2043,7 +2452,11 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                                 : 'bg-[#FFD700] text-slate-950'
                           }`}
                         >
-                          {doc.schoolId === 'all' ? 'ALL' : SCHOOLS[doc.schoolId]?.name}
+                          {doc.schoolId === 'all'
+                            ? 'Общий (ALL)'
+                            : doc.schoolId === 'renderia'
+                              ? 'RENDERIA'
+                              : 'KIBERONE'}
                         </span>
                       </div>
 
@@ -2204,7 +2617,12 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                           : 'bg-[#84CC16] text-slate-950'
                     }`}
                   >
-                    Школа: {stagedDoc.schoolId === 'all' ? 'Обе школы (ALL)' : SCHOOLS[stagedDoc.schoolId]?.name}
+                    Область применения:{' '}
+                    {stagedDoc.schoolId === 'all'
+                      ? 'Обеим школам (Общие материалы — ALL)'
+                      : stagedDoc.schoolId === 'kiberone'
+                        ? 'Только KIBERONE'
+                        : 'Только RENDERIA'}
                   </span>
                   {renderStatusBadge(stagedDoc.parsed.status)}
                 </div>
@@ -2246,8 +2664,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-0.5">
-                  Школа (изоляция)
+                <label className="text-slate-600 font-bold block mb-0.5">
+                  Область применения:
                 </label>
                 <select
                   value={stagedDoc.schoolId}
@@ -2260,9 +2678,9 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                   }
                   className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900"
                 >
+                  <option value="all">Обеим школам (Общие материалы — ALL)</option>
                   <option value="kiberone">Только KIBERONE</option>
                   <option value="renderia">Только RENDERIA</option>
-                  <option value="all">Обе школы (Общие материалы - ALL)</option>
                 </select>
               </div>
 
@@ -2817,8 +3235,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             {/* Target Settings */}
             <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
               <div>
-                <label className="text-slate-500 font-semibold block mb-1">
-                  Целевая школа
+                <label className="text-slate-600 font-bold block mb-1">
+                  Область применения материалов:
                 </label>
                 <select
                   value={zipExplorerState.targetSchool}
@@ -2831,9 +3249,9 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                   }
                   className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-900"
                 >
+                  <option value="all">Обеим школам (Общие материалы — ALL)</option>
                   <option value="kiberone">Только KIBERONE</option>
                   <option value="renderia">Только RENDERIA</option>
-                  <option value="all">Обе школы (ALL)</option>
                 </select>
               </div>
 
@@ -3164,7 +3582,14 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             <div className="flex items-center justify-between">
               <h4 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
                 <Palette className="w-4 h-4 text-[#00A8B5]" />
-                <span>Новый цвет: {schoolConfig.name}</span>
+                <span>
+                  Новый цвет:{' '}
+                  {activeSchool === 'all'
+                    ? 'Экосистема'
+                    : activeSchool === 'kiberone'
+                      ? 'KIBERONE'
+                      : 'RENDERIA'}
+                </span>
               </h4>
               <button
                 type="button"
@@ -3249,8 +3674,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 Загрузить в Базу знаний
               </h3>
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Перетащите файлы сюда (PDF, DOCX, PPTX, изображения, видео или ZIP-архивы) для школы{' '}
-                <strong>{schoolConfig.name}</strong>
+                Перетащите файлы сюда (PDF, DOCX, PPTX, изображения, видео или ZIP-архивы)
               </p>
             </div>
             <div className="text-[11px] font-semibold text-[#00A8B5] bg-[#00A8B5]/10 px-3 py-1.5 rounded-xl">

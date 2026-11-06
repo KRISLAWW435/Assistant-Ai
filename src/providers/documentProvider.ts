@@ -106,8 +106,19 @@ export const documentProvider: IDocumentProvider = {
   prepareKnowledgeContextForSchool(schoolId, knowledgeBase, enabled) {
     if (!enabled) return [];
 
+    const genBizText = (knowledgeBase.generalBusinessInfo || '').trim();
+    const genBizItem: PreparedKnowledgeContextItem | null = genBizText.length > 0
+      ? {
+          categoryKey: 'general_business_info',
+          categoryTitle: 'ОБЩИЕ СВЕДЕНИЯ И ПРАВИЛА БИЗНЕСА ЭКОСИСТЕМЫ (ALL)',
+          content: genBizText,
+        }
+      : null;
+
     if (schoolId === 'all') {
       const items: PreparedKnowledgeContextItem[] = [];
+      if (genBizItem) items.push(genBizItem);
+
       const kFields = knowledgeBase.kiberone;
       const rFields = knowledgeBase.renderia;
 
@@ -136,6 +147,8 @@ export const documentProvider: IDocumentProvider = {
     if (schoolId === 'kiberone') {
       const kFields = knowledgeBase.kiberone;
       const items: PreparedKnowledgeContextItem[] = [];
+      if (genBizItem) items.push(genBizItem);
+
       if (kFields) {
         for (const cat of KNOWLEDGE_CATEGORIES) {
           const content = (kFields[cat.key] || '').trim();
@@ -170,6 +183,8 @@ export const documentProvider: IDocumentProvider = {
     if (schoolId === 'renderia') {
       const rFields = knowledgeBase.renderia;
       const items: PreparedKnowledgeContextItem[] = [];
+      if (genBizItem) items.push(genBizItem);
+
       if (rFields) {
         for (const cat of KNOWLEDGE_CATEGORIES) {
           const content = (rFields[cat.key] || '').trim();
