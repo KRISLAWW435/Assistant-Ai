@@ -2,7 +2,7 @@
  * Standalone Screen for Live Real-Time Voice Conversation with Pixel.
  * Features:
  * - Large expressive organic animated audio sphere with distinct states (Listening, Thinking, Speaking, Interrupted)
- * - True bidirectional spoken conversation (Gemini Live API gemini-3.8-live / 16kHz PCM in / 24kHz PCM out)
+ * - True bidirectional spoken conversation (Gemini Live API gemini-2.5-flash-live / 16kHz PCM in / 24kHz PCM out)
  * - Instant user barge-in (interruption halts model playback immediately)
  * - Live synchronized speech transcripts (user and Pixel)
  * - Mute, Pause/Resume, and Finish Conversation controls

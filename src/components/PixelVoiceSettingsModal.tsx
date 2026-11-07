@@ -148,7 +148,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
           voice: settings.selectedGeminiVoice || 'Aoede',
           style: GEMINI_TTS_STANDARD_STYLE,
           timbreId: 'bright',
-          model: 'gemini-3.8-flash-lite-tts',
+          model: 'gemini-2.5-flash-tts',
           forceRefresh: true,
         }),
       });
@@ -205,7 +205,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
         provider: 'gemini',
         voice: data.voice || settings.selectedGeminiVoice || 'Aoede',
         fromCache: Boolean(data.fromCache),
-        model: data.model || 'gemini-3.8-flash-lite-tts',
+        model: data.model || 'gemini-2.5-flash-tts',
       });
 
       const audioUrl = `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`;

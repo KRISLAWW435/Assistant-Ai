@@ -46,14 +46,15 @@ export const PIXEL_DELEGATION_STATUS_LABELS: Record<
 > = {
   draft: 'Черновик',
   pending_confirmation: 'Ждёт подтверждения',
-  sent: 'Отправлено',
+  sent: 'Ожидает ответа',
+  waiting_for_reply: 'Ожидает ответа',
   processing: 'Выполняется',
   completed: 'Завершено',
   needs_revision: 'Требуется доработка',
   failed: 'Ошибка',
   cancelled: 'Отменено',
   created: 'Создано',
-  in_progress: 'Выполняется',
+  in_progress: 'Ожидает ответа',
   reviewing: 'Проверяется Пикселем',
   error: 'Ошибка',
 };
@@ -110,6 +111,7 @@ export interface ParsedDelegationIntent {
   isDelegation: boolean;
   isSupportedSpecialist: boolean;
   targetMode: AgentMode;
+  targetModes?: AgentMode[];
   targetSpecialistNameRu: string;
   targetSchool: SchoolId;
   targetBothSchools?: boolean;
@@ -247,11 +249,8 @@ function detectTargetSchoolFromText(
   return fallbackSchool;
 }
 
-function detectSpecialistFromText(lower: string): {
-  matched: boolean;
-  mode?: AgentMode;
-  nameRu?: string;
-} {
+export function detectAllSpecialistsFromText(lower: string): AgentMode[] {
+  const modes: AgentMode[] = [];
   if (
     /(?:^|[^а-яёa-z0-9])маркетолог(?:а|у|е|ом|и|ов)?(?=$|[^а-яёa-z0-9])/i.test(
       lower
@@ -260,7 +259,7 @@ function detectSpecialistFromText(lower: string): {
       lower
     )
   ) {
-    return { matched: true, mode: 'marketer', nameRu: 'Маркетолог' };
+    modes.push('marketer');
   }
   if (
     /(?:^|[^а-яёa-z0-9])менеджер(?:а|у|е|ом|ы|ов)?(?=$|[^а-яёa-z0-9])/i.test(
@@ -270,21 +269,21 @@ function detectSpecialistFromText(lower: string): {
       lower
     )
   ) {
-    return { matched: true, mode: 'manager', nameRu: 'Менеджер' };
+    modes.push('manager');
   }
   if (
     /(?:^|[^а-яёa-z0-9])методист(?:а|у|е|ом|ы|ов)?(?=$|[^а-яёa-z0-9])/i.test(
       lower
     )
   ) {
-    return { matched: true, mode: 'methodist', nameRu: 'Методист' };
+    modes.push('methodist');
   }
   if (
     /(?:^|[^а-яёa-z0-9])аналитик(?:а|у|е|ом|и|ов)?(?=$|[^а-яёa-z0-9])/i.test(
       lower
     )
   ) {
-    return { matched: true, mode: 'analyst', nameRu: 'Аналитик' };
+    modes.push('analyst');
   }
   if (
     /(?:^|[^а-яёa-z0-9])дизайнер(?:а|у|е|ом|ы|ов)?(?=$|[^а-яёa-z0-9])/i.test(
@@ -294,7 +293,24 @@ function detectSpecialistFromText(lower: string): {
       lower
     )
   ) {
-    return { matched: true, mode: 'designer', nameRu: 'Дизайнер' };
+    modes.push('designer');
+  }
+  return modes;
+}
+
+function detectSpecialistFromText(lower: string): {
+  matched: boolean;
+  mode?: AgentMode;
+  nameRu?: string;
+} {
+  const all = detectAllSpecialistsFromText(lower);
+  if (all.length > 0) {
+    const first = all[0];
+    return {
+      matched: true,
+      mode: first,
+      nameRu: AGENT_MODES[first].shortTitle,
+    };
   }
   return { matched: false };
 }
@@ -336,12 +352,14 @@ function buildNewSpecialistSession(
 }
 
 /**
- * Formats a clean, natural Russian business instruction for a specialist chat.
- * Removes Markdown symbols (** / # / `), emojis, technical IDs, and system headers.
+ * Formats a clean, professional Russian business specification (ТЗ) for a specialist chat.
+ * Removes conversational parasitic commands («напиши», «скажи», «попроси»),
+ * converts vague user phrasing into actionable directives, and ensures respectful imperative tone.
  */
 export function buildCleanBusinessInstruction(
   rawInstruction: string,
-  targetSchool: SchoolId
+  targetSchool: SchoolId,
+  targetMode?: AgentMode
 ): string {
   void targetSchool;
 
@@ -360,17 +378,104 @@ export function buildCleanBusinessInstruction(
     .replace(/[•▪▫★☆▶►✔✓✕✖✅❌⚠️🤖🔄]/g, '')
     // Remove technical task IDs if accidentally present
     .replace(/\bptask-[a-z0-9-]+\b/gi, '')
-    .replace(/^(?:чтобы\s+(?:он|она|они|специалист)\s+)/i, '')
-    .replace(/^(?:что\s+нужно\s+)/i, '')
-    .replace(/^[,.:;—–-]+\s*/, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 
   if (!text) return '';
 
-  const isSimpleGreeting = /^(?:привет|здравствуй(?:те)?|добрый\s+(?:день|вечер)|доброе\s+утро)$/i.test(
-    text.replace(/[.!?,]+$/, '').trim()
+  // 1. Strip conversational parasite commands and specialist address prefixes
+  const parasiticPrefixRegex =
+    /^(?:пиксель[\s,.:!-]*)*(?:пожалуйста[\s,.:!-]*)*(?:плиз[\s,.:!-]*)*(?:слушай[\s,.:!-]*)*(?:короче[\s,.:!-]*)*(?:попроси(?:те|ть)?|напиши(?:те)?|скажи(?:те)?|передай(?:те)?|отправь(?:те)?|поручи(?:те|ть)?|делегируй(?:те)?|спроси(?:те|ть)?|уточни(?:те|ть)?|узнай(?:те)?|поставь(?:те)?\s+задачу|дай(?:те)?\s+задани[ея]|дай(?:те)?\s+задачу|обратись\s+к|обратитесь\s+к)\s+(?:у\s+)?(?:ему|ей|его|её|ее|специалиста|специалисту|методиста|методисту|маркетолога|маркетологу|менеджера|менеджеру|аналитика|аналитику|дизайнера|дизайнеру|нашего\s+[а-яё]+|своего\s+[а-яё]+)?(?:\s+(?:из|в|для|школы)?\s*(?:renderia|kiberone|киберван|киберон|рендери[яи]))?(?:\s+в\s+(?:рабочий\s+|его\s+|этот\s+|текущий\s+)?чат)?(?:\s+(?:задачу|поручение|задание|сообщение|вопрос))?[\s,.:;-]*/i;
+
+  while (parasiticPrefixRegex.test(text)) {
+    text = text.replace(parasiticPrefixRegex, '').trim();
+  }
+
+  // Strip subordinate clauses like "чтобы он...", "пусть он...", "нужно чтобы..."
+  text = text
+    .replace(/^(?:чтобы\s+(?:он|она|они|специалист)\s+)/i, '')
+    .replace(/^пусть\s+(?:он|она|они|специалист)\s+/i, '')
+    .replace(/^(?:надо\s+(?:чтобы\s+)?|нужно\s+(?:чтобы\s+)?)/i, '')
+    .replace(/^(?:что\s+нужно\s+)/i, '')
+    .replace(/^[,.:;—–-]+\s*/, '')
+    .trim();
+
+  // 2. Intelligent reformulation of meta-questions and vague inquiries into actionable business specs
+  const metaQuestionTaskMatch = text.match(
+    /^(?:какую\s+задачу\s+поставить|какие\s+задачи\s+поставить|какую\s+поставить\s+задачу)(?:\s+(?:для|по|к|в|на)\s+(.+))?[.!?]?$/i
   );
+  if (metaQuestionTaskMatch) {
+    const scope = metaQuestionTaskMatch[1]?.trim();
+    if (targetMode === 'methodist') {
+      return scope
+        ? `Сформулируйте варианты ключевых методических задач и рекомендации по их постановке для ${scope}.`
+        : `Сформулируйте варианты ключевых методических задач и рекомендации по их постановке для текущего учебного блока.`;
+    }
+    if (targetMode === 'marketer') {
+      return scope
+        ? `Сформулируйте ключевые маркетинговые задачи и цели по продвижению для ${scope}.`
+        : `Сформулируйте ключевые маркетинговые задачи и цели по продвижению.`;
+    }
+    if (targetMode === 'manager') {
+      return scope
+        ? `Сформулируйте ключевые задачи по продажам и регламенту общения с клиентами для ${scope}.`
+        : `Сформулируйте ключевые задачи по продажам и регламенту работы с клиентами.`;
+    }
+    if (targetMode === 'analyst') {
+      return scope
+        ? `Сформулируйте аналитические задачи, метрики эффективности и гипотезы для ${scope}.`
+        : `Сформулируйте аналитические задачи и метрики эффективности для анализа текущих показателей.`;
+    }
+    if (targetMode === 'designer') {
+      return scope
+        ? `Сформулируйте техническое задание на дизайн и визуальные концепции для ${scope}.`
+        : `Сформулируйте техническое задание на разработку визуальных концепций и материалов.`;
+    }
+    return scope
+      ? `Сформулируйте варианты ключевых профессиональных задач и план действий для ${scope}.`
+      : `Сформулируйте варианты ключевых рабочих задач и пошаговый план действий.`;
+  }
+
+  const whatToDoMatch = text.match(
+    /^(?:что\s+делать\s+с|что\s+делать\s+по|как\s+быть\s+с)\s+(.+)[.!?]?$/i
+  );
+  if (whatToDoMatch) {
+    const topic = whatToDoMatch[1]?.trim();
+    return `Разработайте регламент и пошаговый план действий по вопросу: ${topic}.`;
+  }
+
+  const howToOrganizeMatch = text.match(
+    /^(?:как\s+организовать|как\s+выстроить|как\s+запустить)\s+(.+)[.!?]?$/i
+  );
+  if (howToOrganizeMatch) {
+    const topic = howToOrganizeMatch[1]?.trim();
+    return `Предложите структуру и пошаговый план по организации процесса: ${topic}.`;
+  }
+
+  const postsMatch = text.match(
+    /^(?:какие\s+посты|какой\s+пост)\s+(?:написать|опубликовать|сделать)?(?:\s+(?:для|про|по|на\s+тему)\s+(.+))?[.!?]?$/i
+  );
+  if (postsMatch) {
+    const topic = postsMatch[1]?.trim();
+    return topic
+      ? `Подготовьте контент-план и концепции публикаций на тему: ${topic}.`
+      : `Подготовьте контент-план и список тем для публикаций на ближайший период.`;
+  }
+
+  const writePostMatch = text.match(
+    /^(?:напиши|написать|сделай|составь)\s+пост(?:\s+(?:для|про|по|на\s+тему)\s+(.+))?[.!?]?$/i
+  );
+  if (writePostMatch) {
+    const topic = writePostMatch[1]?.trim();
+    return topic
+      ? `Подготовьте текст публикации для социальных сетей на тему: ${topic}.`
+      : `Подготовьте текст публикации для социальных сетей.`;
+  }
+
+  const isSimpleGreeting =
+    /^(?:привет|здравствуй(?:те)?|добрый\s+(?:день|вечер)|доброе\s+утро)$/i.test(
+      text.replace(/[.!?,]+$/, '').trim()
+    );
 
   if (isSimpleGreeting) {
     const rawGreeting = text.replace(/[.!?,]+$/, '').trim();
@@ -379,12 +484,11 @@ export function buildCleanBusinessInstruction(
 
   const DELIM = '(?=$|[^а-яёa-z0-9])';
 
-  // Convert common leading infinitive verbs, past subjunctive, or informal imperatives into polite business plural imperative
+  // Convert common leading infinitive verbs, informal imperatives, or past subjunctive into polite business plural imperative
   const verbConversions: Array<[RegExp, string]> = [
     [new RegExp('^(?:разработать|разработал(?:а)?|разработай)' + DELIM, 'i'), 'Разработайте'],
     [new RegExp('^(?:составить|составил(?:а)?|составь)' + DELIM, 'i'), 'Составьте'],
     [new RegExp('^(?:подготовить|подготовил(?:а)?|подготовь)' + DELIM, 'i'), 'Подготовьте'],
-    [new RegExp('^(?:написать|написал(?:а)?|напиши)' + DELIM, 'i'), 'Напишите'],
     [new RegExp('^(?:сделать|сделал(?:а)?|сделай)' + DELIM, 'i'), 'Сделайте'],
     [new RegExp('^(?:доработать|доработал(?:а)?|доработай)' + DELIM, 'i'), 'Доработайте'],
     [new RegExp('^(?:переделать|переделал(?:а)?|переделай)' + DELIM, 'i'), 'Переделайте'],
@@ -409,6 +513,7 @@ export function buildCleanBusinessInstruction(
     [new RegExp('^(?:связаться|связался|связалась|свяжись)' + DELIM, 'i'), 'Свяжитесь'],
     [new RegExp('^(?:позвонить|позвонил(?:а)?|позвони)' + DELIM, 'i'), 'Позвоните'],
     [new RegExp('^(?:ответить|ответил(?:а)?|ответь)' + DELIM, 'i'), 'Ответьте'],
+    [new RegExp('^(?:написать|написал(?:а)?|напиши)' + DELIM, 'i'), 'Напишите'],
   ];
 
   for (const [rx, replacement] of verbConversions) {
@@ -587,6 +692,32 @@ export class PixelAgentCoordinator {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  private draftListeners = new Set<
+    (draft: PixelPendingDelegationDraft | null) => void
+  >();
+
+  public onDraftChange(
+    callback: (draft: PixelPendingDelegationDraft | null) => void
+  ): () => void {
+    this.draftListeners.add(callback);
+    callback(this.getPendingConfirmationDraft());
+    return () => {
+      this.draftListeners.delete(callback);
+    };
+  }
+
+  public notifyDraftListeners(
+    draft: PixelPendingDelegationDraft | null
+  ): void {
+    for (const listener of this.draftListeners) {
+      try {
+        listener(draft ? { ...draft } : null);
+      } catch (err) {
+        console.error('Error in draft listener:', err);
+      }
+    }
   }
 
   public getTasks(): PixelDelegatedTaskState[] {
@@ -1334,6 +1465,88 @@ export class PixelAgentCoordinator {
       specialistTitleRu: modeCfg.shortTitle,
       messageId: messageIdToUse,
     };
+  }
+
+  /**
+   * Checks if Anna is responding affirmatively to Pixel's offer
+   * «Специалист ответил на вашу задачу. Прочитать?»
+   */
+  public parseReadPendingTaskResponseIntent(
+    rawText: string
+  ): PixelDelegatedTaskState | null {
+    const text = (rawText || '').trim();
+    if (!text) return null;
+    const lower = text.toLowerCase();
+
+    const isAffirmative =
+      /^(?:да|давай|прочитай|зачитай|прочти|покажи|прочитать|показать|хорошо|да,?\s*прочитай|да,?\s*покажи|да,?\s*давай|покажи\s+ответ|прочитай\s+ответ|выведи\s+ответ|хочу\s+прочитать|конечно)[\s.!]*$/i.test(
+        lower
+      );
+
+    if (!isAffirmative) return null;
+
+    // Check if the latest companion message from Pixel was asking "ответил на вашу задачу. Прочитать?"
+    const msgs = this.deps?.getCompanionMessages() || [];
+    const lastPixelMsg = [...msgs].reverse().find((m) => m.role === 'pixel');
+    if (
+      lastPixelMsg &&
+      lastPixelMsg.delegatedTask &&
+      lastPixelMsg.delegatedTask.resultText &&
+      lastPixelMsg.content.includes('Прочитать?')
+    ) {
+      return lastPixelMsg.delegatedTask;
+    }
+
+    // Or check latest completed task within 15 minutes
+    const latest = this.getLatestCompletedTask();
+    if (latest && latest.resultText && latest.resultMessageId) {
+      const timeDiff =
+        Date.now() - (latest.completedAtMs || latest.updatedAtMs);
+      if (timeDiff < 15 * 60 * 1000) {
+        return latest;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Outputs the full original specialist response directly into Pixel's companion chat.
+   */
+  public async executeDisplayFullSpecialistResponse(
+    task: PixelDelegatedTaskState,
+    userCompanionMessage?: CompanionMessage
+  ): Promise<void> {
+    if (!this.deps || !task.resultText) return;
+    const now = new Date();
+    const nowMs = now.getTime();
+    const modeCfg = AGENT_MODES[task.targetMode];
+    const schoolCfg = SCHOOLS[task.schoolId];
+
+    const replyMsg: CompanionMessage = {
+      id: `comp-pixel-full-reply-${nowMs}`,
+      role: 'pixel',
+      content: `Вот полный оригинальный ответ специалиста **${modeCfg.shortTitle}** (${schoolCfg.name}):\n\n${task.resultText}`,
+      createdAt: formatTimeNow(now),
+      createdAtMs: nowMs,
+      schoolId: task.schoolId,
+      usedContextLabels: [
+        `Специалист: ${modeCfg.shortTitle}`,
+        `Школа: ${schoolCfg.name}`,
+        'Оригинальный ответ специалиста',
+      ],
+      delegatedTask: task,
+    };
+
+    const current = this.deps.getCompanionMessages();
+    const next = [...current];
+    if (
+      userCompanionMessage &&
+      !next.some((m) => m.id === userCompanionMessage.id)
+    ) {
+      next.push(userCompanionMessage);
+    }
+    next.push(replyMsg);
+    await this.deps.onSaveCompanionMessages(next);
   }
 
   /**
@@ -2928,11 +3141,26 @@ export class PixelAgentCoordinator {
    * Stage 6.4 (2): Returns the currently active pending delegation draft awaiting Anna's «Да, отправляй» confirmation.
    */
   public getPendingConfirmationDraft(): PixelPendingDelegationDraft | null {
-    if (!this.pendingConfirmationDraft) return null;
-    if (this.pendingConfirmationDraft.status !== 'awaiting_confirmation') {
-      return null;
+    if (
+      this.pendingConfirmationDraft &&
+      this.pendingConfirmationDraft.status === 'awaiting_confirmation'
+    ) {
+      return { ...this.pendingConfirmationDraft };
     }
-    return { ...this.pendingConfirmationDraft };
+    if (this.deps) {
+      const msgs = this.deps.getCompanionMessages();
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (
+          m.pendingDelegationDraft &&
+          m.pendingDelegationDraft.status === 'awaiting_confirmation'
+        ) {
+          this.pendingConfirmationDraft = m.pendingDelegationDraft;
+          return { ...m.pendingDelegationDraft };
+        }
+      }
+    }
+    return null;
   }
 
   public getLatestAwaitingConfirmationDraft(): PixelPendingDelegationDraft | null {
@@ -2940,9 +3168,63 @@ export class PixelAgentCoordinator {
   }
 
   /**
+   * Refines raw instruction into an actionable professional business specification (ТЗ)
+   * using LLM (Gemini) or rule-based fallback.
+   * Strips conversational parasites and parasitic commands («напиши», «скажи», «попроси»).
+   */
+  public async refineInstructionIntoBusinessSpec(
+    rawText: string,
+    targetMode: AgentMode,
+    targetSchool: SchoolId
+  ): Promise<string> {
+    const fallback = buildCleanBusinessInstruction(rawText, targetSchool, targetMode);
+    try {
+      const schoolCfg = SCHOOLS[targetSchool];
+      const modeCfg = AGENT_MODES[targetMode];
+      const prompt = [
+        `Ты — координатор. Твоя задача — формулировать четкие ТЗ для специалистов, убирая из речи пользователя слова-паразиты и команды (напиши, скажи, попроси и т.д.).`,
+        ``,
+        `Запрос управляющей Анны: "${rawText}"`,
+        `Специалист: ИИ-${modeCfg.shortTitle}`,
+        `Школа: ${schoolCfg.name}`,
+        ``,
+        `Инструкция по формированию ТЗ:`,
+        `- Сформулируй четкое, конкретное ТЗ для специалиста в деловом тоне от лица руководителя.`,
+        `- Исключи любые слова-паразиты и вводные команды («напиши», «скажи», «попроси», «узнай», «спроси», «передай»).`,
+        `- Если запрос абстрактный («какую задачу поставить», «что делать»), сформулируй профессиональное задание (например: «Сформулируйте варианты ключевых задач и регламент реализации для...»).`,
+        `- Используй уважительное повелительное наклонение множественного числа («Разработайте...», «Подготовьте...», «Предложите...»).`,
+        `- Верни ТОЛЬКО готовый текст ТЗ (1–3 предложения), без кавычек и вводных слов.`,
+      ].join('\n');
+
+      const response = await fetch('/api/gemini/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          schoolId: targetSchool,
+          mode: 'pixel',
+          sessionId: `pixel-refine-spec-${Date.now()}`,
+          messages: [{ role: 'user', content: prompt }],
+          stream: false,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = typeof data.text === 'string' ? data.text.trim() : '';
+        if (text && text.length >= 8 && !/^(?:напиши|скажи|попроси|передай)\b/i.test(text)) {
+          return buildCleanBusinessInstruction(text, targetSchool, targetMode);
+        }
+      }
+    } catch {
+      // Fallback to rule-based spec builder
+    }
+    return fallback;
+  }
+
+  /**
    * Stage 6.4 (2) & Stage 6.5 (1 & 2): Prepares a delegation draft, autonomously finds/opens
    * the target specialist's working chat (so Anna never has to switch manually), and presents the draft
-   * for explicit confirmation («Да, отправляй»). Strictly NEVER sends anything until confirmed.
+   * for explicit confirmation («Подтвердить и отправить»). Strictly NEVER sends anything until confirmed.
    */
   public async prepareDelegationForConfirmation(params: {
     intent: ParsedDelegationIntent;
@@ -2961,14 +3243,25 @@ export class PixelAgentCoordinator {
 
     const targetSchool = intent.targetSchool;
     const targetMode = intent.targetMode;
+    const allMentioned = detectAllSpecialistsFromText(intent.originalText.toLowerCase());
+    const targetModes =
+      intent.targetModes && intent.targetModes.length > 0
+        ? intent.targetModes
+        : allMentioned.length > 0
+        ? allMentioned
+        : [targetMode];
+
     const schoolCfg = SCHOOLS[targetSchool];
     const modeCfg = AGENT_MODES[targetMode];
     const genitiveName = SPECIALIST_NAMES_GENITIVE_RU[targetMode];
-    const dativeName = SPECIALIST_NAMES_DATIVE_RU[targetMode];
 
     const cleanInstruction =
       intent.cleanInstruction ||
-      buildCleanBusinessInstruction(intent.instruction, targetSchool);
+      (await this.refineInstructionIntoBusinessSpec(
+        intent.instruction || intent.originalText,
+        targetMode,
+        targetSchool
+      ));
 
     // Find existing working chat without forcibly switching Anna's main screen
     const matchingChats = this.getAllWorkingChats().filter(
@@ -2983,6 +3276,7 @@ export class PixelAgentCoordinator {
       draftId,
       targetSchool,
       targetMode,
+      targetModes,
       targetSpecialistNameRu: modeCfg.shortTitle,
       cleanInstruction,
       originalUserRequest: intent.originalText,
@@ -2997,19 +3291,13 @@ export class PixelAgentCoordinator {
     };
 
     this.pendingConfirmationDraft = draft;
+    this.notifyDraftListeners(draft);
 
-    const previewContent = [
-      `Переключился на **${genitiveName} ${schoolCfg.name}** (чат «*${draft.sessionTitle}*»).`,
-      `Анна, я подготовил поручение для отправки специалисту. Пожалуйста, проверьте параметры перед отправкой:`,
-      ``,
-      `• **Школа:** ${schoolCfg.name}`,
-      `• **Специалист:** ${modeCfg.shortTitle}`,
-      `• **Рабочий чат:** «${draft.sessionTitle}»`,
-      `• **Текст сообщения для ${dativeName}:**`,
-      `«${cleanInstruction}»`,
-      ``,
-      `Отправить это поручение? Скажите или напишите **«Да, отправляй»** (или нажмите кнопку ниже).`,
-    ].join('\n');
+    const specialistsText = targetModes
+      .map((m) => AGENT_MODES[m].shortTitle)
+      .join(', ');
+
+    const previewContent = `Анна, я подготовил черновик поручения для **${genitiveName}** (${schoolCfg.name}). Пожалуйста, проверьте специалистов и текст перед отправкой:`;
 
     const pixelDraftMsg: CompanionMessage = {
       id: `comp-pixel-draft-${draftId}`,
@@ -3020,9 +3308,9 @@ export class PixelAgentCoordinator {
       schoolId: targetSchool,
       usedContextLabels: [
         `Школа: ${schoolCfg.name}`,
-        `Специалист: ${modeCfg.shortTitle}`,
+        `Специалист: ${specialistsText}`,
         `Чат: ${draft.sessionTitle}`,
-        'Ожидает подтверждения: «Да, отправляй»',
+        'Ожидает подтверждения: «Подтвердить и отправить»',
       ],
       pendingDelegationDraft: draft,
       chatDisambiguationList:
@@ -3055,7 +3343,7 @@ export class PixelAgentCoordinator {
     await this.deps.onSaveCompanionMessages(nextMsgs);
 
     this.showBubble(
-      `Переключился на ${genitiveName} ${schoolCfg.name}. Подтвердите: «Да, отправляй».`
+      `Переключился на ${genitiveName} ${schoolCfg.name}. Подтвердите: «Подтвердить и отправить».`
     );
 
     if (sourceMode === 'voice') {
@@ -3068,7 +3356,7 @@ export class PixelAgentCoordinator {
   }
 
   /**
-   * Stage 6.4 (2) & Stage 6.5 (1): Updates school, specialist, target session, or instruction text
+   * Stage 6.4 (2) & Stage 6.5 (1): Updates school, specialists, target session, or instruction text
    * on a pending draft before confirmation, and switches the open workspace accordingly.
    */
   public async updatePendingDelegationDraft(
@@ -3076,6 +3364,7 @@ export class PixelAgentCoordinator {
     patch: {
       targetSchool?: SchoolId;
       targetMode?: AgentMode;
+      targetModes?: AgentMode[];
       cleanInstruction?: string;
       sessionId?: string;
     },
@@ -3095,11 +3384,16 @@ export class PixelAgentCoordinator {
     }
 
     const nextSchool = patch.targetSchool || currentDraft.targetSchool;
-    const nextMode = patch.targetMode || currentDraft.targetMode;
+    const nextModes =
+      patch.targetModes && patch.targetModes.length > 0
+        ? patch.targetModes
+        : patch.targetMode
+        ? [patch.targetMode]
+        : currentDraft.targetModes || [currentDraft.targetMode];
+    const nextMode = patch.targetMode || nextModes[0] || currentDraft.targetMode;
     const schoolCfg = SCHOOLS[nextSchool];
     const modeCfg = AGENT_MODES[nextMode];
     const genitiveName = SPECIALIST_NAMES_GENITIVE_RU[nextMode];
-    const dativeName = SPECIALIST_NAMES_DATIVE_RU[nextMode];
 
     let nextInstruction =
       patch.cleanInstruction !== undefined
@@ -3130,6 +3424,7 @@ export class PixelAgentCoordinator {
       ...currentDraft,
       targetSchool: nextSchool,
       targetMode: nextMode,
+      targetModes: nextModes,
       targetSpecialistNameRu: modeCfg.shortTitle,
       cleanInstruction: nextInstruction,
       sessionId: switchedItem?.sessionId || currentDraft.sessionId,
@@ -3139,19 +3434,13 @@ export class PixelAgentCoordinator {
     };
 
     this.pendingConfirmationDraft = updatedDraft;
+    this.notifyDraftListeners(updatedDraft);
 
-    const previewContent = [
-      `Переключился на **${genitiveName} ${schoolCfg.name}** (чат «*${updatedDraft.sessionTitle}*»).`,
-      `Анна, я обновил параметры поручения перед отправкой:`,
-      ``,
-      `• **Школа:** ${schoolCfg.name}`,
-      `• **Специалист:** ${modeCfg.shortTitle}`,
-      `• **Рабочий чат:** «${updatedDraft.sessionTitle}»`,
-      `• **Текст сообщения для ${dativeName}:**`,
-      `«${nextInstruction}»`,
-      ``,
-      `Отправить это поручение? Скажите или напишите **«Да, отправляй»** (или нажмите кнопку ниже).`,
-    ].join('\n');
+    const specialistsText = nextModes
+      .map((m) => AGENT_MODES[m].shortTitle)
+      .join(', ');
+
+    const previewContent = `Анна, я обновил параметры поручения перед отправкой (${specialistsText} · ${schoolCfg.name}):`;
 
     const updatedMessages = this.deps.getCompanionMessages().map((m) =>
       m.pendingDelegationDraft?.draftId === draftId
@@ -3161,9 +3450,9 @@ export class PixelAgentCoordinator {
             schoolId: nextSchool,
             usedContextLabels: [
               `Школа: ${schoolCfg.name}`,
-              `Специалист: ${modeCfg.shortTitle}`,
+              `Специалист: ${specialistsText}`,
               `Чат: ${updatedDraft.sessionTitle}`,
-              'Ожидает подтверждения: «Да, отправляй»',
+              'Ожидает подтверждения: «Подтвердить и отправить»',
             ],
             pendingDelegationDraft: updatedDraft,
           }
@@ -3193,6 +3482,7 @@ export class PixelAgentCoordinator {
       (!targetId || this.pendingConfirmationDraft.draftId === targetId)
     ) {
       this.pendingConfirmationDraft = null;
+      this.notifyDraftListeners(null);
     }
 
     const current = this.deps.getCompanionMessages();
@@ -3234,12 +3524,15 @@ export class PixelAgentCoordinator {
 
   /**
    * Stage 6.4 (2 & 3): Confirms and executes the pending delegation draft ONCE.
+   * Supports edited instruction text from <textarea> and dispatching to multiple specialists.
    * Protected by `dispatchedDraftIds` so duplicate clicks or voice events never send twice.
    */
   public async confirmPendingDelegation(params?: {
     draftId?: string;
     sourceMode?: 'text' | 'voice';
     userCompanionMessage?: CompanionMessage;
+    editedInstruction?: string;
+    targetModes?: AgentMode[];
   }): Promise<PixelDelegatedTaskState | null> {
     if (!this.deps) return null;
 
@@ -3267,6 +3560,20 @@ export class PixelAgentCoordinator {
     }
     this.dispatchedDraftIds.add(draft.draftId);
     this.pendingConfirmationDraft = null;
+    this.notifyDraftListeners(null);
+
+    const finalInstruction = (
+      params?.editedInstruction !== undefined
+        ? params.editedInstruction.trim()
+        : draft.cleanInstruction
+    ) || draft.cleanInstruction;
+
+    const modesToDispatch =
+      params?.targetModes && params.targetModes.length > 0
+        ? params.targetModes
+        : draft.targetModes && draft.targetModes.length > 0
+        ? draft.targetModes
+        : [draft.targetMode];
 
     // Mark the draft card as confirmed in companionMessages
     const currentMsgs = this.deps.getCompanionMessages();
@@ -3276,6 +3583,8 @@ export class PixelAgentCoordinator {
             ...m,
             pendingDelegationDraft: {
               ...m.pendingDelegationDraft,
+              cleanInstruction: finalInstruction,
+              targetModes: modesToDispatch,
               status: 'confirmed' as const,
             },
           }
@@ -3289,25 +3598,36 @@ export class PixelAgentCoordinator {
     }
     await this.deps.onSaveCompanionMessages(updatedMsgs);
 
-    const confirmedIntent: ParsedDelegationIntent = {
-      isDelegation: true,
-      isSupportedSpecialist: true,
-      targetMode: draft.targetMode,
-      targetSpecialistNameRu: draft.targetSpecialistNameRu,
-      targetSchool: draft.targetSchool,
-      instruction: draft.cleanInstruction,
-      cleanInstruction: draft.cleanInstruction,
-      originalText: draft.originalUserRequest,
-      isFollowUp: draft.isFollowUp,
-      isAmbiguous: false,
-      preferredSessionId: draft.sessionId,
-    };
+    let primaryResult: PixelDelegatedTaskState | null = null;
+    for (let i = 0; i < modesToDispatch.length; i++) {
+      const mode = modesToDispatch[i];
+      const confirmedIntent: ParsedDelegationIntent = {
+        isDelegation: true,
+        isSupportedSpecialist: true,
+        targetMode: mode,
+        targetModes: modesToDispatch,
+        targetSpecialistNameRu: AGENT_MODES[mode].shortTitle,
+        targetSchool: draft.targetSchool,
+        instruction: finalInstruction,
+        cleanInstruction: finalInstruction,
+        originalText: draft.originalUserRequest,
+        isFollowUp: draft.isFollowUp,
+        isAmbiguous: false,
+        preferredSessionId: i === 0 ? draft.sessionId : undefined,
+      };
 
-    return await this.executeDelegation({
-      intent: confirmedIntent,
-      sourceMode: params?.sourceMode || draft.sourceMode,
-      skipAddingUserCompanionMessage: true,
-    });
+      const result = await this.executeDelegation({
+        intent: confirmedIntent,
+        sourceMode: params?.sourceMode || draft.sourceMode,
+        skipAddingUserCompanionMessage: i > 0,
+      });
+
+      if (i === 0) {
+        primaryResult = result;
+      }
+    }
+
+    return primaryResult;
   }
 
   /**
@@ -3327,7 +3647,7 @@ export class PixelAgentCoordinator {
     if (!text) return { action: 'none' };
     const lower = text.toLowerCase();
 
-    // 1. Check explicit cancellation first («не отправляй», «отмена», «нет, не надо»)
+    // 1. Check explicit cancellation first («не отправляй», «отмена», «нет, не надо», «стоп», «отбой»)
     if (
       /^(?:нет[\s,.-]*)?(?:не\s+отправляй(?:те)?|не\s+надо(?:\s+отправлять)?|не\s+нужно(?:\s+отправлять)?|отмена|отменить|отмени(?:\s+отправку|\s+поручение)?|стоп|отбой)$/i.test(
         lower
@@ -3336,12 +3656,14 @@ export class PixelAgentCoordinator {
       return { action: 'cancel', draft };
     }
 
-    // 2. Check explicit confirmation («Да, отправляй», «Отправляй», «Да, отправь», «Подтверждаю»)
-    if (
-      /^(?:пиксель[\s,:-]*)?(?:да[\s,!-]*)*(?:всё\s+верно[\s,!-]*|верно[\s,!-]*|отлично[\s,!-]*|хорошо[\s,!-]*)?(?:да[\s,!-]*)?(?:отправляй(?:те)?|отправь(?:те)?(?:\s+поручение|\s+сообщение|\s+задачу|\s+ему|\s+ей)?|подтверждаю(?:\s+отправку)?|запускай(?:те)?(?:\s+поручение)?)[\s.!]*$/i.test(
+    // 2. Check explicit confirmation («Да», «Да, отправляй», «Отправляй», «Подтверждаю», «Всё верно»)
+    const isExplicitConfirm =
+      /^(?:пиксель[\s,:-]*)?(?:да|ага|ок|хорошо|верно|всё\s+верно|отлично|подтверждаю|отправляй|отправь|запускай)(?:[\s,!-]+(?:да|ага|ок|хорошо|верно|всё\s+верно|отлично|подтверждаю|отправляй(?:те)?|отправь(?:те)?|запускай(?:те)?|поручение|сообщение|задачу|ему|ей))*[\s.!]*$/i.test(
         lower
-      )
-    ) {
+      ) ||
+      /^(?:да|отправляй|отправь|подтверждаю|всё\s+верно)[\s.!]*/i.test(lower);
+
+    if (isExplicitConfirm) {
       return { action: 'confirm', draft };
     }
 
@@ -3372,7 +3694,7 @@ export class PixelAgentCoordinator {
       }
     }
 
-    return { action: 'none' };
+    return { action: 'none', draft };
   }
 
   /**
@@ -3545,14 +3867,18 @@ export class PixelAgentCoordinator {
       cleaned = '';
     }
 
+    const allDetected = detectAllSpecialistsFromText(lower);
+    const targetModes = allDetected.length > 0 ? allDetected : [targetMode];
+
     const cleanInstruction = cleaned
-      ? buildCleanBusinessInstruction(cleaned, targetSchool)
+      ? buildCleanBusinessInstruction(cleaned, targetSchool, targetMode)
       : '';
 
     return {
       isDelegation: true,
       isSupportedSpecialist,
       targetMode,
+      targetModes,
       targetSpecialistNameRu,
       targetSchool,
       targetBothSchools: hasBothSchoolsKeywords,
@@ -3589,6 +3915,15 @@ export class PixelAgentCoordinator {
             'Остановил чтение. Скажите «Продолжи чтение», чтобы дослушать с места остановки.'
           );
         }
+        continue;
+      }
+
+      // 0.5 Check affirmative answer to «Специалист ответил на вашу задачу. Прочитать?»
+      const taskToRead = this.parseReadPendingTaskResponseIntent(msg.content);
+      if (taskToRead) {
+        this.processedSpokenTurnIds.add(msg.id);
+        void this.executeDisplayFullSpecialistResponse(taskToRead);
+        void this.readTaskResult(taskToRead.taskId);
         continue;
       }
 
@@ -4324,29 +4659,16 @@ export class PixelAgentCoordinator {
         analysis.verdict === 'needs_revision' ? 'needs_revision' : 'completed';
 
       const completedContent = [
-        isContinuingExistingChat
-          ? `Анна, **${modeCfg.shortTitle}** (${schoolCfg.name}) ответил на запрос в рабочем чате!`
-          : `Анна, поручение для **${genitiveName}** (${schoolCfg.name}) выполнено!`,
+        `Анна, **${modeCfg.shortTitle}** ответил на вашу задачу. Прочитать?`,
         ``,
-        `• **Запрос:** «${intent.instruction}»`,
-        `• **Краткая выжимка (TL;DR):** ${analysis.briefSummary}`,
-        ``,
-        `**Оценка Пикселя:**`,
-        `• Вопрос проработан: ${analysis.allQuestionsAnswered ? '✅ Да, полностью' : '⚠️ Требует дополнения'}`,
-        `• Специфика школы: ${analysis.schoolConsidered ? `✅ Учтена (${schoolCfg.name})` : '⚠️ Общие формулировки'}`,
+        `• **Школа:** ${schoolCfg.name}`,
+        `• **Поручение:** «${intent.cleanInstruction || intent.instruction}»`,
+        `• **Краткая выжимка:** ${analysis.briefSummary}`,
         analysis.actionableRecommendations.length > 0
-          ? `• Рекомендации: ${analysis.actionableRecommendations.slice(0, 3).join('; ')}`
-          : '',
-        analysis.critiqueRemarks.length > 0
-          ? `• Замечания: ${analysis.critiqueRemarks.slice(0, 2).join('; ')}`
-          : '',
-        analysis.proposedNextSteps.length > 0
-          ? `\n**Следующие шаги:**\n${analysis.proposedNextSteps.map((s) => `– ${s}`).join('\n')}`
+          ? `• **Рекомендации:** ${analysis.actionableRecommendations.slice(0, 2).join('; ')}`
           : '',
         ``,
-        `**Что можно сделать:**`,
-        `- Нажмите **«Озвучить ответ»** (или скажите *«Пиксель, прочитай ответ»*), чтобы я зачитал текст вслух.`,
-        `- Нажмите **«Запросить доработку»** (или скажите *«Попроси его доработать…»*), чтобы отправить замечания.`,
+        `Нажмите **«Прочитать ответ»** ниже (или скажите *«Прочитай»* / *«Да»*), чтобы увидеть полный оригинальный ответ специалиста.`,
       ]
         .filter(Boolean)
         .join('\n');

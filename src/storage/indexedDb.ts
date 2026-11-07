@@ -538,7 +538,8 @@ function assembleLoadedWorkspaceData(
       if (
         normalized.delegatedTask &&
         normalized.delegatedTask.status !== 'completed' &&
-        normalized.delegatedTask.status !== 'error'
+        normalized.delegatedTask.status !== 'error' &&
+        normalized.delegatedTask.status !== 'waiting_for_reply'
       ) {
         normalized = {
           ...normalized,
@@ -1737,6 +1738,18 @@ export function validateBackupArchiveJson(
             : undefined,
         delegatedTask: isObjectRecord(cm.delegatedTask)
           ? (cm.delegatedTask as unknown as CompanionMessage['delegatedTask'])
+          : undefined,
+        pendingDelegationDraft: isObjectRecord(cm.pendingDelegationDraft)
+          ? (cm.pendingDelegationDraft as unknown as CompanionMessage['pendingDelegationDraft'])
+          : undefined,
+        pendingRevisionDraft: isObjectRecord(cm.pendingRevisionDraft)
+          ? (cm.pendingRevisionDraft as unknown as CompanionMessage['pendingRevisionDraft'])
+          : undefined,
+        pendingChatDeletion: isObjectRecord(cm.pendingChatDeletion)
+          ? (cm.pendingChatDeletion as unknown as CompanionMessage['pendingChatDeletion'])
+          : undefined,
+        autoCreatedTask: isObjectRecord(cm.autoCreatedTask)
+          ? (cm.autoCreatedTask as unknown as CompanionMessage['autoCreatedTask'])
           : undefined,
       });
     }

@@ -157,8 +157,8 @@ export function formatMessageProviderAttribution(
     return cleanModel ? `Ollama · ${cleanModel}` : 'Ollama · локальная модель';
   }
   // Default / Gemini
-  if (!cleanModel) return 'Gemini 3.8 Flash';
-  if (cleanModel === 'gemini-3.8-flash') return 'Gemini 3.8 Flash';
+  if (!cleanModel) return 'Gemini 3.1 Flash';
+  if (cleanModel === 'gemini-3.1-flash') return 'Gemini 3.1 Flash';
   if (cleanModel.toLowerCase().startsWith('gemini')) {
     return `Gemini · ${cleanModel}`;
   }
@@ -284,7 +284,7 @@ class ServerBackedProviderAdapter implements AIProvider {
 export const geminiFreeProvider: AIProvider = new ServerBackedProviderAdapter(
   'gemini',
   PROVIDER_LABELS_RU.gemini,
-  'gemini-3.8-flash'
+  'gemini-3.1-flash'
 );
 
 export const openRouterFreeProvider: AIProvider = new ServerBackedProviderAdapter(

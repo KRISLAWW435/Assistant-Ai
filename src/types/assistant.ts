@@ -661,6 +661,7 @@ export type CoordinatorTaskStatus =
   | 'draft'
   | 'pending_confirmation'
   | 'sent'
+  | 'waiting_for_reply'
   | 'processing'
   | 'completed'
   | 'needs_revision'
@@ -740,6 +741,7 @@ export interface PixelPendingDelegationDraft {
   draftId: string;
   targetSchool: SchoolId;
   targetMode: AgentMode;
+  targetModes?: AgentMode[];
   targetSpecialistNameRu: string;
   cleanInstruction: string;
   originalUserRequest: string;

@@ -28,27 +28,27 @@ export function getDefaultSpecialistAssignments(): SpecialistModelAssignments {
   return {
     marketer: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.8-flash',
+      specificModel: 'gemini-3.1-flash',
     },
     manager: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.8-flash',
+      specificModel: 'gemini-3.1-flash',
     },
     methodist: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.8-flash',
+      specificModel: 'gemini-3.1-flash',
     },
     analyst: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.8-flash',
+      specificModel: 'gemini-3.1-flash',
     },
     designer: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.8-flash',
+      specificModel: 'gemini-3.1-flash',
     },
     pixel: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.8-flash',
+      specificModel: 'gemini-3.1-flash',
     },
   };
 }
@@ -96,10 +96,10 @@ export const RECOMMENDED_OLLAMA_MODELS: RecommendedOllamaModel[] = [
 ];
 
 export const GEMINI_AVAILABLE_MODELS = [
-  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (Рекомендована)', description: 'Быстрая, актуальная модель по умолчанию' },
+  { id: 'gemini-3.1-flash', name: 'Gemini 3.1 Flash (Основная модель)', description: 'Быстрая, актуальная и стабильная модель по умолчанию' },
   { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Стабильная рабочая модель Google' },
   { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Для сложных аналитических разборов' },
-  { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash-Lite (Резервная)', description: 'Экономичная резервная модель при исчерпании квоты' },
+  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash-Lite (Резервная)', description: 'Экономичная резервная модель при исчерпании квоты' },
 ];
 
 class AIConnectionManager {

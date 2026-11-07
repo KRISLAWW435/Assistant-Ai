@@ -17,6 +17,7 @@ import {
   Edit3,
   Eye,
   EyeOff,
+  FileText,
   FolderOpen,
   Image as ImageIcon,
   ListTodo,
@@ -472,6 +473,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   useEffect(() => {
     pendingPersonalTaskDraftRef.current = pendingPersonalTaskDraft;
   }, [pendingPersonalTaskDraft]);
+
+  // Editable instruction text & multi-specialist selection state for pending delegation drafts
+  const [editingDraftTexts, setEditingDraftTexts] = useState<Record<string, string>>({});
+  const [draftSelectedModes, setDraftSelectedModes] = useState<Record<string, AgentMode[]>>({});
 
   const handleSelectPixelImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1561,7 +1566,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
   const handleConfirmPendingDelegation = async (
     draftId?: string,
-    userCompanionMessage?: CompanionMessage
+    userCompanionMessage?: CompanionMessage,
+    editedInstruction?: string,
+    targetModes?: AgentMode[]
   ) => {
     if (isPixelGenerating) return;
     updatePreferences({ mood: 'thinking' });
@@ -1574,6 +1581,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         draftId,
         sourceMode: 'text',
         userCompanionMessage,
+        editedInstruction,
+        targetModes,
       });
 
       if (!taskResult) return;
@@ -1716,6 +1725,18 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
           updatePreferences({ mood: 'curious' });
           return;
         }
+      }
+
+      // Check if Anna is responding affirmatively to "Специалист ответил на вашу задачу. Прочитать?"
+      const pendingTaskToRead =
+        pixelAgentCoordinator.parseReadPendingTaskResponseIntent(text);
+      if (pendingTaskToRead) {
+        updatePreferences({ mood: 'happy' });
+        await pixelAgentCoordinator.executeDisplayFullSpecialistResponse(
+          pendingTaskToRead,
+          existingLastUser ? undefined : userMsg
+        );
+        return;
       }
 
       const readAloudIntent = pixelAgentCoordinator.parseReadAloudIntent(
@@ -1861,19 +1882,22 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     }
 
     // 1.3 Stage 6.4 (2): Check if Anna is confirming («Да, отправляй»), cancelling, or adjusting a pending delegation draft
+    const activeConfirmationDraft =
+      pixelAgentCoordinator.getPendingConfirmationDraft();
     const pendingDraftAction =
       pixelAgentCoordinator.parsePendingDraftAction(text);
-    if (pendingDraftAction.action !== 'none' && pendingDraftAction.draft) {
+
+    if (activeConfirmationDraft) {
       if (pendingDraftAction.action === 'confirm') {
         await handleConfirmPendingDelegation(
-          pendingDraftAction.draft.draftId,
+          activeConfirmationDraft.draftId,
           existingLastUser ? undefined : userMsg
         );
         return;
       }
       if (pendingDraftAction.action === 'cancel') {
         await pixelAgentCoordinator.cancelPendingDelegation(
-          pendingDraftAction.draft.draftId,
+          activeConfirmationDraft.draftId,
           existingLastUser ? undefined : userMsg
         );
         updatePreferences({ mood: 'curious' });
@@ -1884,7 +1908,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         pendingDraftAction.newSchool
       ) {
         await pixelAgentCoordinator.updatePendingDelegationDraft(
-          pendingDraftAction.draft.draftId,
+          activeConfirmationDraft.draftId,
           { targetSchool: pendingDraftAction.newSchool },
           existingLastUser ? undefined : userMsg
         );
@@ -1896,13 +1920,29 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         pendingDraftAction.newMode
       ) {
         await pixelAgentCoordinator.updatePendingDelegationDraft(
-          pendingDraftAction.draft.draftId,
+          activeConfirmationDraft.draftId,
           { targetMode: pendingDraftAction.newMode },
           existingLastUser ? undefined : userMsg
         );
         updatePreferences({ mood: 'thinking' });
         return;
       }
+
+      // Strict confirmation requirement: user typed unparsed phrase while draft is awaiting confirmation.
+      // Do NOT execute LLM or fake delegation! Reply asking for explicit confirmation:
+      const promptClarificationMsg: CompanionMessage = {
+        id: `comp-pixel-unparsed-${nowMs + 1}`,
+        role: 'pixel',
+        content:
+          'Я не совсем понял. Вы подтверждаете отправку задачи? (Да / Отменить)',
+        createdAt: formatTimeOnly(new Date(nowMs + 1)),
+        createdAtMs: nowMs + 1,
+        schoolId: activeSchool,
+        pendingDelegationDraft: activeConfirmationDraft,
+      };
+      await onSaveCompanionMessages([...historyWithUser, promptClarificationMsg]);
+      updatePreferences({ mood: 'curious' });
+      return;
     }
 
     // 1.32 Stage 5 & 7: Check if Anna is confirming («Да, отправляй») or cancelling a pending revision draft
@@ -3374,7 +3414,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                               {msg.pendingDelegationDraft.status ===
                               'awaiting_confirmation' ? (
                                 <div className="inline-flex items-center gap-1">
-                                  {(['kiberone', 'renderia'] as SchoolId[]).map(
+                                  {(['kiberone', 'renderia', 'all'] as SchoolId[]).map(
                                     (sId) => {
                                       const isSelected =
                                         msg.pendingDelegationDraft!
@@ -3396,6 +3436,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                             isSelected
                                               ? sId === 'renderia'
                                                 ? 'bg-[#84CC16] text-slate-950 shadow-2xs'
+                                                : sId === 'all'
+                                                ? 'bg-[#00A8B5] text-white shadow-2xs'
                                                 : 'bg-[#FFD700] text-slate-950 shadow-2xs'
                                               : 'bg-white/80 text-slate-500 border border-slate-200 hover:text-slate-900'
                                           }`}
@@ -3412,7 +3454,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                     msg.pendingDelegationDraft.targetSchool ===
                                     'renderia'
                                       ? 'bg-[#84CC16]/40 text-slate-900'
-                                      : 'bg-[#FFD700]/50 text-slate-900'
+                                      : msg.pendingDelegationDraft.targetSchool ===
+                                          'all'
+                                        ? 'bg-[#00A8B5]/30 text-cyan-950 border border-cyan-300'
+                                        : 'bg-[#FFD700]/50 text-slate-900'
                                   }`}
                                 >
                                   {
@@ -3424,77 +3469,162 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                               )}
                             </div>
 
-                            {/* 2. Specialist selector / indicator */}
-                            <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <span className="text-slate-600 font-medium">
-                                2. Специалист:
-                              </span>
+                            {/* 2. Specialists selector / checkboxes */}
+                            <div className="flex flex-col gap-1.5 pt-1 border-t border-cyan-200/50">
+                              <div className="flex items-center justify-between text-slate-600 font-medium">
+                                <span>2. Специалисты:</span>
+                                {msg.pendingDelegationDraft.status ===
+                                'awaiting_confirmation' && (
+                                  <span className="text-[10px] text-slate-400">
+                                    (можно выбрать несколько)
+                                  </span>
+                                )}
+                              </div>
                               {msg.pendingDelegationDraft.status ===
                               'awaiting_confirmation' ? (
-                                <div className="flex items-center gap-1 flex-wrap justify-end">
+                                <div className="flex items-center gap-1.5 flex-wrap">
                                   {(
                                     [
                                       'marketer',
                                       'manager',
                                       'methodist',
                                       'analyst',
+                                      'designer',
                                     ] as AgentMode[]
                                   ).map((mId) => {
-                                    const isSelected =
-                                      msg.pendingDelegationDraft!.targetMode ===
-                                      mId;
+                                    const selectedModes =
+                                      draftSelectedModes[
+                                        msg.pendingDelegationDraft!.draftId
+                                      ] ??
+                                      msg.pendingDelegationDraft!.targetModes ?? [
+                                        msg.pendingDelegationDraft!.targetMode,
+                                      ];
+                                    const isSelected = selectedModes.includes(mId);
+
                                     return (
                                       <button
                                         key={mId}
                                         type="button"
                                         onClick={() => {
-                                          if (!isSelected) {
-                                            void pixelAgentCoordinator.updatePendingDelegationDraft(
-                                              msg.pendingDelegationDraft!
-                                                .draftId,
-                                              { targetMode: mId }
-                                            );
-                                          }
+                                          const next = isSelected
+                                            ? selectedModes.filter((m) => m !== mId)
+                                            : [...selectedModes, mId];
+                                          if (next.length === 0) return; // keep at least one
+                                          setDraftSelectedModes((prev) => ({
+                                            ...prev,
+                                            [msg.pendingDelegationDraft!.draftId]: next,
+                                          }));
+                                          void pixelAgentCoordinator.updatePendingDelegationDraft(
+                                            msg.pendingDelegationDraft!.draftId,
+                                            {
+                                              targetModes: next,
+                                              targetMode: next[0],
+                                            }
+                                          );
                                         }}
-                                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
                                           isSelected
-                                            ? 'bg-slate-900 text-white shadow-2xs'
-                                            : 'bg-white/80 text-slate-500 border border-slate-200 hover:text-slate-900'
+                                            ? 'bg-slate-900 text-white shadow-2xs ring-1 ring-slate-950'
+                                            : 'bg-white/90 text-slate-600 border border-slate-300 hover:text-slate-950 hover:bg-white'
                                         }`}
                                       >
-                                        {AGENT_MODES[mId].shortTitle}
+                                        <span
+                                          className={`w-3 h-3 rounded flex items-center justify-center border text-[9px] ${
+                                            isSelected
+                                              ? 'border-[#FFD700] bg-[#FFD700] text-slate-950 font-black'
+                                              : 'border-slate-400 bg-white'
+                                          }`}
+                                        >
+                                          {isSelected ? '✓' : ''}
+                                        </span>
+                                        <span>{AGENT_MODES[mId].shortTitle}</span>
                                       </button>
                                     );
                                   })}
                                 </div>
                               ) : (
-                                <span className="font-bold text-slate-900">
-                                  {
-                                    AGENT_MODES[
-                                      msg.pendingDelegationDraft.targetMode
-                                    ].shortTitle
-                                  }
-                                </span>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {(
+                                    msg.pendingDelegationDraft.targetModes &&
+                                    msg.pendingDelegationDraft.targetModes.length > 0
+                                      ? msg.pendingDelegationDraft.targetModes
+                                      : [msg.pendingDelegationDraft.targetMode]
+                                  ).map((mId) => (
+                                    <span
+                                      key={mId}
+                                      className="px-2 py-0.5 rounded bg-slate-900 text-white font-bold text-[10px]"
+                                    >
+                                      {AGENT_MODES[mId].shortTitle}
+                                    </span>
+                                  ))}
+                                </div>
                               )}
                             </div>
 
-                            {/* 3. Clean business instruction text */}
-                            <div className="pt-1.5 border-t border-cyan-200/50 space-y-1">
-                              <div className="text-[10px] font-semibold text-slate-600">
-                                3. Текст поручения (без системных меток):
+                            {/* 3. Editable business instruction text (<textarea>) */}
+                            <div className="pt-1.5 border-t border-cyan-200/50 space-y-1.5">
+                              <div className="flex items-center justify-between text-[10px] font-semibold text-slate-700">
+                                <span>3. Текст поручения (ТЗ):</span>
+                                {msg.pendingDelegationDraft.status ===
+                                  'awaiting_confirmation' && (
+                                  <span className="text-[10px] text-cyan-800 font-medium">
+                                    ✏️ Можно отредактировать перед отправкой
+                                  </span>
+                                )}
                               </div>
-                              <div className="p-2 rounded-lg bg-white border border-slate-200/80 text-slate-900 font-medium leading-relaxed">
-                                «{msg.pendingDelegationDraft.cleanInstruction}»
-                              </div>
+                              {msg.pendingDelegationDraft.status ===
+                              'awaiting_confirmation' ? (
+                                <textarea
+                                  rows={3}
+                                  value={
+                                    editingDraftTexts[
+                                      msg.pendingDelegationDraft.draftId
+                                    ] ??
+                                    msg.pendingDelegationDraft.cleanInstruction
+                                  }
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setEditingDraftTexts((prev) => ({
+                                      ...prev,
+                                      [msg.pendingDelegationDraft!.draftId]: val,
+                                    }));
+                                  }}
+                                  onBlur={(e) => {
+                                    const val = e.target.value.trim();
+                                    if (
+                                      val &&
+                                      val !==
+                                        msg.pendingDelegationDraft!.cleanInstruction
+                                    ) {
+                                      void pixelAgentCoordinator.updatePendingDelegationDraft(
+                                        msg.pendingDelegationDraft!.draftId,
+                                        { cleanInstruction: val }
+                                      );
+                                    }
+                                  }}
+                                  placeholder="Отредактируйте или уточните текст поручения..."
+                                  className="w-full p-2.5 rounded-lg bg-white border border-slate-300 text-xs text-slate-900 font-medium leading-relaxed shadow-2xs focus:ring-2 focus:ring-[#00A8B5] focus:border-[#00A8B5] focus:outline-none resize-y min-h-[64px]"
+                                />
+                              ) : (
+                                <div className="p-2.5 rounded-lg bg-white border border-slate-200/80 text-slate-900 font-medium leading-relaxed text-xs">
+                                  «{msg.pendingDelegationDraft.cleanInstruction}»
+                                </div>
+                              )}
                             </div>
                           </div>
 
                           {msg.pendingDelegationDraft.status === 'confirmed' ? (
-                            <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1.5 rounded-lg border border-emerald-200">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                               <span>
-                                Подтверждено Анной («Да, отправляй») —
-                                отправлено однократно
+                                Подтверждено и отправлено{' '}
+                                {(msg.pendingDelegationDraft.targetModes &&
+                                msg.pendingDelegationDraft.targetModes.length > 0
+                                  ? msg.pendingDelegationDraft.targetModes
+                                  : [msg.pendingDelegationDraft.targetMode]
+                                )
+                                  .map((m) => AGENT_MODES[m].shortTitle)
+                                  .join(', ')}
                               </span>
                             </div>
                           ) : msg.pendingDelegationDraft.status ===
@@ -3507,15 +3637,25 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                               <button
                                 type="button"
                                 disabled={isPixelGenerating}
-                                onClick={() =>
+                                onClick={() => {
+                                  const draft = msg.pendingDelegationDraft!;
+                                  const currentText =
+                                    editingDraftTexts[draft.draftId] ??
+                                    draft.cleanInstruction;
+                                  const currentModes =
+                                    draftSelectedModes[draft.draftId] ??
+                                    draft.targetModes ?? [draft.targetMode];
                                   void handleConfirmPendingDelegation(
-                                    msg.pendingDelegationDraft!.draftId
-                                  )
-                                }
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-bold hover:bg-slate-800 disabled:opacity-40 transition-colors cursor-pointer"
+                                    draft.draftId,
+                                    undefined,
+                                    currentText,
+                                    currentModes
+                                  );
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-bold hover:bg-slate-800 disabled:opacity-40 transition-colors cursor-pointer shadow-xs"
                               >
                                 <Check className="w-3.5 h-3.5 text-[#FFD700]" />
-                                <span>Да, отправляй</span>
+                                <span>Подтвердить и отправить</span>
                               </button>
                               <button
                                 type="button"
@@ -3989,6 +4129,24 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                           </div>
 
                           <div className="flex flex-wrap items-center gap-2">
+                            {/* Read / Show Full Response in Chat (Stage 8) */}
+                            {msg.delegatedTask.resultText && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExpandedTaskResultId(msg.delegatedTask!.taskId);
+                                  void pixelAgentCoordinator.executeDisplayFullSpecialistResponse(
+                                    msg.delegatedTask!
+                                  );
+                                }}
+                                title="Показать полный ответ специалиста в диалоге с Пикселем"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-bold hover:bg-slate-800 transition-colors cursor-pointer shadow-xs"
+                              >
+                                <FileText className="w-3.5 h-3.5 text-[#FFD700]" />
+                                <span>Прочитать ответ</span>
+                              </button>
+                            )}
+
                             {/* Read Aloud Button (Stage 6) */}
                             {msg.delegatedTask.resultText && (
                               <button

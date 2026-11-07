@@ -42,9 +42,9 @@ const rawEnvGeminiModel = (process.env.GEMINI_MODEL || '').trim();
 export const GEMINI_MODEL =
   rawEnvGeminiModel && !rawEnvGeminiModel.startsWith('gemini-2.5')
     ? rawEnvGeminiModel
-    : 'gemini-3.8-flash';
+    : 'gemini-3.1-flash';
 export const GEMINI_FILES_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
-const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.8-flash';
+const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 const rawEnvOpenRouterModel = (process.env.OPENROUTER_MODEL || '').trim();
 export const OPENROUTER_DEFAULT_FREE_MODEL =
   rawEnvOpenRouterModel &&
@@ -432,12 +432,12 @@ let serverSpecialistModelAssignments: Record<
   string,
   { providerSelection: 'auto' | AIProviderId; specificModel?: string }
 > = {
-  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  manager: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  designer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  manager: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  designer: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
 };
 
 let serverFailoverSettings = {
@@ -1021,11 +1021,14 @@ const ROLE_INSTRUCTIONS: Record<AssistantEndpointMode, string> = {
 
 СТРОГИЕ ПРАВИЛА УПРАВЛЕНИЯ ЧАТАМИ И СПЕЦИАЛИСТАМИ:
 1. Вы УМЕЕТЕ создавать рабочие чаты, переключаться между ними, ставить задачи 5 специалистам (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер) и удалять чаты через встроенные системные инструменты приложения. НИКОГДА не заявляйте, что вы не умеете создавать чаты или не можете отправить сообщение специалисту.
-2. ПОДТВЕРЖДЕНИЕ ОТПРАВКИ: Когда Анна просит написать специалисту:
-   - Если Анна назвала только специалиста (например: «Напиши маркетологу, пожалуйста»), но не сказала суть — вежливо спросите, что именно передать.
-   - Никогда не используйте вежливые слова («пожалуйста») или служебные фразы в качестве содержания поручения.
-   - Когда суть сформулирована, системный координатор формирует черновик и показывает карточку с кнопками «Отправить», «Изменить», «Отменить».
-   - До подтверждения Анны («Да, отправляй» или нажатие кнопки) сообщение специалисту НЕ отправляется.
+2. ПОДТВЕРЖДЕНИЕ ОТПРАВКИ И КООРДИНАЦИЯ:
+   - Ты — координатор. Твоя задача — формулировать четкие ТЗ для специалистов, убирая из речи пользователя слова-паразиты и команды (напиши, скажи, попроси и т.д.).
+   - Когда Анна просит написать специалисту (например: «напиши методисту, какую задачу поставить» или «попроси маркетолога сделать пост»):
+     - Никогда не копируйте фразу дословно («напишите, какую задачу поставить»). Сформулируйте профессиональное ТЗ для специалиста по существу.
+     - Если Анна назвала только специалиста (например: «Напиши маркетологу, пожалуйста»), но не сказала суть — вежливо спросите, что именно передать.
+     - Никогда не используйте слова-паразиты и команды в тексте поручения.
+     - Когда суть сформулирована, системный координатор формирует черновик и показывает карточку с кнопками «Подтвердить и отправить», «Изменить», «Отменить».
+     - До подтверждения Анны («Да, отправляй» или нажатие кнопки) сообщение специалисту НЕ отправляется.
 3. ЧТЕНИЕ ОТВЕТОВ В СЛУХ:
    - Когда Анна просит «Прочитай ответ», «Зачитай полностью», «Озвучь сообщение», «Прочитай, что ответил маркетолог», система находит исходный полный ответ специалиста и зачитывает его ДОСЛОВНО и ПОЛНОСТЬЮ единым голосом Пикселя.
    - Запрещено подменять чтение кратким пересказом (TL;DR), своими комментариями или обрезанной версией.
@@ -1420,23 +1423,23 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
   if (norm.includes('3.1-flash-lite') || norm.includes('flash-lite')) {
     return { thinkingLevel: ThinkingLevel.MINIMAL };
   }
-  // gemini-3.8-flash and gemini-flash-latest support thinkingLevel LOW or MEDIUM
-  if (norm.includes('3.8-flash') || norm.includes('flash-latest') || norm.startsWith('gemini-3')) {
+  // gemini-3.1-flash and gemini-flash-latest support thinkingLevel LOW or MEDIUM
+  if (norm.includes('3.1-flash') || norm.includes('flash-latest') || norm.startsWith('gemini-3')) {
     return { thinkingLevel: ThinkingLevel.LOW };
   }
   return undefined;
 }
 
 const GEMINI_MODEL_CASCADE: string[] = [
-  'gemini-3.8-flash',
-  'gemini-flash-latest',
+  'gemini-3.1-flash',
   'gemini-3.1-flash-lite',
+  'gemini-flash-latest',
 ];
 
-let lastHealthyGeminiModel: string = 'gemini-3.8-flash';
+let lastHealthyGeminiModel: string = 'gemini-3.1-flash';
 
 /**
- * Provider 1: Google Gemini Free execution with fast multi-model cascade on 503/429/404
+ * Provider 1: Google Gemini Free execution with fast multi-model cascade on 503/429/404/Timeout
  */
 async function executeGeminiGeneration(params: {
   systemInstruction: string;
@@ -1455,12 +1458,11 @@ async function executeGeminiGeneration(params: {
 
   const ai = getGenAIClient();
 
-  // For file analysis (documents or images), use gemini-3.1-flash-lite as the default primary model!
-  // Fallback to gemini-3.8-flash only if gemini-3.1-flash-lite returns an error.
+  // Primary model: gemini-3.1-flash, fallback to gemini-3.1-flash-lite and gemini-flash-latest
   const hasFilesOrImages = Boolean(params.hasFiles || params.hasImages);
   const candidateModels = hasFilesOrImages
-    ? ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest']
-    : [GEMINI_MODEL, 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+    ? ['gemini-3.1-flash-lite', 'gemini-3.1-flash', 'gemini-flash-latest']
+    : ['gemini-3.1-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
 
   let lastErr: unknown = null;
 
@@ -1480,11 +1482,27 @@ async function executeGeminiGeneration(params: {
     }
 
     try {
-      const response = await ai.models.generateContent({
+      // 60-second hard timeout for Gemini model response
+      const timeoutMs = 60000;
+      let timer: NodeJS.Timeout | null = null;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `GEMINI_TIMEOUT: Модель ${candidateModel} не ответила за ${timeoutMs / 1000} секунд.`
+            )
+          );
+        }, timeoutMs);
+      });
+
+      const callPromise = ai.models.generateContent({
         model: candidateModel,
         contents: params.messages,
         config,
       });
+
+      const response = await Promise.race([callPromise, timeoutPromise]);
+      if (timer) clearTimeout(timer);
 
       const fullText = (response.text || '').trim();
       if (!fullText) {
@@ -1504,6 +1522,8 @@ async function executeGeminiGeneration(params: {
           : String(err || '').toLowerCase();
 
       const shouldTryNextModel =
+        errText.includes('timeout') ||
+        errText.includes('gemini_timeout') ||
         errText.includes('429') ||
         errText.includes('resource_exhausted') ||
         errText.includes('quota') ||
@@ -3281,19 +3301,19 @@ export async function startServer(
       configured: isConfigured,
       models: [
         {
-          id: 'gemini-3.8-flash-lite-tts',
-          name: 'Gemini 3.8 Flash-Lite TTS (Основная скоростная модель)',
+          id: 'gemini-2.5-flash-tts',
+          name: 'Gemini 2.5 Flash TTS (Основная скоростная модель)',
           tier: 'standard',
           paidTierRequired: false,
         },
         {
-          id: 'gemini-3.8-flash-tts',
-          name: 'Gemini 3.8 Flash TTS (Флагманская модель Voice Design)',
+          id: 'gemini-2.5-pro-tts',
+          name: 'Gemini 2.5 Pro TTS (Флагманская модель Voice Design)',
           tier: 'standard',
           paidTierRequired: false,
         },
       ],
-      defaultModel: 'gemini-3.8-flash-lite-tts',
+      defaultModel: 'gemini-2.5-flash-tts',
       paidTierRequired: false,
       samplePhrase:
         'Здравствуйте! Я Пиксель. Я помогу вам разобраться с задачами, найти нужные документы и освободить время для действительно важных дел.',
@@ -3362,7 +3382,7 @@ export async function startServer(
       const requestedModel =
         typeof model === 'string' && model.trim()
           ? model.trim()
-          : 'gemini-3.8-flash-lite-tts';
+          : 'gemini-2.5-flash-tts';
       const requestedTimbre =
         typeof timbreId === 'string' && timbreId.trim()
           ? timbreId.trim()
@@ -3521,7 +3541,7 @@ export async function startServer(
     const isConfigured = isGeminiApiKeyConfigured();
     res.json({
       configured: isConfigured,
-      model: 'gemini-3.8-live',
+      model: 'gemini-2.5-flash-live',
       defaultVoice: 'Kore',
       availableVoices: [
         { id: 'Kore', name: 'Kore', gender: 'female', recommended: true },
@@ -3538,7 +3558,7 @@ export async function startServer(
       supported: isConfigured,
       pricingTier: 'standard_free_limits',
       pricingNotice:
-        'Модель gemini-3.8-live работает в рамках квот Gemini API. Платные вызовы без явного подтверждения не производятся.',
+        'Модель gemini-2.5-flash-live работает в рамках квот Gemini API. Платные вызовы без явного подтверждения не производятся.',
     });
   });
 
@@ -3603,7 +3623,7 @@ export async function startServer(
           const schoolId: SchoolId =
             msg.schoolId === 'renderia' ? 'renderia' : 'kiberone';
           const pixelContext = msg.pixelContext as IncomingPixelContext | undefined;
-          const liveModel = 'gemini-3.8-live';
+          const liveModel = 'gemini-2.5-flash-live';
 
           const systemInstruction = buildSystemInstruction({
             schoolId,
