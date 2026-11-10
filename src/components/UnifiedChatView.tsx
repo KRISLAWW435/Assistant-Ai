@@ -1388,11 +1388,22 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         >
           {/* 2. Messages Viewport (ChatGPT-Style Centered Stream) */}
           <div
-            className={`flex-1 overflow-y-auto px-4 sm:px-6 py-4 min-h-0 transition-colors duration-500 ${
-              isAutumnTheme ? 'autumn-subtle-pattern' : 'bg-[#F9FAFB]/60'
+            className={`flex-1 overflow-y-auto px-4 sm:px-6 py-4 min-h-0 relative transition-colors duration-500 ${
+              isAutumnTheme ? '' : 'bg-[#F9FAFB]/60'
             }`}
+            style={
+              isAutumnTheme
+                ? {
+                    backgroundImage: "url('/bg-pattern.jpg')",
+                    backgroundRepeat: 'repeat',
+                    backgroundSize: '350px',
+                    backgroundPosition: 'center',
+                    backgroundAttachment: 'local',
+                  }
+                : undefined
+            }
           >
-        <div className="max-w-3xl mx-auto">
+            <div className="max-w-3xl mx-auto relative z-10">
           {currentMessages.length === 0 ? (
             /* Warm Personal Welcome Screen for Anna with Expressive Typographic School Badge */
             <div className="py-6 sm:py-10 flex flex-col items-center text-center space-y-6">
@@ -1401,7 +1412,8 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   <CozyTeaCup />
                 </div>
               )}
-              <div className="flex flex-col items-center space-y-3.5 max-w-xl">
+              {/* Solid 100% Opaque Welcome Card */}
+              <div className="flex flex-col items-center space-y-4 max-w-xl w-full bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/90 shadow-sm text-center">
                 <div className="flex flex-wrap items-center justify-center gap-2">
                   <span
                     className={`inline-flex items-center px-4 py-1.5 rounded-xl font-display font-extrabold text-base sm:text-lg tracking-wide shadow-2xs transition-colors duration-200 ${
@@ -1414,18 +1426,18 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   >
                     {schoolConfig.name}
                   </span>
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200/90 text-xs font-semibold text-slate-700 shadow-2xs">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200/90 text-xs font-semibold text-slate-700 shadow-2xs">
                     <span>{modeConfig.title}</span>
                   </span>
                 </div>
 
-                <h2 className="font-display font-extrabold text-xl sm:text-2xl text-slate-900 tracking-tight">
+                <h2 className="font-display font-extrabold text-xl sm:text-2xl text-slate-900 tracking-tight text-balance">
                   {activeSchool === 'all'
                     ? 'Анна, над какой задачей для обеих школ поработаем?'
                     : `Анна, над какой задачей для ${schoolConfig.name} поработаем?`}
                 </h2>
 
-                <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                <p className="text-xs sm:text-sm text-slate-600 leading-relaxed max-w-md">
                   {modeConfig.description}
                 </p>
 
@@ -1441,7 +1453,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                             : 'all'
                       )
                     }
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200/90 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-50 border border-slate-200/90 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                   >
                     <span>
                       {activeSchool === 'all'
@@ -1455,7 +1467,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   <button
                     type="button"
                     onClick={() => onNavigate('knowledge')}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200/90 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-50 border border-slate-200/90 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                   >
                     <BookOpen className="w-3.5 h-3.5 text-[#00A8B5]" />
                     <span>
@@ -1467,17 +1479,17 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 </div>
               </div>
 
-              {/* Example Task Cards Grid (ChatGPT Starter Cards) */}
+              {/* Example Task Cards Grid (ChatGPT Starter Cards with Solid Opaque Backgrounds) */}
               <div className="w-full space-y-2.5 text-left">
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-xs font-semibold text-slate-500">
+                <div className="inline-flex items-center justify-between px-3.5 py-1.5 rounded-xl bg-white border border-slate-200/90 shadow-2xs">
+                  <span className="text-xs font-bold text-slate-700">
                     Примеры задач специалиста «{modeConfig.shortTitle}» (нажмите,
                     чтобы подставить в поле ввода):
                   </span>
                   {selectedQuickPromptId && (
-                    <span className="text-xs font-semibold text-[#00A8B5] flex items-center gap-1">
+                    <span className="text-xs font-bold text-[#00A8B5] flex items-center gap-1 ml-2">
                       <Sparkles className="w-3.5 h-3.5" />
-                      Шаблон в поле ввода ниже
+                      Шаблон выбран
                     </span>
                   )}
                 </div>
@@ -1492,25 +1504,25 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                         onClick={() =>
                           handleSelectQuickPrompt(qp.id, qp.getPrompt)
                         }
-                        className={`rounded-2xl p-4 text-left border transition-all flex flex-col justify-between gap-2 ${
+                        className={`rounded-2xl p-4 sm:p-4.5 text-left border transition-all flex flex-col justify-between gap-2.5 bg-white shadow-xs hover:shadow-md cursor-pointer ${
                           isSelected
                             ? activeSchool === 'renderia'
-                              ? 'bg-[#84CC16]/15 border-[#84CC16] shadow-xs'
+                              ? 'ring-2 ring-[#84CC16] border-[#84CC16] bg-white'
                               : activeSchool === 'all'
-                                ? 'bg-[#00A8B5]/15 border-[#00A8B5] shadow-xs'
-                                : 'bg-[#F5B800]/15 border-[#F5B800] shadow-xs'
-                            : 'bg-white hover:bg-slate-50 border-slate-200/90 shadow-2xs'
+                                ? 'ring-2 ring-[#00A8B5] border-[#00A8B5] bg-white'
+                                : 'ring-2 ring-[#F5B800] border-[#F5B800] bg-white'
+                            : 'border-slate-200/90 hover:border-slate-300'
                         }`}
                       >
-                        <div className="space-y-1">
-                          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                        <div className="space-y-1.5">
+                          <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200/80 text-[10px] font-extrabold text-slate-700 uppercase tracking-wider">
                             {qp.category}
-                          </div>
-                          <div className="text-xs sm:text-sm font-bold text-slate-900">
+                          </span>
+                          <div className="text-xs sm:text-sm font-bold text-slate-900 leading-snug">
                             {qp.label}
                           </div>
                         </div>
-                        <div className="text-[11px] text-slate-500 line-clamp-2">
+                        <div className="text-[11px] text-slate-600 line-clamp-2 leading-relaxed">
                           {qp.getPrompt(
                             schoolConfig.name,
                             schoolConfig.focusDescription
@@ -1543,7 +1555,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                         : ''
                     }`}
                   >
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 mb-1.5 px-1">
+                    <div className="inline-flex flex-wrap items-center gap-2 text-[11px] text-slate-600 mb-1.5 px-2.5 py-1 rounded-full bg-white border border-slate-200/90 shadow-2xs">
                       {isUser && msg.delegatedByPixel ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#00A8B5]/15 text-[#007A85] border border-[#00A8B5]/30 font-bold text-[10px]">
                           <Sparkles className="w-3 h-3 text-[#00A8B5]" />

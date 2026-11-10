@@ -484,6 +484,23 @@ export function generateHonestPixelReply(
     };
   }
 
+  // 4.1b Check if Anna is asking about Pixel's beanie («Что за шапка?», «Откуда шапка?», «Почему в шапке?», «Что за помпон?»)
+  if (
+    lower.includes('шапк') ||
+    lower.includes('шапочк') ||
+    lower.includes('помпон') ||
+    lower.includes('головной убор')
+  ) {
+    return {
+      replyText:
+        'Анна, эту уютную тёплую синюю шапку мне связала моя цифровая бабушка! А этот пушистый розовый помпон на макушке — не просто украшение, а мой личный генератор креативных идей и вдохновения для школ KIBERone и Renderia. Ношу с гордостью и грею идеи для наших школ!',
+      usedContextLabels: [
+        'Пасхалка: вязаная синяя шапка от цифровой бабушки',
+        'Розовый помпон — генератор идей для KIBERone и Renderia',
+      ],
+    };
+  }
+
   // 4.2 Check if Anna is asking about Pixel's purpose («Для чего ты создан?»)
   if (
     lower.includes('для чего ты создан') ||

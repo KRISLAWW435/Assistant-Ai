@@ -121,6 +121,7 @@ import {
 } from './utils/pixelTaskManagerEngine';
 import { useAutumnTheme } from './utils/autumnTheme';
 import { AutumnLeafFall } from './components/autumn/AutumnLeafFall';
+import { BackgroundMusic } from './components/BackgroundMusic';
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'kiber_renderia_sidebar_collapsed';
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'kiber_renderia_right_panel_collapsed';
@@ -3674,6 +3675,8 @@ export default function App() {
     >
       {/* Periodic Autumn Leaf Burst Component (pointer-events: none) */}
       <AutumnLeafFall enabled={isAutumnTheme} />
+      {/* Background Music Player with Audio Ducking during voice conversation */}
+      <BackgroundMusic />
       {/* 1. LEFT PANEL: Navigation, Specialists, Dialogue History, App Sections */}
       <Sidebar
         activeSection={activeSection}

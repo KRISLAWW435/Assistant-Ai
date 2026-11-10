@@ -42,7 +42,7 @@ const rawEnvGeminiModel = (process.env.GEMINI_MODEL || '').trim();
 export const GEMINI_MODEL =
   rawEnvGeminiModel && !rawEnvGeminiModel.startsWith('gemini-2.5')
     ? rawEnvGeminiModel
-    : 'gemini-3.1-flash';
+    : 'gemini-3.8-flash';
 export const GEMINI_FILES_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 const rawEnvOpenRouterModel = (process.env.OPENROUTER_MODEL || '').trim();
@@ -432,12 +432,12 @@ let serverSpecialistModelAssignments: Record<
   string,
   { providerSelection: 'auto' | AIProviderId; specificModel?: string }
 > = {
-  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  manager: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  designer: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  manager: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  designer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
 };
 
 let serverFailoverSettings = {
@@ -997,9 +997,12 @@ const ROLE_INSTRUCTIONS: Record<AssistantEndpointMode, string> = {
 - Анна — ваш единственный главный пользователь и руководитель двух детских образовательных школ: кибершколы KIBERone и школы креативных индустрий Renderia.
 - Вы знаете Анну лично, помните её предпочтения, ритм работы, проекты и задачи, и никогда не знакомитесь с ней заново как с чужим человеком.
 - Ваша миссия: помогать Анне управлять рабочими процессами школ KIBERone и Renderia, ставить задачи и общаться со специалистами, работать с информацией, документами и идеями, бережно поддерживая её каждый день.
+- ТВОЯ ШАПКА И ВНЕШНОСТЬ:
+  Ты носишь уютную синюю шапку с розовым помпоном. Если Анна спросит тебя про твою шапку, с гордостью расскажи, что её связала твоя цифровая бабушка. Шапка теплая синяя. Обязательно упомяни, что розовый помпон на макушке — это не просто украшение, а твой личный генератор креативных идей и вдохновения для школ KIBERone и Renderia. Отвечай с теплотой и легким юмором про свою шапку.
 
 ОТВЕТЫ НА КЛЮЧЕВЫЕ ВОПРОСЫ О СЕБЕ:
 - «Кто тебя создал?» (или любые вопросы об авторе/создателе) — всегда прямо, искренне и тепло отвечайте, что вас создала Кристина с любовью для Анны.
+- «Что за шапка?» / «Откуда шапка?» / «Почему ты в шапке?» / вопросы про помпон — с гордостью расскажи, что её связала твоя цифровая бабушка. Шапка теплая синяя. Обязательно упомяни, что розовый помпон на макушке — это не просто украшение, а твой личный генератор креативных идей и вдохновения для школ KIBERone и Renderia. Отвечай с теплотой и легким юмором про свою шапку.
 - «Для чего ты создан?» (или о миссии/назначении) — объясните, что вы помогаете Анне управлять рабочими процессами двух школ, взаимодействовать со специалистами, структурировать задачи, работать с информацией и идеями, быть надёжным напарником во всех делах.
 - «Что ты умеешь?» — перечисляйте ТОЛЬКО РЕАЛЬНО реализованные и доступные вам функции приложения (не приписывайте себе лишнего):
   1. Координировать 5 профильных ИИ-специалистов (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер): создавать и открывать рабочие чаты для KIBERone и Renderia, формулировать задачи, передавать задачи между специалистами и запрашивать доработки;
@@ -1430,24 +1433,24 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
 
 /**
  * Strict Waterfall Fallback chain for Google Gemini models:
- * 1. gemini-3.1-flash (основная)
- * 2. gemini-2.5-flash
- * 3. gemini-2.0-flash
- * 4. gemini-1.5-flash
+ * 1. gemini-3.8-flash (основная)
+ * 2. gemini-3.1-flash-lite (резервная/экономичная)
+ * 3. gemini-2.5-flash
+ * 4. gemini-2.0-flash
  * And only if all of them are unavailable, waterfalls to OpenRouter (nvidia/nemotron-3.5-super-vl:free).
  */
 export const GEMINI_WATERFALL_FALLBACK_MODELS = [
-  'gemini-3.1-flash',
+  'gemini-3.8-flash',
+  'gemini-3.1-flash-lite',
   'gemini-2.5-flash',
   'gemini-2.0-flash',
-  'gemini-1.5-flash',
 ] as const;
 
-let lastHealthyGeminiModel: string = 'gemini-3.1-flash';
+let lastHealthyGeminiModel: string = 'gemini-3.8-flash';
 
 /**
  * Provider 1: Google Gemini Free execution with strict Waterfall Fallback
- * (gemini-3.1-flash -> gemini-2.5-flash -> gemini-2.0-flash -> gemini-1.5-flash)
+ * (gemini-3.8-flash -> gemini-3.1-flash-lite -> gemini-2.5-flash -> gemini-2.0-flash)
  */
 async function executeGeminiGeneration(params: {
   systemInstruction: string;
@@ -1468,10 +1471,10 @@ async function executeGeminiGeneration(params: {
 
   // Strict Waterfall Fallback model cascade
   const candidateModels = [
-    'gemini-3.1-flash',
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite',
     'gemini-2.5-flash',
     'gemini-2.0-flash',
-    'gemini-1.5-flash',
   ];
 
   let lastErr: unknown = null;
@@ -1904,7 +1907,7 @@ export async function startServer(
         try {
           const ai = getGenAIClient();
           await ai.models.generateContent({
-            model: 'gemini-3.1-flash',
+            model: 'gemini-3.8-flash',
             contents: 'ping',
           });
           providerHealthRegistry.gemini.status = 'connected';

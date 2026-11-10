@@ -83,6 +83,7 @@ import {
   SpeechInputStatus,
 } from '../types/voice';
 import { useAutumnTheme } from '../utils/autumnTheme';
+import { BackgroundMusicButton } from './BackgroundMusic';
 
 interface RightWorkspacePanelProps {
   collapsed: boolean;
@@ -1032,6 +1033,9 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
           )}
         </div>
 
+        {/* Collapsed rail music toggle (active only when Autumn Theme is ON) */}
+        <BackgroundMusicButton collapsed />
+
         <div className="w-7 border-t border-slate-200/80 my-0.5" />
 
         <div className="flex flex-col items-center gap-2">
@@ -1196,6 +1200,9 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
               <span>🍂</span>
               <span className="hidden sm:inline">Тема</span>
             </button>
+
+            {/* Quick Background Autumn Music Player Control (Play/Pause + Volume) */}
+            <BackgroundMusicButton />
 
             {/* Quick Master Disable All Voice */}
             <button
@@ -3667,7 +3674,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
               ) : (
                 <p className="text-[11px] text-slate-600 leading-relaxed">
                   Основная модель:{' '}
-                  <strong>{geminiStatus?.model || 'gemini-3.1-flash'}</strong>.
+                  <strong>{geminiStatus?.model || 'gemini-3.8-flash'}</strong>.
                   {activeSchool === 'all' ? (
                     <> В запрос передаются разделы Баз знаний обеих школ и явно выбранные вами документы.</>
                   ) : (

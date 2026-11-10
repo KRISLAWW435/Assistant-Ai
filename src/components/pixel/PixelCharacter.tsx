@@ -437,10 +437,14 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
           transform: transformStyle,
         }}
       >
-        {/* Cozy Autumn Beanie with Fluffy Pom-Pom */}
+        {/* Cozy Autumn Beanie with Fluffy Pom-Pom (Fitted snugly atop Pixel's head) */}
         {shouldShowBeanie && (
           <div
-            className="absolute -top-[37%] left-1/2 -translate-x-1/2 w-[104%] z-20 pointer-events-none overflow-visible select-none transition-all duration-300 ease-out"
+            className="absolute left-1/2 w-[85%] z-20 pointer-events-none overflow-visible select-none transition-all duration-300 ease-out"
+            style={{
+              top: typeof size === 'number' && size > 0 ? `${-Math.round(size * 0.28)}px` : '-12px',
+              transform: 'translateX(-50%)',
+            }}
             aria-hidden="true"
           >
             <PixelAutumnBeanie className="w-full h-auto" />

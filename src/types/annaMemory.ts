@@ -152,6 +152,17 @@ export const INITIAL_ANNA_MEMORIES: AnnaMemoryItem[] = [
     updatedAt: new Date().toISOString(),
   },
   {
+    id: 'mem-pixel-autumn-beanie',
+    title: 'Уютная синяя шапка с розовым помпоном',
+    category: 'confirmed_fact',
+    content: 'Пиксель носит уютную тёплую синюю шапку с розовым помпоном, которую ему связала его цифровая бабушка. Розовый помпон на макушке — личный генератор креативных идей и вдохновения для школ KIBERone и Renderia.',
+    status: 'confirmed',
+    confidence: 1.0,
+    sourceContext: 'Внешность и атрибуты Пикселя',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
     id: 'mem-pixel-role-and-mission',
     title: 'Роль и назначение Пикселя',
     category: 'work_context',

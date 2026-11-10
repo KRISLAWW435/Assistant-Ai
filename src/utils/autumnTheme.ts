@@ -6,11 +6,14 @@ export const AUTUMN_LEAF_BURST_EVENT = 'kiberone:autumn-leaf-burst';
 
 export function getAutumnThemeStored(): boolean {
   try {
-    if (typeof window === 'undefined') return false;
+    if (typeof window === 'undefined') return true;
     const item = localStorage.getItem(AUTUMN_THEME_STORAGE_KEY);
+    if (item === null) {
+      return true; // Enabled by default on first launch
+    }
     return item === 'true';
   } catch {
-    return false;
+    return true;
   }
 }
 
