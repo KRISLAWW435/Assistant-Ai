@@ -801,7 +801,11 @@ export interface PixelPendingChatDeletion {
 }
 
 export type PersonalTaskDraftStep =
+  | 'clarifying_title'
+  | 'clarifying_description'
+  | 'clarifying_school'
   | 'clarifying_date'
+  | 'clarifying_time'
   | 'clarifying_priority'
   | 'clarifying_reminder'
   | 'ready_for_confirmation';

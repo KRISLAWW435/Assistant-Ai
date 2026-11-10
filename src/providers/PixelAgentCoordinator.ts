@@ -39,6 +39,7 @@ import {
 import { voiceManager } from './voice/voiceManager';
 import { geminiLiveClient } from './voice/geminiLiveClient';
 import { getSyzranNow } from '../utils/syzranTime';
+import { showToast } from '../components/ToastNotification';
 
 export const PIXEL_DELEGATION_STATUS_LABELS: Record<
   CoordinatorTaskStatus,
@@ -198,6 +199,7 @@ export interface PixelAgentCoordinatorDeps {
   onShowPixelBubble?: (text: string) => void;
   onNotifyLiveVoice?: (notificationText: string) => void;
   onDelegatedTaskSyncToAnnaTasks?: (taskState: PixelDelegatedTaskState) => void;
+  onNavigate?: (section: NavSection) => void;
 }
 
 function isAgentModeSection(section: NavSection): section is AgentMode {
@@ -3065,6 +3067,14 @@ export class PixelAgentCoordinator {
     };
   }
 
+  public setPendingClarificationMode(mode: AgentMode, schoolId: SchoolId): void {
+    this.pendingClarification = {
+      targetMode: mode,
+      targetSchool: schoolId,
+      createdAtMs: Date.now(),
+    };
+  }
+
   /**
    * Saves a polite clarification request from Pixel when Anna's command to message a specialist
    * is incomplete/cut-off or has ambiguous content, without sending anything to the specialist chat yet.
@@ -4658,8 +4668,11 @@ export class PixelAgentCoordinator {
       const finalStatus =
         analysis.verdict === 'needs_revision' ? 'needs_revision' : 'completed';
 
+      const briefSummarySentence = analysis.briefSummary
+        ? analysis.briefSummary.split('.')[0] + '.'
+        : '';
       const completedContent = [
-        `Анна, **${modeCfg.shortTitle}** ответил на вашу задачу. Прочитать?`,
+        `Анна, **${modeCfg.shortTitle}** ответил на вашу задачу! ${briefSummarySentence}`,
         ``,
         `• **Школа:** ${schoolCfg.name}`,
         `• **Поручение:** «${intent.cleanInstruction || intent.instruction}»`,
@@ -4667,11 +4680,19 @@ export class PixelAgentCoordinator {
         analysis.actionableRecommendations.length > 0
           ? `• **Рекомендации:** ${analysis.actionableRecommendations.slice(0, 2).join('; ')}`
           : '',
-        ``,
-        `Нажмите **«Прочитать ответ»** ниже (или скажите *«Прочитай»* / *«Да»*), чтобы увидеть полный оригинальный ответ специалиста.`,
       ]
         .filter(Boolean)
         .join('\n');
+
+      showToast({
+        title: 'Оповещаю вас, Анна',
+        message: `Анна, ${modeCfg.shortTitle} ответил на вашу задачу! ${analysis.briefSummary || ''}`,
+        type: 'info',
+        actionLabel: 'Открыть чат специалиста',
+        onAction: () => {
+          this.deps?.onNavigate?.(intent.targetMode);
+        },
+      });
 
       await updateTaskAndCompanionMessage(
         {

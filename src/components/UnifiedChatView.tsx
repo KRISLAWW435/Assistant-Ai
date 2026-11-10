@@ -1405,15 +1405,15 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
           >
             <div className="max-w-3xl mx-auto relative z-10">
           {currentMessages.length === 0 ? (
-            /* Warm Personal Welcome Screen for Anna with Expressive Typographic School Badge */
-            <div className="py-6 sm:py-10 flex flex-col items-center text-center space-y-6">
-              {isAutumnTheme && (
-                <div className="mb-0">
-                  <CozyTeaCup />
-                </div>
-              )}
-              {/* Solid 100% Opaque Welcome Card */}
-              <div className="flex flex-col items-center space-y-4 max-w-xl w-full bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/90 shadow-sm text-center">
+            /* Warm Personal Welcome Screen for Anna with Expressive Typographic School Badge & Cozy Tea Cup */
+            <div className="py-6 sm:py-8 flex flex-col items-center text-center">
+              {/* Solid 100% Opaque Single Card for Empty Chat */}
+              <div className="flex flex-col items-center space-y-5 max-w-xl w-full bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/90 shadow-sm text-center">
+                {isAutumnTheme && (
+                  <div className="w-full flex justify-center pb-1">
+                    <CozyTeaCup />
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center justify-center gap-2">
                   <span
                     className={`inline-flex items-center px-4 py-1.5 rounded-xl font-display font-extrabold text-base sm:text-lg tracking-wide shadow-2xs transition-colors duration-200 ${

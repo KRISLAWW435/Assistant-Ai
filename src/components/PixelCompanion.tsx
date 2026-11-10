@@ -81,10 +81,12 @@ import {
   isSyzranTimeQuestion,
   toSyzranIsoDate,
 } from '../utils/syzranTime';
+import { showToast } from './ToastNotification';
 import {
   buildFallbackTaskFromUserRequest,
   buildSyzranReminderIso,
   checkDueTaskAndDelegationReminders,
+  createEmptyPersonalTaskWizardDraft,
   evaluateTaskPriorityMultiCriteria,
   extractAutoTaskFromConversation,
   formatPersonalTaskConfirmationCard,
@@ -477,6 +479,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   // Editable instruction text & multi-specialist selection state for pending delegation drafts
   const [editingDraftTexts, setEditingDraftTexts] = useState<Record<string, string>>({});
   const [draftSelectedModes, setDraftSelectedModes] = useState<Record<string, AgentMode[]>>({});
+  const [specialistDropdownOpen, setSpecialistDropdownOpen] = useState(false);
 
   const handleSelectPixelImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1181,6 +1184,16 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   `Сызрань: ${syzranSnap.timeHHMMSS}`,
                 ],
               };
+              showToast({
+                title: 'Оповещаю вас, Анна',
+                message: alert.message,
+                type: 'reminder',
+                actionLabel: 'Посмотреть задачи',
+                onAction: () => {
+                  setActiveTab('tasks');
+                },
+              });
+
               const nextMessages = [
                 ...companionMessagesLatestRef.current,
                 reminderChatMsg,
@@ -3782,6 +3795,115 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                           ) : (
                             <div className="space-y-2">
                               {/* Quick action buttons depending on draft step */}
+                              {msg.pendingPersonalTaskDraft.step === 'clarifying_description' && (
+                                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Без описания')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    Без описания
+                                  </button>
+                                </div>
+                              )}
+
+                              {msg.pendingPersonalTaskDraft.step === 'clarifying_school' && (
+                                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                  <span className="text-[10px] text-slate-500 font-medium">
+                                    Выберите школу:
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('KIBERone')}
+                                    className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-[11px] font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
+                                  >
+                                    🟠 KIBERone
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('RENDERIA')}
+                                    className="px-2.5 py-1 rounded-lg bg-lime-50 text-lime-900 border border-lime-200 text-[11px] font-semibold hover:bg-lime-100 transition-colors cursor-pointer"
+                                  >
+                                    🟢 RENDERIA
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Обе')}
+                                    className="px-2.5 py-1 rounded-lg bg-teal-50 text-teal-900 border border-teal-200 text-[11px] font-semibold hover:bg-teal-100 transition-colors cursor-pointer"
+                                  >
+                                    🌐 Обе школы
+                                  </button>
+                                </div>
+                              )}
+
+                              {msg.pendingPersonalTaskDraft.step === 'clarifying_date' && (
+                                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                  <span className="text-[10px] text-slate-500 font-medium">
+                                    Быстрый выбор:
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Сегодня')}
+                                    className="px-2.5 py-1 rounded-lg bg-sky-50 text-sky-800 border border-sky-200 text-[11px] font-semibold hover:bg-sky-100 transition-colors cursor-pointer"
+                                  >
+                                    Сегодня
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Завтра')}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+                                  >
+                                    Завтра
+                                  </button>
+                                </div>
+                              )}
+
+                              {msg.pendingPersonalTaskDraft.step === 'clarifying_time' && (
+                                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                  <span className="text-[10px] text-slate-500 font-medium">
+                                    Время:
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('10:00')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    10:00
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('14:00')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    14:00
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('18:00')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    18:00
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Без времени')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-500 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    Без времени
+                                  </button>
+                                </div>
+                              )}
+
                               {msg.pendingPersonalTaskDraft.step === 'clarifying_priority' && (
                                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
                                   <span className="text-[10px] text-slate-500 font-medium">
@@ -3830,18 +3952,26 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('Напомни за 1 час')}
+                                    onClick={() => void executePixelChatRequest('За 15 минут')}
                                     className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
                                   >
-                                    За 1 час
+                                    За 15 минут
                                   </button>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('Напомни за 30 минут')}
+                                    onClick={() => void executePixelChatRequest('За 30 минут')}
                                     className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
                                   >
                                     За 30 минут
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('За 1 час')}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+                                  >
+                                    За 1 час
                                   </button>
                                 </div>
                               )}
@@ -4656,6 +4786,71 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                         </span>
                       </button>
                     )}
+                    {/* Requirement 1: Quick Action Buttons for Anna */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const wizardInit = createEmptyPersonalTaskWizardDraft(activeSchool);
+                        setPendingPersonalTaskDraft(wizardInit.draft);
+                        pendingPersonalTaskDraftRef.current = wizardInit.draft;
+
+                        const wizardMsg: CompanionMessage = {
+                          id: `comp-pixel-wiz-${Date.now()}`,
+                          role: 'pixel',
+                          content: wizardInit.questionRu,
+                          createdAt: formatTimeOnly(),
+                          createdAtMs: Date.now(),
+                          schoolId: activeSchool,
+                          pendingPersonalTaskDraft: wizardInit.draft,
+                        };
+                        void onSaveCompanionMessages([...companionMessages, wizardMsg]);
+                      }}
+                      className="px-2.5 py-1 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
+                    >
+                      <span>📝 Поставить задачу (себе)</span>
+                    </button>
+
+                    <div className="relative inline-block">
+                      <button
+                        type="button"
+                        onClick={() => setSpecialistDropdownOpen((v) => !v)}
+                        className="px-2.5 py-1 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200/80 text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
+                      >
+                        <span>✉️ Написать специалисту</span>
+                        <ChevronDown className="w-3 h-3 text-sky-700" />
+                      </button>
+
+                      {specialistDropdownOpen && (
+                        <div className="absolute left-0 bottom-full mb-1 z-50 w-56 bg-white rounded-2xl border border-slate-200 shadow-xl p-1.5 space-y-0.5 animate-in fade-in zoom-in-95 duration-100">
+                          {(['marketer', 'manager', 'methodist', 'analyst', 'designer'] as AgentMode[]).map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => {
+                                setSpecialistDropdownOpen(false);
+                                pixelAgentCoordinator.setPendingClarificationMode(mode, activeSchool);
+                                const promptMsg: CompanionMessage = {
+                                  id: `comp-pixel-spec-${Date.now()}`,
+                                  role: 'pixel',
+                                  content: `Что именно поручить ${SPECIALIST_NAMES_DATIVE_RU[mode]}? (Опишите задачу простыми словами, а я сформулирую её в четкий бизнес-текст и оформлю карточку поручения).`,
+                                  createdAt: formatTimeOnly(),
+                                  createdAtMs: Date.now(),
+                                  schoolId: activeSchool,
+                                };
+                                void onSaveCompanionMessages([...companionMessages, promptMsg]);
+                              }}
+                              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                            >
+                              <span>{AGENT_MODES[mode].title}</span>
+                              <span className="text-[10px] text-slate-400 font-normal">
+                                ({AGENT_MODES[mode].shortTitle})
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
                     <button
                       type="button"
                       onClick={() => {

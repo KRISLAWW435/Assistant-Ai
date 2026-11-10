@@ -122,6 +122,7 @@ import {
 import { useAutumnTheme } from './utils/autumnTheme';
 import { AutumnLeafFall } from './components/autumn/AutumnLeafFall';
 import { BackgroundMusic } from './components/BackgroundMusic';
+import { ToastNotification } from './components/ToastNotification';
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'kiber_renderia_sidebar_collapsed';
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'kiber_renderia_right_panel_collapsed';
@@ -779,6 +780,7 @@ export default function App() {
           geminiLiveClient.sendTextPrompt(notificationText);
         }
       },
+      onNavigate: handleSelectSection,
       onDelegatedTaskSyncToAnnaTasks: async (delegationState) => {
         // Internal AI specialist delegations must not automatically create tasks in Anna's "Мои задачи".
         // Only sync status if Anna has already explicitly linked a personal task to this delegation.
@@ -4018,6 +4020,9 @@ export default function App() {
         onOpenRightPanelVoiceSettings={handleOpenRightPanelVoiceSettings}
         onNavigate={handleSelectSection}
       />
+
+      {/* Floating Toast Notifications for Anna */}
+      <ToastNotification />
 
       {/* MODAL 1: Chat File Preview & Manager Confirmation Modal */}
       {stagedChatFileModal && (

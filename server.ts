@@ -42,7 +42,7 @@ const rawEnvGeminiModel = (process.env.GEMINI_MODEL || '').trim();
 export const GEMINI_MODEL =
   rawEnvGeminiModel && !rawEnvGeminiModel.startsWith('gemini-2.5')
     ? rawEnvGeminiModel
-    : 'gemini-3.8-flash';
+    : 'gemini-3.1-flash';
 export const GEMINI_FILES_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 const rawEnvOpenRouterModel = (process.env.OPENROUTER_MODEL || '').trim();
@@ -432,12 +432,12 @@ let serverSpecialistModelAssignments: Record<
   string,
   { providerSelection: 'auto' | AIProviderId; specificModel?: string }
 > = {
-  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  manager: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  designer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
-  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  manager: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  designer: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
 };
 
 let serverFailoverSettings = {
@@ -1433,24 +1433,24 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
 
 /**
  * Strict Waterfall Fallback chain for Google Gemini models:
- * 1. gemini-3.8-flash (основная)
- * 2. gemini-3.1-flash-lite (резервная/экономичная)
- * 3. gemini-2.5-flash
- * 4. gemini-2.0-flash
+ * 1. gemini-3.1-flash (основная)
+ * 2. gemini-2.5-flash
+ * 3. gemini-2.0-flash
+ * 4. gemini-1.5-flash
  * And only if all of them are unavailable, waterfalls to OpenRouter (nvidia/nemotron-3.5-super-vl:free).
  */
 export const GEMINI_WATERFALL_FALLBACK_MODELS = [
-  'gemini-3.8-flash',
-  'gemini-3.1-flash-lite',
+  'gemini-3.1-flash',
   'gemini-2.5-flash',
   'gemini-2.0-flash',
+  'gemini-1.5-flash',
 ] as const;
 
-let lastHealthyGeminiModel: string = 'gemini-3.8-flash';
+let lastHealthyGeminiModel: string = 'gemini-3.1-flash';
 
 /**
  * Provider 1: Google Gemini Free execution with strict Waterfall Fallback
- * (gemini-3.8-flash -> gemini-3.1-flash-lite -> gemini-2.5-flash -> gemini-2.0-flash)
+ * (gemini-3.1-flash -> gemini-2.5-flash -> gemini-2.0-flash -> gemini-1.5-flash)
  */
 async function executeGeminiGeneration(params: {
   systemInstruction: string;
@@ -1471,10 +1471,10 @@ async function executeGeminiGeneration(params: {
 
   // Strict Waterfall Fallback model cascade
   const candidateModels = [
-    'gemini-3.8-flash',
-    'gemini-3.1-flash-lite',
+    'gemini-3.1-flash',
     'gemini-2.5-flash',
     'gemini-2.0-flash',
+    'gemini-1.5-flash',
   ];
 
   let lastErr: unknown = null;
@@ -1907,7 +1907,7 @@ export async function startServer(
         try {
           const ai = getGenAIClient();
           await ai.models.generateContent({
-            model: 'gemini-3.8-flash',
+            model: 'gemini-3.1-flash',
             contents: 'ping',
           });
           providerHealthRegistry.gemini.status = 'connected';
@@ -3605,7 +3605,7 @@ export async function startServer(
     const isConfigured = isGeminiApiKeyConfigured();
     res.json({
       configured: isConfigured,
-      model: 'gemini-3.8-live',
+      model: 'gemini-2.5-flash-live',
       defaultVoice: 'Kore',
       availableVoices: [
         { id: 'Kore', name: 'Kore', gender: 'female', recommended: true },
@@ -3622,7 +3622,7 @@ export async function startServer(
       supported: isConfigured,
       pricingTier: 'standard_free_limits',
       pricingNotice:
-        'Модель gemini-3.8-live работает в рамках квот Gemini API. Платные вызовы без явного подтверждения не производятся.',
+        'Модель Gemini Live работает в рамках стандартных бесплатной квоты Gemini API.',
     });
   });
 
@@ -3694,7 +3694,7 @@ export async function startServer(
           const schoolId: SchoolId =
             msg.schoolId === 'renderia' ? 'renderia' : 'kiberone';
           const pixelContext = msg.pixelContext as IncomingPixelContext | undefined;
-          const liveModel = 'gemini-3.8-live';
+          const liveModel = 'gemini-2.5-flash-live';
 
           const systemInstruction = buildSystemInstruction({
             schoolId,

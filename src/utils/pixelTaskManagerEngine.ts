@@ -1469,6 +1469,43 @@ export function formatPersonalTaskConfirmationCard(
 }
 
 /**
+ * Starts a clean, step-by-step Personal Task Creation Wizard for Anna.
+ * Step 1: "Как назовем задачу?"
+ */
+export function createEmptyPersonalTaskWizardDraft(
+  activeSchool: SchoolId
+): {
+  draft: PixelPendingPersonalTaskDraft;
+  questionRu: string;
+  spokenSummary: string;
+} {
+  const nowMs = Date.now();
+  const draftId = `draft_${nowMs}_${Math.random().toString(36).slice(2, 6)}`;
+  const draft: PixelPendingPersonalTaskDraft = {
+    draftId,
+    title: '',
+    description: '',
+    schoolId: activeSchool || 'both',
+    hasExplicitDate: false,
+    hasExplicitDueTime: false,
+    priority: 'low',
+    hasExplicitPriority: false,
+    wantsReminder: false,
+    hasExplicitReminder: false,
+    step: 'clarifying_title',
+    status: 'drafting',
+    createdAtMs: nowMs,
+  };
+
+  const questionRu = 'Как назовем задачу?';
+  return {
+    draft,
+    questionRu,
+    spokenSummary: 'Как назовем задачу?',
+  };
+}
+
+/**
  * Initializes a new personal task draft from Anna's request.
  * Follows sequential short questions and never asks for already provided info.
  */
@@ -1673,65 +1710,148 @@ export function processPersonalTaskDraftInput(
     }
   }
 
-  // 3. Answering step: clarifying_date
-  if (draft.step === 'clarifying_date') {
-    const parsed = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
-    if (parsed.isDateAmbiguous && parsed.ambiguityPromptRu) {
-      return {
-        action: 'updated',
-        draft,
-        responseRu: `⚠️ ${parsed.ambiguityPromptRu}`,
-        spokenSummary: 'Пожалуйста, уточните дату.',
-      };
+  // 3. Wizard Step 1: clarifying_title ("Как назовем задачу?")
+  if (draft.step === 'clarifying_title') {
+    const rawTitle = trimmed.replace(/^[«"„“]+|[»"”]+$/g, '').trim();
+    const title = cleanExtractedTaskTitle(rawTitle) || rawTitle || 'Новая задача';
+    const nextDraft: PixelPendingPersonalTaskDraft = {
+      ...draft,
+      title,
+      step: 'clarifying_description',
+    };
+    return {
+      action: 'updated',
+      draft: nextDraft,
+      responseRu: `Задача: **«${title}»**.\n\nДобавим детали или описание? (Напишите подробности или «без описания» / «нет»)`,
+      spokenSummary: 'Добавим детали или описание?',
+    };
+  }
+
+  // 4. Wizard Step 2: clarifying_description ("Добавим детали или описание?")
+  if (draft.step === 'clarifying_description') {
+    const isSkip = /^(?:нет|не\s+надо|без\s+описания|пропусти|пропустить|дальше|минус|-)(?=$|[^а-яёa-z0-9])/i.test(lower);
+    const description = isSkip ? '' : trimmed;
+    const nextDraft: PixelPendingPersonalTaskDraft = {
+      ...draft,
+      description,
+      step: 'clarifying_school',
+    };
+    return {
+      action: 'updated',
+      draft: nextDraft,
+      responseRu: `Какая школа? **KIBERone**, **RENDERIA** или **Обе**?`,
+      spokenSummary: 'Какая школа? KIBERone, RENDERIA или Обе?',
+    };
+  }
+
+  // 5. Wizard Step 3: clarifying_school ("Какая школа? KIBERone, RENDERIA или Обе?")
+  if (draft.step === 'clarifying_school') {
+    let chosenSchool: SchoolId | 'both' = draft.schoolId || 'both';
+    if (/(?:kiber|кибер|киберон|kiberone)/i.test(lower)) {
+      chosenSchool = 'kiberone';
+    } else if (/(?:render|рендер|рендери|renderia)/i.test(lower)) {
+      chosenSchool = 'renderia';
+    } else if (/(?:обе|все|обе\s+школы|общие)/i.test(lower)) {
+      chosenSchool = 'both';
     }
-    if (parsed.dueDate) {
+    const schoolLabel = chosenSchool === 'kiberone' ? 'KIBERone' : chosenSchool === 'renderia' ? 'RENDERIA' : 'Обе школы';
+    const nextDraft: PixelPendingPersonalTaskDraft = {
+      ...draft,
+      schoolId: chosenSchool,
+      step: 'clarifying_date',
+    };
+    return {
+      action: 'updated',
+      draft: nextDraft,
+      responseRu: `Школа: **${schoolLabel}**.\n\nНа какую дату планируем? (Ожидается формат **ДД.ММ.ГГГГ**, например 15.11.2026, или «сегодня» / «завтра»)`,
+      spokenSummary: 'На какую дату планируем?',
+    };
+  }
+
+  // 6. Wizard Step 4: clarifying_date ("На какую дату планируем?")
+  if (draft.step === 'clarifying_date') {
+    // Check if input matches DD.MM.YYYY or standard relative dates
+    const ddmmyyyyMatch = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4}|\d{2})$/);
+    let resolvedDateIso = '';
+    if (ddmmyyyyMatch) {
+      const day = parseInt(ddmmyyyyMatch[1], 10);
+      const month = parseInt(ddmmyyyyMatch[2], 10);
+      let year = parseInt(ddmmyyyyMatch[3], 10);
+      if (year < 100) year += 2000;
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        resolvedDateIso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+    }
+
+    if (!resolvedDateIso) {
+      const parsed = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
+      if (parsed.dueDate) {
+        resolvedDateIso = parsed.dueDate;
+        if (parsed.dueTime && !draft.dueTime) {
+          draft.dueTime = parsed.dueTime;
+          draft.hasExplicitDueTime = true;
+        }
+      }
+    }
+
+    if (resolvedDateIso) {
       const nextDraft = {
         ...draft,
-        dueDate: parsed.dueDate,
+        dueDate: resolvedDateIso,
         hasExplicitDate: true,
-        dueTime: parsed.dueTime || draft.dueTime,
-        hasExplicitDueTime: Boolean(parsed.dueTime || draft.dueTime),
+        step: 'clarifying_time' as PersonalTaskDraftStep,
       };
-
-      if (!nextDraft.hasExplicitPriority) {
-        nextDraft.step = 'clarifying_priority';
-        const datePart = ` на **${formatSyzranIsoDateRu(nextDraft.dueDate)}**`;
-        const timePart = nextDraft.dueTime ? ` в **${nextDraft.dueTime}**` : '';
-        return {
-          action: 'updated',
-          draft: nextDraft,
-          responseRu: `Дата установлена:${datePart}${timePart}.\n\nУточните, пожалуйста, приоритет задачи: **обычный**, **средний** или **высокий**?`,
-          spokenSummary: 'Уточните, пожалуйста, приоритет задачи: обычный, средний или высокий?',
-        };
-      }
-
-      if (!nextDraft.hasExplicitReminder) {
-        nextDraft.step = 'clarifying_reminder';
-        return {
-          action: 'updated',
-          draft: nextDraft,
-          responseRu: `Дата установлена: **${formatSyzranIsoDateRu(nextDraft.dueDate)}**.\n\nНужно ли поставить напоминание? Если да, когда (дата) и во сколько напомнить? (Или скажите «без напоминания»)`,
-          spokenSummary: 'Нужно ли поставить напоминание, когда и во сколько?',
-        };
-      }
-
-      nextDraft.step = 'ready_for_confirmation';
-      nextDraft.status = 'awaiting_confirmation';
       return {
         action: 'updated',
         draft: nextDraft,
-        responseRu: formatPersonalTaskConfirmationCard(nextDraft),
-        spokenSummary: 'Все параметры заполнены. Подтвердите создание задачи.',
+        responseRu: `Дата: **${formatSyzranIsoDateRu(resolvedDateIso)}**.\n\nВо сколько? (Ожидается формат **ЧЧ:ММ**, например 14:30, или напишите «без времени»)`,
+        spokenSummary: 'Во сколько?',
       };
     }
 
     return {
       action: 'updated',
       draft,
-      responseRu: 'Не удалось распознать дату. Укажите, пожалуйста, день для задачи (например: «на завтра», «на 4 ноября» или «на среду»).',
-      spokenSummary: 'Не удалось распознать дату. Укажите, пожалуйста, день для задачи.',
+      responseRu: 'Пожалуйста, укажите дату в формате **ДД.ММ.ГГГГ** (например, 20.11.2026) или словами: «сегодня», «завтра».',
+      spokenSummary: 'Пожалуйста, укажите дату.',
     };
   }
+
+  // 7. Wizard Step 5: clarifying_time ("Во сколько?")
+  if (draft.step === 'clarifying_time') {
+    const isSkipTime = /^(?:нет|без\s+времени|не\s+важно|любое|не\s+надо|пропусти|пропустить|-)(?=$|[^а-яёa-z0-9])/i.test(lower);
+    let resolvedTime: string | undefined = undefined;
+
+    const hhmmMatch = trimmed.match(/(?:в|к)?\s*(\d{1,2})[:.](\d{2})/);
+    if (hhmmMatch) {
+      const hours = parseInt(hhmmMatch[1], 10);
+      const minutes = parseInt(hhmmMatch[2], 10);
+      if (hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) {
+        resolvedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      }
+    } else if (!isSkipTime) {
+      const parsed = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
+      if (parsed.dueTime) {
+        resolvedTime = parsed.dueTime;
+      }
+    }
+
+    const nextDraft = {
+      ...draft,
+      dueTime: resolvedTime || draft.dueTime,
+      hasExplicitDueTime: Boolean(resolvedTime || draft.dueTime),
+      step: 'clarifying_reminder' as PersonalTaskDraftStep,
+    };
+
+    const timeLabel = nextDraft.dueTime ? `в **${nextDraft.dueTime}**` : 'без фиксированного времени';
+    return {
+      action: 'updated',
+      draft: nextDraft,
+      responseRu: `Время: ${timeLabel}.\n\nНапомнить заранее? За сколько минут/часов? (Например: «за 30 минут», «за 1 час» или «без напоминания»)`,
+      spokenSummary: 'Напомнить заранее? За сколько минут или часов?',
+    };
+  }
+
 
   // 4. Answering step: clarifying_priority
   if (draft.step === 'clarifying_priority') {

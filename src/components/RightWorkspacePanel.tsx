@@ -1130,13 +1130,13 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
       </div>
 
       {/* Persistent Quick Voice Status & 1-Click Stop Strip (Always accessible regardless of active tab or Pixel chat) */}
-      <div className="px-3.5 py-2.5 bg-slate-50/90 border-b border-slate-200/80 space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+      <div className="px-3.5 py-2.5 bg-slate-50/90 border-b border-slate-200/80">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2 min-w-0 w-full sm:w-auto">
             <span
               className={`w-2.5 h-2.5 rounded-full shrink-0 ${voiceVisualStatus.dotClass}`}
             />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="text-[11px] font-bold text-slate-900 truncate">
                 Голос: {voiceVisualStatus.label}
               </div>
@@ -1146,7 +1146,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-start sm:justify-end">
             {/* Quick Mic Toggle */}
             <button
               type="button"
@@ -1156,7 +1156,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   ? 'Выключить микрофон'
                   : 'Включить микрофон'
               }
-              className={`p-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+              className={`p-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer shrink-0 ${
                 isMicActivelyCapturing
                   ? 'bg-emerald-600 text-white border-emerald-700'
                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
@@ -1175,7 +1175,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                 type="button"
                 onClick={handleStopPlayback}
                 title="Остановить текущее воспроизведение"
-                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-rose-600 text-white text-[10px] font-bold hover:bg-rose-700 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-rose-600 text-white text-[10px] font-bold hover:bg-rose-700 transition-colors cursor-pointer shrink-0"
               >
                 <Square className="w-3 h-3 fill-current" />
                 <span>Стоп</span>
@@ -1191,25 +1191,27 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   ? 'Выключить осеннюю тему (чистый фон)'
                   : 'Включить осеннюю тему (гирлянда, листопад, чай)'
               }
-              className={`inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
+              className={`inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-bold transition-colors cursor-pointer shrink-0 ${
                 isAutumnTheme
                   ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
                   : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
               }`}
             >
               <span>🍂</span>
-              <span className="hidden sm:inline">Тема</span>
+              <span className="inline">Тема</span>
             </button>
 
             {/* Quick Background Autumn Music Player Control (Play/Pause + Volume) */}
-            <BackgroundMusicButton />
+            <div className="shrink-0">
+              <BackgroundMusicButton />
+            </div>
 
             {/* Quick Master Disable All Voice */}
             <button
               type="button"
               onClick={() => void handleDisableAllVoiceActivity()}
               title="Отключить всю голосовую активность (микрофон, прослушивание, «Пиксель» и озвучку)"
-              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-900 hover:bg-rose-700 text-white text-[10px] font-semibold transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-900 hover:bg-rose-700 text-white text-[10px] font-semibold transition-colors cursor-pointer shrink-0"
             >
               <PowerOff className="w-3 h-3 text-[#FFD700]" />
               <span>Выкл. всё</span>
@@ -3674,7 +3676,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
               ) : (
                 <p className="text-[11px] text-slate-600 leading-relaxed">
                   Основная модель:{' '}
-                  <strong>{geminiStatus?.model || 'gemini-3.8-flash'}</strong>.
+                  <strong>{geminiStatus?.model || 'gemini-3.1-flash'}</strong>.
                   {activeSchool === 'all' ? (
                     <> В запрос передаются разделы Баз знаний обеих школ и явно выбранные вами документы.</>
                   ) : (
