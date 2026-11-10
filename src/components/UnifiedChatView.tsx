@@ -88,6 +88,8 @@ import {
   PROVIDER_SHORT_LABELS_RU,
 } from '../providers/aiProviderManager';
 import { MarkdownMessageContent } from './MarkdownMessageContent';
+import { useAutumnTheme } from '../utils/autumnTheme';
+import { CozyTeaCup } from './autumn/CozyTeaCup';
 
 export interface SendMessageContextOptions {
   includeKnowledgeBase: boolean;
@@ -388,6 +390,8 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   const [playbackState, setPlaybackState] = useState<MessagePlaybackState>(() =>
     voiceManager.getPlaybackState()
   );
+
+  const { isAutumnTheme } = useAutumnTheme();
 
   useEffect(() => {
     return voiceManager.onPlaybackStateChange((st) => {
@@ -1383,11 +1387,20 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
           onDrop={handleChatDrop}
         >
           {/* 2. Messages Viewport (ChatGPT-Style Centered Stream) */}
-          <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 bg-[#F9FAFB]/60 min-h-0">
+          <div
+            className={`flex-1 overflow-y-auto px-4 sm:px-6 py-4 min-h-0 transition-colors duration-500 ${
+              isAutumnTheme ? 'autumn-subtle-pattern' : 'bg-[#F9FAFB]/60'
+            }`}
+          >
         <div className="max-w-3xl mx-auto">
           {currentMessages.length === 0 ? (
             /* Warm Personal Welcome Screen for Anna with Expressive Typographic School Badge */
             <div className="py-6 sm:py-10 flex flex-col items-center text-center space-y-6">
+              {isAutumnTheme && (
+                <div className="mb-0">
+                  <CozyTeaCup />
+                </div>
+              )}
               <div className="flex flex-col items-center space-y-3.5 max-w-xl">
                 <div className="flex flex-wrap items-center justify-center gap-2">
                   <span

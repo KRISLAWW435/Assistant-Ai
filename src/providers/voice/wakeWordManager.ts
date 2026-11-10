@@ -146,7 +146,7 @@ export class WakeWordManager {
   public init(callbacks: WakeWordCallbacks): void {
     this.callbacks = callbacks;
     const settings = voiceManager.getSettings();
-    this.userEnabled = settings.wakeWordEnabled ?? true;
+    this.userEnabled = Boolean(settings.wakeWordEnabled);
     this.sensitivity = settings.wakeWordSensitivity || 'normal';
 
     if (!this.isSupported()) {
@@ -204,6 +204,13 @@ export class WakeWordManager {
     this.userEnabled = false;
     this.stopInternalListening(false);
     this.updateState('mic_muted');
+  }
+
+  public clearError(): void {
+    this.consecutiveNetworkErrors = 0;
+    if (this.state === 'error' || this.state === 'permission_denied') {
+      this.updateState('mic_muted');
+    }
   }
 
   public requestStandbyRestart(reason = 'Пользовательский перезапуск'): void {
@@ -447,6 +454,7 @@ export class WakeWordManager {
         if (errType === 'not-allowed' || errType === 'service-not-allowed') {
           this.isRecognitionActive = false;
           this.isPermissionGranted = false;
+          this.userEnabled = false;
           voiceDiagnosticManager.log(
             'warn',
             'permission',

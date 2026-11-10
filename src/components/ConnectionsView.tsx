@@ -97,6 +97,7 @@ import {
   AnnaMemoryItem,
   AnnaMemoryStatus,
 } from '../types/annaMemory';
+import { useAutumnTheme } from '../utils/autumnTheme';
 
 interface ConnectionsViewProps {
   activeSchool: SchoolId;
@@ -199,6 +200,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   onCheckImageProviders,
 }) => {
   const [activeTab, setActiveTab] = useState<ConnectionsSubTab>('providers');
+  const { isAutumnTheme, toggleAutumnTheme, triggerLeafBurst } = useAutumnTheme();
 
   // Core Data
   const [profiles, setProfiles] = useState<AIConnectionProfile[]>([]);
@@ -1336,12 +1338,51 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               </p>
             </div>
 
-            <div className="flex items-center gap-2.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => toggleAutumnTheme()}
+                className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold border transition shadow-2xs cursor-pointer ${
+                  isAutumnTheme
+                    ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                }`}
+                title={
+                  isAutumnTheme
+                    ? 'Отключить осеннюю тему и вернуть стандартный фон'
+                    : 'Включить уютную осеннюю тему с гирляндой, листопадами и парящим паром чая'
+                }
+              >
+                <span>Осенняя тема 🍂</span>
+                <span
+                  className={`inline-block w-8 h-4.5 rounded-full p-0.5 transition-colors relative ${
+                    isAutumnTheme ? 'bg-amber-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`block w-3.5 h-3.5 rounded-full bg-white transition-transform ${
+                      isAutumnTheme ? 'translate-x-3.5' : 'translate-x-0'
+                    }`}
+                  />
+                </span>
+              </button>
+
+              {isAutumnTheme && (
+                <button
+                  type="button"
+                  onClick={() => triggerLeafBurst()}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 transition cursor-pointer"
+                  title="Запустить тест осеннего листопада (20 падающих листьев)"
+                >
+                  <span>Запустить листопад 🍁</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={handleTestAllConnections}
                 disabled={isTestingAll || isLoading}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60 transition shadow-sm"
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60 transition shadow-sm cursor-pointer"
               >
                 {isTestingAll ? (
                   <Loader2 className="w-4 h-4 animate-spin text-white" />

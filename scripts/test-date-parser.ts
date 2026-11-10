@@ -159,7 +159,8 @@ console.log('--- ТЕСТ СКВОЗНОЙ КОМАНДЫ И ДИАЛОГА СО
 const cmd1 = parseAndExecuteTaskCommand(
   'Пиксель, добавь задачу на 4 ноября в 15:00 подготовить отчёт по школам',
   'kiberone',
-  []
+  [],
+  todayIso
 );
 console.log('Команда: «Пиксель, добавь задачу на 4 ноября в 15:00 подготовить отчёт по школам»');
 console.log(`- Создана ли задача сразу в БД: ${cmd1?.createdTask ? 'ДА (ОШИБКА)' : 'НЕТ (ВЕРНО: ожидает уточнения и подтверждения)'}`);
@@ -269,7 +270,7 @@ if (
 }
 
 // Тест противоречивых дат
-const cmd2 = parseAndExecuteTaskCommand('Пиксель, добавь задачу на сегодня, на среду обновить прайс', 'kiberone', []);
+const cmd2 = parseAndExecuteTaskCommand('Пиксель, добавь задачу на сегодня, на среду обновить прайс', 'kiberone', [], todayIso);
 console.log('Команда: «Пиксель, добавь задачу на сегодня, на среду обновить прайс»');
 console.log(`- Шаг черновика: ${cmd2?.personalTaskDraft?.step}`);
 console.log(`- ambiguityPrompt в ответе:`, cmd2?.responseText.includes('разных дат') || cmd2?.responseText.includes('Уточните'));

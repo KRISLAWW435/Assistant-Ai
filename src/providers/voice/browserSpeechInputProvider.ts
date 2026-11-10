@@ -111,6 +111,10 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
    * Diagnostic permission check triggered ONLY when the user clicks the microphone button.
    * If getUserMedia succeeds, the track is stopped immediately to release the hardware.
    */
+  /**
+   * Diagnostic permission check triggered when user activates speech input.
+   * Uses non-intrusive Permissions API query where supported without prematurely capturing/stopping tracks.
+   */
   private async checkMicrophonePermissionDiagnostic(): Promise<SpeechInputError | null> {
     if (typeof window === 'undefined') return null;
 
@@ -123,77 +127,26 @@ export class BrowserSpeechInputProvider implements ISpeechInputProvider {
       };
     }
 
-    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-      return null;
-    }
-
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Stop tracks immediately after diagnostic check to release hardware
-      stream.getTracks().forEach((track) => {
-        try {
-          track.stop();
-        } catch {
-          // ignore track close error
+      if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+        const perm = await navigator.permissions.query({
+          name: 'microphone' as PermissionName,
+        });
+        if (perm.state === 'denied') {
+          return {
+            code: 'not-allowed',
+            technicalErrorName: 'PermissionDenied',
+            message:
+              'Доступ к микрофону заблокирован в браузере. Нажмите на значок замка/настроек в адресной строке и разрешите микрофон для этого сайта.',
+            isPermissionDenied: true,
+          };
         }
-      });
-      return null;
-    } catch (err: unknown) {
-      const errorObj = err as Error;
-      const errorName = errorObj.name || '';
-      const rawMsg = errorObj.message || '';
-
-      if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
-        return {
-          code: 'not-allowed',
-          technicalErrorName: errorName,
-          message:
-            'Доступ к микрофону заблокирован в браузере (NotAllowedError). Нажмите на значок настроек/замка в адресной строке и разрешите микрофон для этого сайта.',
-          isPermissionDenied: true,
-        };
       }
-
-      if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError') {
-        return {
-          code: 'not-found',
-          technicalErrorName: errorName,
-          message:
-            'Микрофон не обнаружен (NotFoundError). Проверьте подключение аудиоустройства или настройки входа в операционной системе.',
-        };
-      }
-
-      if (errorName === 'NotReadableError' || errorName === 'TrackStartError') {
-        return {
-          code: 'not-readable',
-          technicalErrorName: errorName,
-          message:
-            'Микрофон занят другой программой или заблокирован на уровне ОС (NotReadableError). Закройте другие приложения, использующие микрофон.',
-        };
-      }
-
-      if (errorName === 'SecurityError') {
-        return {
-          code: 'security-error',
-          technicalErrorName: errorName,
-          message:
-            'Доступ к микрофону заблокирован политикой безопасности iframe или браузера (SecurityError / Permissions Policy).',
-        };
-      }
-
-      if (errorName === 'AbortError') {
-        return {
-          code: 'aborted',
-          technicalErrorName: errorName,
-          message: 'Запрос на доступ к микрофону был прерван (AbortError).',
-        };
-      }
-
-      return {
-        code: 'unknown',
-        technicalErrorName: errorName,
-        message: `Ошибка доступа к микрофону (${errorName || 'Unknown'}): ${rawMsg}`,
-      };
+    } catch {
+      // Permissions query for 'microphone' might not be supported in some browser engines; proceed to start directly
     }
+
+    return null;
   }
 
   public async start(options?: SpeechInputOptions): Promise<void> {

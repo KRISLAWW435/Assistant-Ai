@@ -57,9 +57,9 @@ export interface CoordinatorContextResolvers {
 }
 
 export class PixelVoiceCoordinator {
-  private mode: PixelVoiceMode = 'STANDBY';
+  private mode: PixelVoiceMode = 'OFF';
   private liveState: LiveVoiceState = 'idle';
-  private wakeWordState: WakeWordState = 'standby_listening';
+  private wakeWordState: WakeWordState = 'mic_muted';
   private isMicMuted = false;
   private isPaused = false;
   private activeSchool: SchoolId = 'kiberone';
@@ -78,7 +78,10 @@ export class PixelVoiceCoordinator {
   constructor() {
     // Check initial stored setting for wake word
     const settings = voiceManager.getSettings();
-    if (!settings.wakeWordEnabled) {
+    if (settings.wakeWordEnabled) {
+      this.mode = 'STANDBY';
+      this.wakeWordState = 'standby_listening';
+    } else {
       this.mode = 'OFF';
       this.wakeWordState = 'mic_muted';
     }
@@ -346,6 +349,8 @@ export class PixelVoiceCoordinator {
     if (this.liveState === 'error') {
       this.liveState = 'idle';
     }
+    wakeWordManager.clearError();
+    this.wakeWordState = wakeWordManager.getState();
     this.notifyListeners();
   }
 

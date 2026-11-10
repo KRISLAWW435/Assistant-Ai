@@ -1886,12 +1886,13 @@ export function processPersonalTaskDraftInput(
 export function parseAndExecuteTaskCommand(
   userText: string,
   activeSchool: SchoolId,
-  existingTasks: CompanionTaskRecord[]
+  existingTasks: CompanionTaskRecord[],
+  todayIsoOverride?: string
 ): TaskCommandExecutionResult | null {
   const trimmed = userText.trim();
   const lower = trimmed.toLowerCase();
   const syzranNow = getSyzranNow();
-  const todayIso = syzranNow.isoDate;
+  const todayIso = todayIsoOverride || syzranNow.isoDate;
   const tomorrowIso = addDaysToIsoDate(todayIso, 1);
 
   if (SPECIALIST_DELEGATION_PATTERN.test(trimmed)) {

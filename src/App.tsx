@@ -119,6 +119,8 @@ import {
   extractAutoTaskFromConversation,
   parseAndExecuteTaskCommand,
 } from './utils/pixelTaskManagerEngine';
+import { useAutumnTheme } from './utils/autumnTheme';
+import { AutumnLeafFall } from './components/autumn/AutumnLeafFall';
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'kiber_renderia_sidebar_collapsed';
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'kiber_renderia_right_panel_collapsed';
@@ -276,6 +278,8 @@ interface StagedChatFileModalState {
 }
 
 export default function App() {
+  const { isAutumnTheme } = useAutumnTheme();
+
   // Open directly on the Overview dashboard ('home')
   const [activeSection, setActiveSection] = useState<NavSection>('home');
   const [activeSchool, setActiveSchool] = useState<SchoolId>(() =>
@@ -3660,12 +3664,16 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen flex bg-[#F9FAFB] text-slate-900 ${
+      className={`min-h-screen flex text-slate-900 transition-colors duration-500 ${
+        isAutumnTheme ? 'autumn-subtle-pattern' : 'bg-[#F9FAFB]'
+      } ${
         isAgentModeSection(activeSection)
           ? 'h-screen max-h-screen overflow-hidden'
           : ''
       }`}
     >
+      {/* Periodic Autumn Leaf Burst Component (pointer-events: none) */}
+      <AutumnLeafFall enabled={isAutumnTheme} />
       {/* 1. LEFT PANEL: Navigation, Specialists, Dialogue History, App Sections */}
       <Sidebar
         activeSection={activeSection}

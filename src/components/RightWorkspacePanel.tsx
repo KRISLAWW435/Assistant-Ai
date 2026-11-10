@@ -82,6 +82,7 @@ import {
   PixelVoiceSettings,
   SpeechInputStatus,
 } from '../types/voice';
+import { useAutumnTheme } from '../utils/autumnTheme';
 
 interface RightWorkspacePanelProps {
   collapsed: boolean;
@@ -221,6 +222,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
   onDeleteDocument,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const { isAutumnTheme, toggleAutumnTheme } = useAutumnTheme();
   const [searchScope, setSearchScope] = useState<'local' | 'global'>('local');
   const [attachmentPendingDelete, setAttachmentPendingDelete] =
     useState<ChatAttachment | null>(null);
@@ -475,96 +477,112 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
         ? 'Ошибка захвата микрофона или распознавания речи.'
         : null);
 
-  const hasMicError =
-    Boolean(micErrorMessage) ||
-    coordinatorSnap.liveState === 'error' ||
-    coordinatorSnap.wakeWordState === 'permission_denied' ||
-    coordinatorSnap.wakeWordState === 'error' ||
-    speechInputStatus === 'error';
-
   const isTtsEnabled = voiceSettings.ttsEnabled !== false;
   const isWakeWordEnabled = Boolean(voiceSettings.wakeWordEnabled);
 
   const voiceVisualStatus: {
-    key: 'error' | 'playing' | 'listening' | 'enabled' | 'disabled';
+    key: 'idle' | 'connecting' | 'listening' | 'speaking' | 'error';
     label: string;
     sublabel: string;
     badgeClass: string;
     dotClass: string;
   } = useMemo(() => {
-    if (hasMicError) {
+    // 1. 'connecting' (Подключение) — желтый/оранжевый пульсирующий цвет, текст "Подключение к Gemini Live..."
+    if (
+      coordinatorSnap.liveState === 'connecting' ||
+      speechInputStatus === 'requesting_permission'
+    ) {
       return {
-        key: 'error',
-        label: 'Ошибка микрофона',
-        sublabel: micErrorMessage || 'Проверьте доступ к микрофону в браузере',
-        badgeClass: 'bg-rose-50 text-rose-900 border-rose-300',
-        dotClass: 'bg-rose-500 animate-pulse',
+        key: 'connecting',
+        label: 'Подключение к Gemini Live...',
+        sublabel: 'Инициализация микрофона и прямого аудиопотока 16 кГц',
+        badgeClass: 'bg-amber-50 text-amber-950 border-amber-300',
+        dotClass: 'bg-amber-500 animate-pulse',
       };
     }
-    if (isPlayingAudio) {
+
+    // 2. 'speaking' (Говорит) — синий цвет, текст "Пиксель говорит..."
+    if (
+      coordinatorSnap.liveState === 'speaking' ||
+      playbackState.status === 'playing' ||
+      playbackState.status === 'loading'
+    ) {
       return {
-        key: 'playing',
-        label: 'Идёт воспроизведение',
+        key: 'speaking',
+        label: 'Пиксель говорит...',
         sublabel:
           coordinatorSnap.liveState === 'speaking'
-            ? 'Пиксель отвечает вслух (Live)'
-            : `Озвучивание ответа (${playbackState.voiceName || voiceSettings.selectedGeminiVoice || 'Aoede'})`,
-        badgeClass: 'bg-cyan-50 text-cyan-950 border-cyan-300',
-        dotClass: 'bg-cyan-500 animate-ping',
+            ? 'Прямой голосовой ответ Пикселя (Gemini Live)'
+            : playbackState.voiceName
+              ? `Озвучивание ответа (${playbackState.voiceName})`
+              : 'Озвучивание ответа специалиста',
+        badgeClass: 'bg-blue-50 text-blue-950 border-blue-300',
+        dotClass: 'bg-blue-500 animate-pulse',
       };
     }
-    if (isMicActivelyCapturing) {
+
+    // 3. 'listening' (Слушаю) — зеленый цвет, текст "Слушаю вас..."
+    if (
+      coordinatorSnap.liveState === 'listening' ||
+      coordinatorSnap.liveState === 'thinking' ||
+      isMicActivelyCapturing ||
+      isContinuousListeningActive
+    ) {
       return {
         key: 'listening',
-        label: 'Идёт прослушивание',
+        label: 'Слушаю вас...',
         sublabel:
           coordinatorSnap.mode === 'LIVE'
-            ? 'Активен голосовой диалог (микрофон включён)'
-            : 'Идёт запись голосового ввода в чат',
+            ? 'Активен прямой голосовой диалог (микрофон включён)'
+            : coordinatorSnap.mode === 'STANDBY'
+              ? 'Ожидание обращения «Пиксель» или голосовой команды'
+              : 'Идёт запись голосового ввода в чат',
         badgeClass: 'bg-emerald-50 text-emerald-950 border-emerald-300',
-        dotClass: 'bg-emerald-500 animate-ping',
-      };
-    }
-    if (isContinuousListeningActive) {
-      return {
-        key: 'listening',
-        label: 'Идёт прослушивание («Пиксель»)',
-        sublabel: 'Ожидание ключевого слова «Пиксель»',
-        badgeClass: 'bg-emerald-50/90 text-emerald-900 border-emerald-200',
         dotClass: 'bg-emerald-500 animate-pulse',
       };
     }
-    if (isTtsEnabled || isWakeWordEnabled) {
+
+    // 4. 'error' (Ошибка) — красный цвет, текст "Ошибка микрофона" (показывать ТОЛЬКО при реальном сбое или отказе в доступе)
+    const isRealError =
+      (coordinatorSnap.mode === 'LIVE' && coordinatorSnap.liveState === 'error') ||
+      speechInputStatus === 'error' ||
+      coordinatorSnap.wakeWordState === 'permission_denied' ||
+      (coordinatorSnap.mode === 'STANDBY' && coordinatorSnap.wakeWordState === 'error');
+
+    if (isRealError) {
       return {
-        key: 'enabled',
-        label: 'Включено (микрофон выкл.)',
-        sublabel: isTtsEnabled
-          ? 'Озвучивание ответов (TTS) доступно по кнопке'
-          : 'Готов к работе',
-        badgeClass: 'bg-slate-100 text-slate-800 border-slate-300',
-        dotClass: 'bg-[#00A8B5]',
+        key: 'error',
+        label: 'Ошибка микрофона',
+        sublabel: micErrorMessage || 'Проверьте доступ к микрофону в браузере или ОС',
+        badgeClass: 'bg-rose-50 text-rose-950 border-rose-300',
+        dotClass: 'bg-rose-500 animate-pulse',
       };
     }
+
+    // 5. 'idle' (Выключен) — серый цвет, текст "Голос выключен"
     return {
-      key: 'disabled',
-      label: 'Выключено',
-      sublabel: 'Микрофон, прослушивание и озвучка полностью отключены',
-      badgeClass: 'bg-slate-100 text-slate-500 border-slate-200',
+      key: 'idle',
+      label: 'Голос выключен',
+      sublabel: isTtsEnabled
+        ? 'Озвучивание ответов доступно. Нажмите на микрофон для разговора'
+        : 'Микрофон, прослушивание и озвучка полностью отключены',
+      badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
       dotClass: 'bg-slate-400',
     };
   }, [
-    hasMicError,
-    micErrorMessage,
-    isPlayingAudio,
     coordinatorSnap.liveState,
     coordinatorSnap.mode,
-    playbackState.voiceName,
-    voiceSettings.selectedGeminiVoice,
+    coordinatorSnap.wakeWordState,
+    speechInputStatus,
     isMicActivelyCapturing,
     isContinuousListeningActive,
+    playbackState.status,
+    playbackState.voiceName,
+    micErrorMessage,
     isTtsEnabled,
-    isWakeWordEnabled,
   ]);
+
+  const hasMicError = voiceVisualStatus.key === 'error';
 
   // Voice Control Handlers
   const handleToggleMicrophone = async () => {
@@ -1037,7 +1055,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   }`}
                 >
                   <Icon className="w-4 h-4" />
-                  {tab.id === 'voice' && (isListeningAny || isPlayingAudio || hasMicError) && (
+                  {tab.id === 'voice' && voiceVisualStatus.key !== 'idle' && (
                     <span
                       className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-white ${voiceVisualStatus.dotClass}`}
                     />
@@ -1160,6 +1178,25 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
               </button>
             )}
 
+            {/* Quick Autumn Theme Toggle */}
+            <button
+              type="button"
+              onClick={() => toggleAutumnTheme()}
+              title={
+                isAutumnTheme
+                  ? 'Выключить осеннюю тему (чистый фон)'
+                  : 'Включить осеннюю тему (гирлянда, листопад, чай)'
+              }
+              className={`inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
+                isAutumnTheme
+                  ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
+                  : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <span>🍂</span>
+              <span className="hidden sm:inline">Тема</span>
+            </button>
+
             {/* Quick Master Disable All Voice */}
             <button
               type="button"
@@ -1231,15 +1268,15 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
                   </span>
                 </div>
                 <span className="text-[10px] font-mono-tabular uppercase px-2 py-0.5 rounded-md bg-white/80 text-slate-800 font-semibold border border-black/5">
-                  {voiceVisualStatus.key === 'listening'
-                    ? 'Слушает'
-                    : voiceVisualStatus.key === 'playing'
+                  {voiceVisualStatus.key === 'connecting'
+                    ? 'Подключение'
+                    : voiceVisualStatus.key === 'speaking'
                       ? 'Говорит'
-                      : voiceVisualStatus.key === 'error'
-                        ? 'Ошибка'
-                        : voiceVisualStatus.key === 'enabled'
-                          ? 'Включено'
-                          : 'Выключено'}
+                      : voiceVisualStatus.key === 'listening'
+                        ? 'Слушает'
+                        : voiceVisualStatus.key === 'error'
+                          ? 'Ошибка'
+                          : 'Выключен'}
                 </span>
               </div>
               <p className="text-[11px] leading-relaxed opacity-90">

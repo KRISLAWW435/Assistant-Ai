@@ -39,6 +39,8 @@ import {
   formatSyzranIsoDateRu,
   getSyzranNow,
 } from '../utils/syzranTime';
+import { useAutumnTheme } from '../utils/autumnTheme';
+import { AutumnGarland } from './autumn/AutumnGarland';
 
 interface HomeViewProps {
   activeSchool: SchoolId;
@@ -231,13 +233,26 @@ export const HomeView: React.FC<HomeViewProps> = ({
     return getDynamicGreeting(syzranTime);
   }, [syzranTime]);
 
+  const { isAutumnTheme } = useAutumnTheme();
+
   return (
-    <div className="min-h-full bg-stone-50/50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-8 pb-28">
+    <div className={`min-h-full transition-colors duration-500 ${isAutumnTheme ? 'autumn-subtle-pattern' : 'bg-stone-50/50'}`}>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6 sm:space-y-8 pb-28">
+        {/* Декоративная осенняя гирлянда над приветствием */}
+        {isAutumnTheme && (
+          <div className="pt-0 -mb-2 sm:-mb-3">
+            <AutumnGarland />
+          </div>
+        )}
+
         {/* ====================================================================
             1. ВЕРХНИЙ БЛОК: Приветствие Анны + Компонент «Письмо дня»
            ==================================================================== */}
-        <section className="glass-panel rounded-3xl p-6 sm:p-8 border border-slate-200/90 shadow-sm relative overflow-hidden bg-gradient-to-br from-white via-slate-50/70 to-emerald-50/20 lg:min-h-[400px] flex items-center">
+        <section className={`glass-panel rounded-3xl p-6 sm:p-8 border shadow-sm relative overflow-hidden transition-all duration-500 lg:min-h-[400px] flex items-center ${
+          isAutumnTheme
+            ? 'border-amber-200/80 bg-gradient-to-br from-white via-amber-50/40 to-orange-50/30'
+            : 'border-slate-200/90 bg-gradient-to-br from-white via-slate-50/70 to-emerald-50/20'
+        }`}>
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center w-full">
             {/* Левая часть: Крупное персональное приветствие */}
             <div className="lg:col-span-7 space-y-3.5">

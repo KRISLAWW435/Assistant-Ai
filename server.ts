@@ -1419,11 +1419,9 @@ function classifyProviderError(
 
 function getThinkingConfigForGeminiModel(modelName: string): Record<string, unknown> | undefined {
   const norm = (modelName || '').toLowerCase();
-  // gemini-3.1-flash-lite defaults to MINIMAL thinking
   if (norm.includes('3.1-flash-lite') || norm.includes('flash-lite')) {
     return { thinkingLevel: ThinkingLevel.MINIMAL };
   }
-  // gemini-3.1-flash and gemini-flash-latest support thinkingLevel LOW or MEDIUM
   if (norm.includes('3.1-flash') || norm.includes('flash-latest') || norm.startsWith('gemini-3')) {
     return { thinkingLevel: ThinkingLevel.LOW };
   }
@@ -1431,15 +1429,18 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
 }
 
 const GEMINI_MODEL_CASCADE: string[] = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
   'gemini-3.1-flash',
   'gemini-3.1-flash-lite',
   'gemini-flash-latest',
 ];
 
-let lastHealthyGeminiModel: string = 'gemini-3.1-flash';
+let lastHealthyGeminiModel: string = 'gemini-2.5-flash';
 
 /**
- * Provider 1: Google Gemini Free execution with fast multi-model cascade on 503/429/404/Timeout
+ * Provider 1: Google Gemini Free execution with fast multi-model cascade on 503/429/404/Timeout/Errors
  */
 async function executeGeminiGeneration(params: {
   systemInstruction: string;
@@ -1458,11 +1459,15 @@ async function executeGeminiGeneration(params: {
 
   const ai = getGenAIClient();
 
-  // Primary model: gemini-3.1-flash, fallback to gemini-3.1-flash-lite and gemini-flash-latest
-  const hasFilesOrImages = Boolean(params.hasFiles || params.hasImages);
-  const candidateModels = hasFilesOrImages
-    ? ['gemini-3.1-flash-lite', 'gemini-3.1-flash', 'gemini-flash-latest']
-    : ['gemini-3.1-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  // Primary model cascade starting with standard Google Gemini production models
+  const candidateModels = [
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-3.1-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+  ];
 
   let lastErr: unknown = null;
 
@@ -1473,76 +1478,70 @@ async function executeGeminiGeneration(params: {
 
     const candidateModel = candidateModels[idx];
     const thinkingCfg = getThinkingConfigForGeminiModel(candidateModel);
-    const config: Record<string, unknown> = {
+    
+    // Configurations to try: first with thinkingConfig if present, then clean fallback without thinkingConfig
+    const configsToTry: Array<Record<string, unknown>> = [];
+    if (thinkingCfg) {
+      configsToTry.push({
+        systemInstruction: params.systemInstruction,
+        abortSignal: params.signal,
+        thinkingConfig: thinkingCfg,
+      });
+    }
+    configsToTry.push({
       systemInstruction: params.systemInstruction,
       abortSignal: params.signal,
-    };
-    if (thinkingCfg) {
-      config.thinkingConfig = thinkingCfg;
+    });
+
+    for (const config of configsToTry) {
+      if (params.signal.aborted) break;
+
+      try {
+        const timeoutMs = 45000; // 45 seconds per model attempt
+        let timer: NodeJS.Timeout | null = null;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(
+                `GEMINI_TIMEOUT: Модель ${candidateModel} не ответила за ${timeoutMs / 1000} секунд.`
+              )
+            );
+          }, timeoutMs);
+        });
+
+        const callPromise = ai.models.generateContent({
+          model: candidateModel,
+          contents: params.messages,
+          config,
+        });
+
+        const response = await Promise.race([callPromise, timeoutPromise]);
+        if (timer) clearTimeout(timer);
+
+        const fullText = (response.text || '').trim();
+        if (!fullText) {
+          throw new Error('EMPTY_MODEL_RESPONSE');
+        }
+
+        lastHealthyGeminiModel = candidateModel;
+        return { text: fullText, model: candidateModel };
+      } catch (err) {
+        lastErr = err;
+        const errText =
+          err instanceof Error
+            ? err.message
+            : String(err || '');
+        console.warn(
+          `[Gemini Attempt Failed] Model: ${candidateModel}, HasThinkingConfig: ${Boolean(config.thinkingConfig)}, Error: ${errText.slice(0, 120)}`
+        );
+      }
     }
 
-    try {
-      // 60-second hard timeout for Gemini model response
-      const timeoutMs = 60000;
-      let timer: NodeJS.Timeout | null = null;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(
-            new Error(
-              `GEMINI_TIMEOUT: Модель ${candidateModel} не ответила за ${timeoutMs / 1000} секунд.`
-            )
-          );
-        }, timeoutMs);
-      });
-
-      const callPromise = ai.models.generateContent({
-        model: candidateModel,
-        contents: params.messages,
-        config,
-      });
-
-      const response = await Promise.race([callPromise, timeoutPromise]);
-      if (timer) clearTimeout(timer);
-
-      const fullText = (response.text || '').trim();
-      if (!fullText) {
-        throw new Error('EMPTY_MODEL_RESPONSE');
-      }
-      if (params.hasImages && fullText.length < 20) {
-        throw new Error('GEMINI_IMAGE_PARTIAL_RESPONSE');
-      }
-
-      lastHealthyGeminiModel = candidateModel;
-      return { text: fullText, model: candidateModel };
-    } catch (err) {
-      lastErr = err;
-      const errText =
-        err instanceof Error
-          ? err.message.toLowerCase()
-          : String(err || '').toLowerCase();
-
-      const shouldTryNextModel =
-        errText.includes('timeout') ||
-        errText.includes('gemini_timeout') ||
-        errText.includes('429') ||
-        errText.includes('resource_exhausted') ||
-        errText.includes('quota') ||
-        errText.includes('500') ||
-        errText.includes('502') ||
-        errText.includes('503') ||
-        errText.includes('504') ||
-        errText.includes('unavailable') ||
-        errText.includes('high demand') ||
-        errText.includes('overloaded') ||
-        errText.includes('404') ||
-        errText.includes('not_found') ||
-        errText.includes('no longer available') ||
-        errText.includes('empty_model_response');
-
-      if (!params.signal.aborted && shouldTryNextModel && idx < candidateModels.length - 1) {
-        continue;
-      }
-      throw err;
+    if (!params.signal.aborted && idx < candidateModels.length - 1) {
+      console.log(
+        `[Gemini Cascade] Model ${candidateModel} failed. Transitioning to fallback ${candidateModels[idx + 1]}...`
+      );
+      continue;
     }
   }
 
@@ -1834,7 +1833,19 @@ function writeSseEvent(
 export async function startServer(
   options: AssistantServerOptions = {}
 ): Promise<RunningAssistantServer> {
-  const PORT = options.port ?? Number(process.env.PORT || 3000);
+  // In AI Studio / Cloud Run, process.env.PORT is often 8080 (the Nginx reverse proxy front-end).
+  // The Node application must always listen on port 3000 unless explicitly specified via options.port
+  // or a non-8080 custom port.
+  let resolvedPort = options.port;
+  if (!resolvedPort) {
+    const envPort = process.env.APP_PORT
+      ? Number(process.env.APP_PORT)
+      : process.env.PORT
+        ? Number(process.env.PORT)
+        : 3000;
+    resolvedPort = envPort === 8080 || isNaN(envPort) ? 3000 : envPort;
+  }
+  const PORT = resolvedPort;
   const HOST = options.host ?? '0.0.0.0';
   const customDistPath = options.distPath;
   const app = express();
@@ -3541,7 +3552,7 @@ export async function startServer(
     const isConfigured = isGeminiApiKeyConfigured();
     res.json({
       configured: isConfigured,
-      model: 'gemini-2.5-flash-live',
+      model: 'gemini-3.8-live',
       defaultVoice: 'Kore',
       availableVoices: [
         { id: 'Kore', name: 'Kore', gender: 'female', recommended: true },
@@ -3558,7 +3569,7 @@ export async function startServer(
       supported: isConfigured,
       pricingTier: 'standard_free_limits',
       pricingNotice:
-        'Модель gemini-2.5-flash-live работает в рамках квот Gemini API. Платные вызовы без явного подтверждения не производятся.',
+        'Модель gemini-3.8-live работает в рамках квот Gemini API. Платные вызовы без явного подтверждения не производятся.',
     });
   });
 
@@ -3566,7 +3577,10 @@ export async function startServer(
   if (process.env.NODE_ENV !== 'production' && !options.isElectronProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -3580,6 +3594,10 @@ export async function startServer(
 
   const httpServer = http.createServer(app);
   const wss = new WebSocketServer({ server: httpServer, path: '/api/live' });
+
+  wss.on('error', (wsServerErr) => {
+    console.warn('[Live WebSocketServer Warning]', wsServerErr);
+  });
 
   wss.on('connection', (clientWs: WebSocket) => {
     let liveSession: any = null;
@@ -3623,7 +3641,7 @@ export async function startServer(
           const schoolId: SchoolId =
             msg.schoolId === 'renderia' ? 'renderia' : 'kiberone';
           const pixelContext = msg.pixelContext as IncomingPixelContext | undefined;
-          const liveModel = 'gemini-2.5-flash-live';
+          const liveModel = 'gemini-3.8-live';
 
           const systemInstruction = buildSystemInstruction({
             schoolId,
@@ -3813,8 +3831,8 @@ export async function startServer(
   });
 
   return new Promise<RunningAssistantServer>((resolve, reject) => {
-    httpServer.once('error', (err) => {
-      reject(err);
+    httpServer.on('error', (err: unknown) => {
+      console.warn('[HTTP Server Error]', err);
     });
 
     httpServer.listen(PORT, HOST, () => {
@@ -3843,6 +3861,33 @@ export async function startServer(
   });
 }
 
+function parseCliArgs(): AssistantServerOptions {
+  const options: AssistantServerOptions = {};
+  for (let i = 2; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if ((arg === '--port' || arg === '-p') && process.argv[i + 1]) {
+      const p = parseInt(process.argv[++i], 10);
+      if (!isNaN(p)) options.port = p;
+    } else if (arg.startsWith('--port=')) {
+      const p = parseInt(arg.split('=')[1], 10);
+      if (!isNaN(p)) options.port = p;
+    } else if ((arg === '--host' || arg === '-h') && process.argv[i + 1]) {
+      options.host = process.argv[++i];
+    } else if (arg.startsWith('--host=')) {
+      options.host = arg.split('=')[1];
+    }
+  }
+  return options;
+}
+
+process.on('uncaughtException', (err) => {
+  console.warn('[Server uncaughtException]', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.warn('[Server unhandledRejection]', reason);
+});
+
 const isDirectExecution =
   typeof process !== 'undefined' &&
   !process.versions?.electron &&
@@ -3852,7 +3897,7 @@ const isDirectExecution =
   );
 
 if (isDirectExecution) {
-  startServer().catch((err) => {
+  startServer(parseCliArgs()).catch((err) => {
     console.error('[Server Startup Fatal Error]', err);
   });
 }

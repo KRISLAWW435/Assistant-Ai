@@ -146,36 +146,48 @@ export class GeminiLiveClient {
 
     this.updateState('connecting', { detail: 'Запрос доступа к микрофону...' });
 
-    // 1. Request microphone access
+    // 1. Request microphone access with progressive fallback
     try {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
       });
-    } catch (err: unknown) {
-      const e =
-        err instanceof Error
-          ? err
-          : new Error('Не удалось получить доступ к микрофону');
-      this.updateState('error', { detail: e.message });
-      this.callbacks?.onError?.(e);
-      throw e;
+    } catch {
+      try {
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err: unknown) {
+        const e =
+          err instanceof Error
+            ? err
+            : new Error('Не удалось получить доступ к микрофону');
+        this.updateState('error', { detail: e.message });
+        this.callbacks?.onError?.(e);
+        throw e;
+      }
     }
 
-    // 2. Setup AudioContexts (16kHz for input capture, 24kHz for model playback)
+    // 2. Setup AudioContexts (16kHz preferred for input, 24kHz for model playback)
     try {
       const AudioCtxClass =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext })
           .webkitAudioContext;
 
-      this.inputAudioCtx = new AudioCtxClass({ sampleRate: 16000 });
-      this.outputAudioCtx = new AudioCtxClass({ sampleRate: 24000 });
+      try {
+        this.inputAudioCtx = new AudioCtxClass({ sampleRate: 16000 });
+      } catch {
+        this.inputAudioCtx = new AudioCtxClass();
+      }
+
+      try {
+        this.outputAudioCtx = new AudioCtxClass({ sampleRate: 24000 });
+      } catch {
+        this.outputAudioCtx = new AudioCtxClass();
+      }
 
       const analyser = this.outputAudioCtx.createAnalyser();
       analyser.fftSize = 512;
@@ -353,12 +365,17 @@ export class GeminiLiveClient {
     audioCtx: AudioContext
   ): void {
     const sourceNode = audioCtx.createMediaStreamSource(stream);
-    // ScriptProcessor buffer of 4096 samples at 16kHz is ~256ms chunk
+    // ScriptProcessor buffer of 4096 samples
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
     this.scriptProcessor = processor;
 
+    // Connect via muted gain to prevent acoustic feedback into speakers
+    const muteGain = audioCtx.createGain();
+    muteGain.gain.value = 0;
+
     sourceNode.connect(processor);
-    processor.connect(audioCtx.destination);
+    processor.connect(muteGain);
+    muteGain.connect(audioCtx.destination);
 
     processor.onaudioprocess = (e) => {
       if (this.isMuted || this.isPaused || this.state === 'connecting') return;
@@ -383,10 +400,24 @@ export class GeminiLiveClient {
         this.vadSilenceFrames++;
       }
 
+      // Resample to 16kHz if current AudioContext is operating at hardware rate (e.g., 44.1kHz or 48kHz)
+      let floatData = inputData;
+      const currentRate = audioCtx.sampleRate || 16000;
+      if (currentRate !== 16000 && currentRate > 0) {
+        const ratio = currentRate / 16000;
+        const newLength = Math.round(inputData.length / ratio);
+        const downsampled = new Float32Array(newLength);
+        for (let i = 0; i < newLength; i++) {
+          const originIndex = Math.floor(i * ratio);
+          downsampled[i] = inputData[originIndex] || 0;
+        }
+        floatData = downsampled;
+      }
+
       // Convert Float32Array to 16-bit linear PCM little-endian
-      const pcm16 = new Int16Array(inputData.length);
-      for (let i = 0; i < inputData.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputData[i]));
+      const pcm16 = new Int16Array(floatData.length);
+      for (let i = 0; i < floatData.length; i++) {
+        const s = Math.max(-1, Math.min(1, floatData[i]));
         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
 

@@ -25,6 +25,7 @@ import {
   resolveBrowserPitchForTimbre,
   voiceManager,
 } from '../providers/voice/voiceManager';
+import { useAutumnTheme } from '../utils/autumnTheme';
 
 interface PixelVoiceSettingsModalProps {
   isOpen: boolean;
@@ -38,6 +39,7 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
   const [settings, setSettings] = useState<PixelVoiceSettings>(() =>
     voiceManager.getSettings()
   );
+  const { isAutumnTheme, toggleAutumnTheme, triggerLeafBurst } = useAutumnTheme();
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [isGeneratingLive, setIsGeneratingLive] = useState(false);
   const [liveTestError, setLiveTestError] = useState<string | null>(null);
@@ -287,6 +289,57 @@ export const PixelVoiceSettingsModal: React.FC<PixelVoiceSettingsModalProps> = (
 
         {/* Body */}
         <div className="p-5 space-y-5 overflow-y-auto text-xs text-slate-700">
+          {/* Autumn Theme Card */}
+          <div className="p-3.5 rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/90 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <span className="font-bold text-amber-950 text-xs flex items-center gap-1.5">
+                  <span>Осенняя тема 🍂</span>
+                  <span className="text-[10px] font-semibold text-amber-800 bg-amber-200/60 px-2 py-0.5 rounded-full">
+                    Уютный режим
+                  </span>
+                </span>
+                <p className="text-[11px] text-amber-800/80 leading-relaxed mt-0.5">
+                  Активирует гирлянду на главной, лёгкую текстуру фона, чашечку чая в чате и редкий листопад раз в 5 минут.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => toggleAutumnTheme()}
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer shrink-0 ${
+                  isAutumnTheme
+                    ? 'bg-amber-600 text-white border-amber-700 hover:bg-amber-700'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                <span>{isAutumnTheme ? 'Включена' : 'Выключена'}</span>
+                <span
+                  className={`inline-block w-7 h-4 rounded-full p-0.5 transition-colors relative ${
+                    isAutumnTheme ? 'bg-amber-900' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`block w-3 h-3 rounded-full bg-white transition-transform ${
+                      isAutumnTheme ? 'translate-x-3' : 'translate-x-0'
+                    }`}
+                  />
+                </span>
+              </button>
+            </div>
+            {isAutumnTheme && (
+              <div className="pt-1 flex items-center justify-between text-[10px] text-amber-800 border-t border-amber-200/60">
+                <span>Хотите проверить анимацию листьев прямо сейчас?</span>
+                <button
+                  type="button"
+                  onClick={() => triggerLeafBurst()}
+                  className="font-semibold text-amber-900 underline hover:text-amber-950 cursor-pointer"
+                >
+                  Запустить листопад 🍁
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Unified On-Demand Policy Notice */}
           <div className="p-3 rounded-xl bg-cyan-50/70 border border-cyan-200/80 space-y-1">
             <div className="font-bold text-slate-900 flex items-center gap-1.5">
