@@ -1428,19 +1428,26 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
   return undefined;
 }
 
-const GEMINI_MODEL_CASCADE: string[] = [
+/**
+ * Strict Waterfall Fallback chain for Google Gemini models:
+ * 1. gemini-3.1-flash (основная)
+ * 2. gemini-2.5-flash
+ * 3. gemini-2.0-flash
+ * 4. gemini-1.5-flash
+ * And only if all of them are unavailable, waterfalls to OpenRouter (nvidia/nemotron-3.5-super-vl:free).
+ */
+export const GEMINI_WATERFALL_FALLBACK_MODELS = [
+  'gemini-3.1-flash',
   'gemini-2.5-flash',
   'gemini-2.0-flash',
   'gemini-1.5-flash',
-  'gemini-3.1-flash',
-  'gemini-3.1-flash-lite',
-  'gemini-flash-latest',
-];
+] as const;
 
-let lastHealthyGeminiModel: string = 'gemini-2.5-flash';
+let lastHealthyGeminiModel: string = 'gemini-3.1-flash';
 
 /**
- * Provider 1: Google Gemini Free execution with fast multi-model cascade on 503/429/404/Timeout/Errors
+ * Provider 1: Google Gemini Free execution with strict Waterfall Fallback
+ * (gemini-3.1-flash -> gemini-2.5-flash -> gemini-2.0-flash -> gemini-1.5-flash)
  */
 async function executeGeminiGeneration(params: {
   systemInstruction: string;
@@ -1459,14 +1466,12 @@ async function executeGeminiGeneration(params: {
 
   const ai = getGenAIClient();
 
-  // Primary model cascade starting with standard Google Gemini production models
+  // Strict Waterfall Fallback model cascade
   const candidateModels = [
+    'gemini-3.1-flash',
     'gemini-2.5-flash',
     'gemini-2.0-flash',
     'gemini-1.5-flash',
-    'gemini-3.1-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-flash-latest',
   ];
 
   let lastErr: unknown = null;
@@ -1539,7 +1544,7 @@ async function executeGeminiGeneration(params: {
 
     if (!params.signal.aborted && idx < candidateModels.length - 1) {
       console.log(
-        `[Gemini Cascade] Model ${candidateModel} failed. Transitioning to fallback ${candidateModels[idx + 1]}...`
+        `[Gemini Waterfall Fallback] Model ${candidateModel} failed. Falling back to ${candidateModels[idx + 1]}...`
       );
       continue;
     }
@@ -1888,9 +1893,49 @@ export async function startServer(
         providerHealthRegistry.gemini.status = 'not_configured';
         providerHealthRegistry.gemini.lastErrorReason =
           'Ключ GEMINI_API_KEY не задан на сервере.';
-      } else if (!isProviderInCooldown('gemini')) {
-        providerHealthRegistry.gemini.status = 'connected';
-        providerHealthRegistry.gemini.lastErrorReason = undefined;
+        const defaultProf = serverConnectionProfiles.find(
+          (p) => p.providerId === 'gemini' && p.isDefault
+        );
+        if (defaultProf) {
+          defaultProf.connectionStatus = 'not_configured';
+          defaultProf.lastError = 'Ключ GEMINI_API_KEY не задан на сервере.';
+        }
+      } else {
+        try {
+          const ai = getGenAIClient();
+          await ai.models.generateContent({
+            model: 'gemini-3.1-flash',
+            contents: 'ping',
+          });
+          providerHealthRegistry.gemini.status = 'connected';
+          providerHealthRegistry.gemini.lastErrorReason = undefined;
+          const defaultProf = serverConnectionProfiles.find(
+            (p) => p.providerId === 'gemini' && p.isDefault
+          );
+          if (defaultProf) {
+            defaultProf.connectionStatus = 'connected';
+            defaultProf.lastError = undefined;
+            defaultProf.lastCheckedAt = nowIso;
+          }
+        } catch (err) {
+          const classified = classifyProviderError('gemini', err);
+          providerHealthRegistry.gemini.status =
+            classified.healthStatus === 'quota_exceeded'
+              ? 'quota_exceeded'
+              : 'temporarily_unavailable';
+          providerHealthRegistry.gemini.lastErrorReason = classified.message;
+          const defaultProf = serverConnectionProfiles.find(
+            (p) => p.providerId === 'gemini' && p.isDefault
+          );
+          if (defaultProf) {
+            defaultProf.connectionStatus =
+              classified.healthStatus === 'quota_exceeded'
+                ? 'quota_exceeded'
+                : 'error';
+            defaultProf.lastError = classified.message;
+            defaultProf.lastCheckedAt = nowIso;
+          }
+        }
       }
     }
 
@@ -2098,6 +2143,8 @@ export async function startServer(
         profile.connectionStatus = 'connected';
         profile.lastCheckedAt = testedAt;
         profile.lastError = undefined;
+        providerHealthRegistry.gemini.status = 'connected';
+        providerHealthRegistry.gemini.lastErrorReason = undefined;
         return res.json({
           ok: true,
           status: 'connected',
@@ -2108,13 +2155,16 @@ export async function startServer(
       } catch (err) {
         const classified = classifyProviderError('gemini', err);
         profile.connectionStatus =
-          classified.healthStatus === 'connected'
-            ? 'connected'
-            : classified.healthStatus === 'quota_exceeded'
-              ? 'quota_exceeded'
-              : 'error';
+          classified.healthStatus === 'quota_exceeded'
+            ? 'quota_exceeded'
+            : 'error';
         profile.lastCheckedAt = testedAt;
         profile.lastError = classified.message;
+        providerHealthRegistry.gemini.status =
+          classified.healthStatus === 'quota_exceeded'
+            ? 'quota_exceeded'
+            : 'temporarily_unavailable';
+        providerHealthRegistry.gemini.lastErrorReason = classified.message;
         return res.json({
           ok: false,
           status: profile.connectionStatus,

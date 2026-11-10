@@ -9,6 +9,8 @@ import { PixelEyes } from './PixelEyes';
 import { PixelEffects } from './PixelEffects';
 import { pixelEmotionManager } from './PixelEmotionManager';
 import { voiceManager } from '../../providers/voice/voiceManager';
+import { useAutumnTheme } from '../../utils/autumnTheme';
+import { PixelAutumnBeanie } from '../autumn/PixelAutumnBeanie';
 
 const HEART_COLORS = [
   '#F472B6', // Pastel Pink
@@ -32,7 +34,11 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
   disabledTrackMouse = false,
   className = '',
   showAura = true,
+  showAutumnBeanie,
 }) => {
+  const { isAutumnTheme } = useAutumnTheme();
+  const shouldShowBeanie = showAutumnBeanie ?? isAutumnTheme;
+
   // Container DOM ref for tracking relative mouse position
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -397,7 +403,7 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
       ref={containerRef}
       onClick={handleClick}
       onMouseEnter={handleMouseEnter}
-      className={`relative inline-flex items-center justify-center select-none cursor-pointer transition-transform duration-200 ease-out bg-transparent ${className}`}
+      className={`relative inline-flex items-center justify-center select-none cursor-pointer transition-transform duration-200 ease-out bg-transparent overflow-visible ${className}`}
       style={{
         width: size,
         height: size,
@@ -418,7 +424,7 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
 
       {/* 2. 3D GLOWING TRANSLUCENT PEARLESCENT SPHERE */}
       <div
-        className={`w-full h-full relative will-change-transform transition-all duration-300 bg-transparent ${
+        className={`w-full h-full relative will-change-transform transition-all duration-300 bg-transparent overflow-visible ${
           activeEmotion === 'sleeping'
             ? 'pixel-sleep-body'
             : isListening
@@ -431,6 +437,16 @@ export const PixelCharacter: React.FC<PixelCharacterProps> = ({
           transform: transformStyle,
         }}
       >
+        {/* Cozy Autumn Beanie with Fluffy Pom-Pom */}
+        {shouldShowBeanie && (
+          <div
+            className="absolute -top-[37%] left-1/2 -translate-x-1/2 w-[104%] z-20 pointer-events-none overflow-visible select-none transition-all duration-300 ease-out"
+            aria-hidden="true"
+          >
+            <PixelAutumnBeanie className="w-full h-auto" />
+          </div>
+        )}
+
         <svg
           viewBox="0 0 100 100"
           className="w-full h-full overflow-visible"

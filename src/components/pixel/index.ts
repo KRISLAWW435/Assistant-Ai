@@ -8,3 +8,4 @@ export * from './PixelEmotionManager';
 export * from './PixelEyes';
 export * from './PixelEffects';
 export * from './PixelCharacter';
+export * from '../autumn/PixelAutumnBeanie';

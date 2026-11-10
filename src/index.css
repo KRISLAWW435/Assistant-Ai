@@ -216,7 +216,9 @@
   .pixel-sleep-z2,
   .autumn-leaf-anim,
   .autumn-steam-anim,
-  .garland-bulb-glow {
+  .autumn-pompom-anim,
+  .garland-lamp-swing,
+  .garland-bulb-pulse {
     animation: none !important;
     transition: none !important;
   }
@@ -228,45 +230,76 @@
 
 @keyframes autumnLeafFall {
   0% {
-    transform: translateY(-50px) translateX(0) rotate(0deg);
+    transform: translateY(-80px) translateX(0) rotate(0deg) rotateY(0deg);
     opacity: 0;
   }
-  15% {
-    opacity: 0.85;
+  6% {
+    opacity: var(--leaf-opacity, 0.5);
   }
-  85% {
-    opacity: 0.8;
+  16% {
+    transform: translateY(16vh) translateX(var(--sway-1, 28px)) rotate(55deg) rotateY(20deg);
+  }
+  32% {
+    transform: translateY(32vh) translateX(var(--sway-2, -26px)) rotate(130deg) rotateY(-30deg);
+  }
+  50% {
+    transform: translateY(50vh) translateX(var(--sway-3, 34px)) rotate(215deg) rotateY(35deg);
+  }
+  68% {
+    transform: translateY(68vh) translateX(var(--sway-4, -28px)) rotate(290deg) rotateY(-25deg);
+  }
+  84% {
+    transform: translateY(85vh) translateX(var(--sway-5, 26px)) rotate(365deg) rotateY(25deg);
+    opacity: var(--leaf-opacity, 0.5);
+  }
+  94% {
+    opacity: calc(var(--leaf-opacity, 0.5) * 0.7);
   }
   100% {
-    transform: translateY(105vh) translateX(var(--drift-x, 30px)) rotate(var(--rot-end, 360deg));
+    transform: translateY(112vh) translateX(var(--drift-x, 40px)) rotate(440deg) rotateY(0deg);
     opacity: 0;
   }
 }
 
 .autumn-leaf-anim {
   animation-name: autumnLeafFall;
-  animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  animation-timing-function: cubic-bezier(0.35, 0, 0.25, 1);
   animation-fill-mode: forwards;
   will-change: transform, opacity;
 }
 
-@keyframes garlandBulbGlow {
+@keyframes garlandSwing {
   0%, 100% {
-    opacity: 0.75;
-    filter: drop-shadow(0 0 2px var(--bulb-glow, #F59E0B));
-    transform: scale(0.97);
+    transform: rotate(-6deg);
   }
   50% {
-    opacity: 1;
-    filter: drop-shadow(0 0 7px var(--bulb-glow, #F59E0B));
-    transform: scale(1.05);
+    transform: rotate(6deg);
   }
 }
 
-.garland-bulb-glow {
-  animation: garlandBulbGlow 3s ease-in-out infinite;
-  transform-origin: center center;
-  will-change: transform, opacity, filter;
+.garland-lamp-swing {
+  animation: garlandSwing 4.5s ease-in-out infinite;
+  transform-origin: top center;
+  will-change: transform;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    opacity: 0.7;
+    box-shadow: 0 0 5px 1px var(--glow-color, rgba(245, 158, 11, 0.7)),
+                0 0 12px 2px var(--glow-soft, rgba(253, 230, 138, 0.45));
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 10px 3px var(--glow-color, rgba(245, 158, 11, 0.95)),
+                0 0 20px 5px var(--glow-soft, rgba(253, 230, 138, 0.75)),
+                0 0 32px 7px var(--glow-color, rgba(245, 158, 11, 0.35));
+  }
+}
+
+.garland-bulb-pulse {
+  animation: pulseGlow 2.8s ease-in-out infinite;
+  will-change: box-shadow, opacity;
 }
 
 @keyframes autumnSteamRise {
@@ -290,6 +323,24 @@
 .autumn-steam-anim {
   animation: autumnSteamRise 2.8s ease-out infinite;
   will-change: transform, opacity;
+}
+
+@keyframes pomPomBounce {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  30% {
+    transform: translateY(-1.5px) rotate(-4deg);
+  }
+  65% {
+    transform: translateY(-0.5px) rotate(3deg);
+  }
+}
+
+.autumn-pompom-anim {
+  animation: pomPomBounce 3.2s ease-in-out infinite;
+  transform-origin: 50% 100%;
+  will-change: transform;
 }
 
 .autumn-subtle-pattern {

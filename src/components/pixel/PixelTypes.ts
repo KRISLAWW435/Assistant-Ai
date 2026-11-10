@@ -71,6 +71,7 @@ export interface PixelCharacterProps {
   disabledTrackMouse?: boolean;
   className?: string;
   showAura?: boolean;
+  showAutumnBeanie?: boolean;
   proactiveTipText?: string | null;
   onDismissTip?: () => void;
 }

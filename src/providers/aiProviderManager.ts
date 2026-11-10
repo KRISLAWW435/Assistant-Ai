@@ -32,6 +32,39 @@ export const OPENROUTER_MULTIMODAL_PRIORITY_MODELS = [
 export type OpenRouterMultimodalModelId =
   (typeof OPENROUTER_MULTIMODAL_PRIORITY_MODELS)[number];
 
+/**
+ * Strict Waterfall Fallback chain for Google Gemini models.
+ * If primary model gemini-3.1-flash encounters 503, 429, timeout, or server overload,
+ * system automatically cascades sequentially down:
+ * 1. gemini-3.1-flash (основная)
+ * 2. gemini-2.5-flash
+ * 3. gemini-2.0-flash
+ * 4. gemini-1.5-flash
+ * And only if all of them are unavailable, switches to OpenRouter (nvidia/nemotron-3.5-super-vl:free).
+ */
+export const GEMINI_WATERFALL_FALLBACK_MODELS = [
+  'gemini-3.1-flash',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+] as const;
+
+export type GeminiWaterfallModelId =
+  (typeof GEMINI_WATERFALL_FALLBACK_MODELS)[number];
+
+export function getNextGeminiWaterfallModel(
+  currentModel?: string
+): GeminiWaterfallModelId | null {
+  if (!currentModel) return GEMINI_WATERFALL_FALLBACK_MODELS[1];
+  const idx = GEMINI_WATERFALL_FALLBACK_MODELS.indexOf(
+    currentModel as GeminiWaterfallModelId
+  );
+  if (idx >= 0 && idx < GEMINI_WATERFALL_FALLBACK_MODELS.length - 1) {
+    return GEMINI_WATERFALL_FALLBACK_MODELS[idx + 1];
+  }
+  return null;
+}
+
 export interface AIProviderStatusDescriptor {
   id: AIProviderId;
   label: string;

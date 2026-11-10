@@ -1,107 +1,83 @@
 import React from 'react';
 
-interface BulbConfig {
-  x: number;
-  y: number;
+interface LampConfig {
+  id: number;
   color: string;
   glow: string;
-  delay: string;
-  duration: string;
-  size: number;
+  glowSoft: string;
+  swingDelay: string;
+  swingDuration: string;
+  glowDelay: string;
+  glowDuration: string;
 }
 
-const BULBS: BulbConfig[] = [
-  { x: 50, y: 22, color: '#F59E0B', glow: '#F59E0B', delay: '0s', duration: '2.6s', size: 6 },
-  { x: 150, y: 24, color: '#EA580C', glow: '#EA580C', delay: '1.2s', duration: '3.1s', size: 6.5 },
-  { x: 250, y: 22, color: '#FBBF24', glow: '#FBBF24', delay: '0.5s', duration: '2.4s', size: 6 },
-  { x: 350, y: 23, color: '#D97706', glow: '#D97706', delay: '1.8s', duration: '2.9s', size: 6 },
-  { x: 450, y: 24, color: '#FB923C', glow: '#FB923C', delay: '0.3s', duration: '3.2s', size: 6.5 },
-  { x: 550, y: 22, color: '#F59E0B', glow: '#F59E0B', delay: '1.5s', duration: '2.7s', size: 6 },
-  { x: 650, y: 23, color: '#EA580C', glow: '#EA580C', delay: '0.8s', duration: '2.5s', size: 6.5 },
-  { x: 750, y: 24, color: '#FBBF24', glow: '#FBBF24', delay: '2.1s', duration: '3.0s', size: 6 },
-  { x: 850, y: 22, color: '#F97316', glow: '#F97316', delay: '0.4s', duration: '2.8s', size: 6 },
-  { x: 950, y: 23, color: '#F59E0B', glow: '#F59E0B', delay: '1.6s', duration: '3.1s', size: 6.5 },
-  { x: 1050, y: 24, color: '#EA580C', glow: '#EA580C', delay: '0.9s', duration: '2.6s', size: 6 },
-  { x: 1150, y: 22, color: '#FBBF24', glow: '#FBBF24', delay: '1.9s', duration: '2.9s', size: 6 },
+const LAMPS: LampConfig[] = [
+  { id: 1, color: '#F59E0B', glow: 'rgba(245, 158, 11, 0.95)', glowSoft: 'rgba(253, 230, 138, 0.65)', swingDelay: '0s', swingDuration: '4.2s', glowDelay: '0.2s', glowDuration: '2.6s' },
+  { id: 2, color: '#EA580C', glow: 'rgba(234, 88, 12, 0.95)', glowSoft: 'rgba(253, 186, 116, 0.65)', swingDelay: '1.2s', swingDuration: '4.6s', glowDelay: '1.4s', glowDuration: '3.1s' },
+  { id: 3, color: '#FBBF24', glow: 'rgba(251, 191, 36, 0.95)', glowSoft: 'rgba(254, 240, 138, 0.65)', swingDelay: '0.5s', swingDuration: '4.0s', glowDelay: '0.7s', glowDuration: '2.4s' },
+  { id: 4, color: '#D97706', glow: 'rgba(217, 119, 6, 0.95)', glowSoft: 'rgba(252, 211, 77, 0.65)', swingDelay: '1.8s', swingDuration: '4.5s', glowDelay: '2.1s', glowDuration: '3.3s' },
+  { id: 5, color: '#FB923C', glow: 'rgba(251, 146, 60, 0.95)', glowSoft: 'rgba(254, 215, 170, 0.65)', swingDelay: '0.3s', swingDuration: '4.3s', glowDelay: '0.4s', glowDuration: '2.8s' },
+  { id: 6, color: '#F59E0B', glow: 'rgba(245, 158, 11, 0.95)', glowSoft: 'rgba(253, 230, 138, 0.65)', swingDelay: '1.5s', swingDuration: '4.1s', glowDelay: '1.8s', glowDuration: '2.9s' },
+  { id: 7, color: '#EA580C', glow: 'rgba(234, 88, 12, 0.95)', glowSoft: 'rgba(253, 186, 116, 0.65)', swingDelay: '0.8s', swingDuration: '4.7s', glowDelay: '0.9s', glowDuration: '3.2s' },
+  { id: 8, color: '#FBBF24', glow: 'rgba(251, 191, 36, 0.95)', glowSoft: 'rgba(254, 240, 138, 0.65)', swingDelay: '2.0s', swingDuration: '4.2s', glowDelay: '2.5s', glowDuration: '2.7s' },
+  { id: 9, color: '#F97316', glow: 'rgba(249, 115, 22, 0.95)', glowSoft: 'rgba(254, 215, 170, 0.65)', swingDelay: '0.6s', swingDuration: '4.4s', glowDelay: '1.2s', glowDuration: '3.0s' },
+  { id: 10, color: '#F59E0B', glow: 'rgba(245, 158, 11, 0.95)', glowSoft: 'rgba(253, 230, 138, 0.65)', swingDelay: '1.7s', swingDuration: '4.3s', glowDelay: '0.5s', glowDuration: '2.5s' },
 ];
 
 export const AutumnGarland: React.FC = () => {
   return (
     <div
-      className="w-full pointer-events-none select-none overflow-hidden -mb-2 z-10 transition-opacity duration-500 ease-in-out"
+      className="relative z-20 w-full pointer-events-none select-none overflow-visible pt-1 pb-2 transition-opacity duration-500 ease-in-out"
       aria-hidden="true"
     >
-      <svg
-        viewBox="0 0 1200 36"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        className="w-full h-8 sm:h-9"
-        preserveAspectRatio="none"
-      >
-        <defs>
-          <linearGradient id="garlandWire" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#78350F" stopOpacity="0.25" />
-            <stop offset="50%" stopColor="#92400E" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="#78350F" stopOpacity="0.25" />
-          </linearGradient>
-        </defs>
+      {/* 1. Main Garland Wire (Stylized Cable with subtle gradient) */}
+      <div className="absolute inset-x-2 sm:inset-x-4 top-[7px] h-[1.5px] bg-gradient-to-r from-stone-400/30 via-stone-600/75 to-stone-400/30 dark:from-stone-600/30 dark:via-stone-400/60 dark:to-stone-600/30 rounded-full" />
 
-        {/* Wavy hanging wire */}
-        <path
-          d="M 0 8 Q 50 22, 100 10 Q 150 24, 200 9 Q 250 22, 300 10 Q 350 23, 400 9 Q 450 24, 500 10 Q 550 22, 600 8 Q 650 23, 700 10 Q 750 24, 800 9 Q 850 22, 900 10 Q 950 23, 1000 9 Q 1050 24, 1100 10 Q 1150 22, 1200 8"
-          stroke="url(#garlandWire)"
-          strokeWidth="1.25"
-          fill="none"
-        />
+      {/* Wall anchor pins at the ends */}
+      <div className="absolute left-1 sm:left-3 top-[5px] w-2 h-2 rounded-full bg-stone-700/80 dark:bg-stone-500/80 shadow-xs flex-shrink-0" />
+      <div className="absolute right-1 sm:right-3 top-[5px] w-2 h-2 rounded-full bg-stone-700/80 dark:bg-stone-500/80 shadow-xs flex-shrink-0" />
 
-        {/* Bulbs and sockets */}
-        {BULBS.map((bulb, i) => (
-          <g key={i}>
-            {/* Small socket cap */}
-            <rect
-              x={bulb.x - 2}
-              y={bulb.y - 4}
-              width="4"
-              height="4"
-              rx="1"
-              fill="#52525B"
-              opacity="0.8"
-            />
-            {/* Hanging wire link */}
-            <line
-              x1={bulb.x}
-              y1={bulb.y - 6}
-              x2={bulb.x}
-              y2={bulb.y - 2}
-              stroke="#71717A"
-              strokeWidth="1"
-            />
-            {/* Glowing Bulb */}
-            <circle
-              cx={bulb.x}
-              cy={bulb.y + 3}
-              r={bulb.size}
-              fill={bulb.color}
-              className="garland-bulb-glow"
+      {/* 2. Hanging Lamps distributed evenly across width */}
+      <div className="relative flex justify-between items-start px-3 sm:px-6 w-full">
+        {LAMPS.map((lamp) => (
+          <div
+            key={lamp.id}
+            className="flex flex-col items-center flex-shrink-0 garland-lamp-swing"
+            style={{
+              animationDelay: lamp.swingDelay,
+              animationDuration: lamp.swingDuration,
+            }}
+          >
+            {/* Cable clip on the wire */}
+            <div className="w-1.5 h-1.5 rounded-full bg-stone-800 dark:bg-stone-600 flex-shrink-0 -mb-[1px] shadow-xs" />
+
+            {/* Drop cord */}
+            <div className="w-[1.5px] h-2 sm:h-2.5 bg-stone-700 dark:bg-stone-600 flex-shrink-0" />
+
+            {/* Lamp socket (Патрон) */}
+            <div className="w-2.5 h-1.5 bg-stone-800 dark:bg-stone-700 rounded-t-xs flex-shrink-0 border-b border-stone-900/50" />
+
+            {/* Bulb (Лампочка: strictly fixed size w-3.5 h-3.5 sm:w-4 sm:h-4, flex-shrink-0, perfectly round with pulseGlow) */}
+            <div
+              className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full flex-shrink-0 garland-bulb-pulse relative overflow-hidden transition-transform"
               style={
                 {
-                  '--bulb-glow': bulb.glow,
-                  animationDelay: bulb.delay,
-                  animationDuration: bulb.duration,
+                  backgroundColor: lamp.color,
+                  '--glow-color': lamp.glow,
+                  '--glow-soft': lamp.glowSoft,
+                  animationDelay: lamp.glowDelay,
+                  animationDuration: lamp.glowDuration,
                 } as React.CSSProperties
               }
-            />
-            {/* Inner bright highlight filament */}
-            <circle
-              cx={bulb.x - 1.2}
-              cy={bulb.y + 1.8}
-              r={bulb.size * 0.35}
-              fill="#FFFFFF"
-              opacity="0.75"
-            />
-          </g>
+            >
+              {/* Delicate specular glass gleam */}
+              <div className="absolute top-[2px] left-[3px] w-1 h-1 bg-white/70 rounded-full blur-[0.2px]" />
+              {/* Internal warm filament glow */}
+              <div className="absolute inset-1 rounded-full bg-white/25 blur-[1px]" />
+            </div>
+          </div>
         ))}
-      </svg>
+      </div>
     </div>
   );
 };

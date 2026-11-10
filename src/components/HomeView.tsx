@@ -240,7 +240,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6 sm:space-y-8 pb-28">
         {/* Декоративная осенняя гирлянда над приветствием */}
         {isAutumnTheme && (
-          <div className="pt-0 -mb-2 sm:-mb-3">
+          <div className="relative z-20 pointer-events-none pt-0 -mb-3 sm:-mb-4">
             <AutumnGarland />
           </div>
         )}

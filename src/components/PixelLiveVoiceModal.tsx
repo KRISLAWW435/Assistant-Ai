@@ -321,7 +321,7 @@ export const PixelLiveVoiceModal: React.FC<PixelLiveVoiceModalProps> = ({
         {/* 2. Central Visualizer Sphere Area */}
         <div className="relative py-8 px-6 flex flex-col items-center justify-center border-b border-slate-800/60 bg-gradient-to-b from-slate-900 via-slate-900/90 to-slate-950">
           {/* 3D Glowing Pixel Character (120px Master Avatar) */}
-          <div className="relative py-4 flex items-center justify-center">
+          <div className="relative py-4 flex items-center justify-center overflow-visible">
             <PixelCharacter
               size={120}
               isSpeaking={liveState === 'speaking'}

@@ -2825,7 +2825,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 <div className="px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
                   {/* Left: Pixel identity */}
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="shrink-0 relative">
+                    <div className="shrink-0 relative overflow-visible">
                       <PixelCharacter
                         size={32}
                         showAura={false}
@@ -6006,7 +6006,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                 interactionPaused ? 'opacity-70 grayscale-[35%]' : ''
               }`}
             >
-              <div className="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] flex items-center justify-center">
+              <div className="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] flex items-center justify-center overflow-visible">
                 <PixelCharacter
                   size={characterSize}
                   petTrigger={petTriggerCount}
