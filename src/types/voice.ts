@@ -168,7 +168,7 @@ export interface PixelVoiceSettings {
   volume: number; // 0.1 - 1.0
   wakeWordEnabled: boolean; // local wake word detection in browser
   wakeWordSensitivity: 'normal' | 'high';
-  ttsModel?: string; // Specific TTS model, default: 'gemini-2.5-flash-tts'
+  ttsModel?: string; // Specific TTS model, default: 'gemini-3.8-flash-lite-tts'
 }
 
 export const PIXEL_TIMBRE_OPTIONS: PixelTimbreOption[] = [
@@ -478,7 +478,7 @@ export const DEFAULT_PIXEL_VOICE_SETTINGS: PixelVoiceSettings = {
   volume: 1.0,
   wakeWordEnabled: false,
   wakeWordSensitivity: 'normal',
-  ttsModel: 'gemini-2.5-flash-tts',
+  ttsModel: 'gemini-3.8-flash-lite-tts',
 };
 
 export const DEMO_SPEECH_PHRASE =

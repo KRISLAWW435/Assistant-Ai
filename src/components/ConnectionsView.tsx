@@ -392,7 +392,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           voice: voiceSettings.selectedGeminiVoice || 'Aoede',
           style: GEMINI_TTS_STANDARD_STYLE,
           timbreId: 'bright',
-          model: 'gemini-2.5-flash-tts',
+          model: 'gemini-3.8-flash-lite-tts',
           forceRefresh: true,
         }),
       });
@@ -449,7 +449,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         provider: 'gemini',
         voice: data.voice || voiceSettings.selectedGeminiVoice || 'Aoede',
         fromCache: Boolean(data.fromCache),
-        model: data.model || 'gemini-2.5-flash-tts',
+        model: data.model || 'gemini-3.8-flash-lite-tts',
       });
 
       const audioUrl = `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`;
@@ -3234,7 +3234,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     </span>
                   </div>
                   <span className="text-[10px] text-slate-400 mt-1 truncate">
-                    Модель: gemini-2.5-flash-native
+                    Модель: gemini-3.8-live
                   </span>
                 </div>
 

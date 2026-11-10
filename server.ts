@@ -1440,17 +1440,16 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
  * And only if all of them are unavailable, waterfalls to OpenRouter (nvidia/nemotron-3.5-super-vl:free).
  */
 export const GEMINI_WATERFALL_FALLBACK_MODELS = [
+  'gemini-3.8-flash',
   'gemini-3.1-flash',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
+  'gemini-3.1-flash-lite',
 ] as const;
 
-let lastHealthyGeminiModel: string = 'gemini-3.1-flash';
+let lastHealthyGeminiModel: string = 'gemini-3.8-flash';
 
 /**
  * Provider 1: Google Gemini Free execution with strict Waterfall Fallback
- * (gemini-3.1-flash -> gemini-2.5-flash -> gemini-2.0-flash -> gemini-1.5-flash)
+ * (gemini-3.8-flash -> gemini-3.1-flash -> gemini-3.1-flash-lite)
  */
 async function executeGeminiGeneration(params: {
   systemInstruction: string;
@@ -1471,10 +1470,9 @@ async function executeGeminiGeneration(params: {
 
   // Strict Waterfall Fallback model cascade
   const candidateModels = [
+    'gemini-3.8-flash',
     'gemini-3.1-flash',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
+    'gemini-3.1-flash-lite',
   ];
 
   let lastErr: unknown = null;
@@ -3358,6 +3356,24 @@ export async function startServer(
   app.post('/api/gemini/design/generate', handleDesignGenerateRequest);
   app.post('/api/design/generate', handleDesignGenerateRequest);
 
+function normalizeVoiceForGemini(voice?: string): string {
+  const v = (voice || '').trim();
+  const lower = v.toLowerCase();
+  if (lower === 'kore' || lower === 'aoede') return 'Kore';
+  if (lower === 'puck' || lower === 'achernar') return 'Puck';
+  if (lower === 'zephyr') return 'Zephyr';
+  if (lower === 'charon' || lower === 'sulafat') return 'Charon';
+  if (lower === 'fenrir' || lower === 'vindemiatrix') return 'Fenrir';
+  return 'Kore';
+}
+
+function normalizeTtsModel(model?: string): string {
+  const m = (model || '').trim();
+  if (m === 'gemini-3.8-flash-tts') return 'gemini-3.8-flash-tts';
+  if (m === 'gemini-3.8-flash-lite-tts') return 'gemini-3.8-flash-lite-tts';
+  return 'gemini-3.8-flash-lite-tts';
+}
+
   // Gemini TTS Speech Generation & Model Status endpoints
   app.get('/api/voice/models', (_req: Request, res: Response) => {
     const isConfigured = isGeminiApiKeyConfigured();
@@ -3365,19 +3381,19 @@ export async function startServer(
       configured: isConfigured,
       models: [
         {
-          id: 'gemini-2.5-flash-tts',
-          name: 'Gemini 2.5 Flash TTS (Основная скоростная модель)',
+          id: 'gemini-3.8-flash-lite-tts',
+          name: 'Gemini 3.8 Flash-Lite TTS (Основная скоростная модель)',
           tier: 'standard',
           paidTierRequired: false,
         },
         {
-          id: 'gemini-2.5-pro-tts',
-          name: 'Gemini 2.5 Pro TTS (Флагманская модель Voice Design)',
+          id: 'gemini-3.8-flash-tts',
+          name: 'Gemini 3.8 Flash TTS (Флагманская модель Voice Design)',
           tier: 'standard',
           paidTierRequired: false,
         },
       ],
-      defaultModel: 'gemini-2.5-flash-tts',
+      defaultModel: 'gemini-3.8-flash-lite-tts',
       paidTierRequired: false,
       samplePhrase:
         'Здравствуйте! Я Пиксель. Я помогу вам разобраться с задачами, найти нужные документы и освободить время для действительно важных дел.',
@@ -3385,28 +3401,28 @@ export async function startServer(
         'Естественная русская разговорная речь. Спокойный, доброжелательный, уверенный голос. Мягкая интонация, умеренный темп, чёткая дикция, естественные паузы. Без роботизированной подачи, чрезмерной эмоциональности и рекламной интонации.',
       voices: [
         {
+          id: 'Aoede',
+          name: 'Aoede (Kore)',
+          description: 'Лёгкая, непринуждённая подача (рекомендуется)',
+          sampleUrl: '/assets/audio/pixel_sample_aoede.wav',
+        },
+        {
           id: 'Achernar',
-          name: 'Achernar',
+          name: 'Achernar (Puck)',
           description: 'Мягкая подача',
           sampleUrl: '/assets/audio/pixel_sample_achernar.wav',
         },
         {
           id: 'Sulafat',
-          name: 'Sulafat',
+          name: 'Sulafat (Charon)',
           description: 'Тёплая подача',
           sampleUrl: '/assets/audio/pixel_sample_sulafat.wav',
         },
         {
           id: 'Vindemiatrix',
-          name: 'Vindemiatrix',
+          name: 'Vindemiatrix (Fenrir)',
           description: 'Деликатная подача',
           sampleUrl: '/assets/audio/pixel_sample_vindemiatrix.wav',
-        },
-        {
-          id: 'Aoede',
-          name: 'Aoede',
-          description: 'Лёгкая, непринуждённая подача',
-          sampleUrl: '/assets/audio/pixel_sample_aoede.wav',
         },
       ],
     });
@@ -3446,7 +3462,7 @@ export async function startServer(
       const requestedModel =
         typeof model === 'string' && model.trim()
           ? model.trim()
-          : 'gemini-2.5-flash-tts';
+          : 'gemini-3.8-flash-lite-tts';
       const requestedTimbre =
         typeof timbreId === 'string' && timbreId.trim()
           ? timbreId.trim()
@@ -3456,14 +3472,17 @@ export async function startServer(
           ? style.trim()
           : 'Естественная русская разговорная речь. Чуть более высокий, светлый, лёгкий и мягкий регистр. Приветливый, открытый, воодушевляющий тон, без искусственности и без писклявости.';
 
+      const normalizedVoice = normalizeVoiceForGemini(requestedVoice);
+      const normalizedModel = normalizeTtsModel(requestedModel);
+
       const bypassCache = Boolean(noCache || forceRefresh);
-      const CACHE_GENERATION_VERSION = 'v4_real_prosody';
+      const CACHE_GENERATION_VERSION = 'v5_gemini_38';
 
       // Generate robust SHA-256 cache key including version, text, model, voice, timbreId and style
       const cacheKey = crypto
         .createHash('sha256')
         .update(
-          `${CACHE_GENERATION_VERSION}::${cleanText}::${requestedModel}::${requestedVoice}::${requestedTimbre}::${requestedStyle}::audio/wav`
+          `${CACHE_GENERATION_VERSION}::${cleanText}::${normalizedModel}::${normalizedVoice}::${requestedTimbre}::${requestedStyle}::audio/wav`
         )
         .digest('hex');
 
@@ -3487,51 +3506,136 @@ export async function startServer(
       }
 
       const ai = getGenAITtsClient();
-      const inputItem: {
-        type: 'text';
-        text: string;
-        annotations?: Array<{ type: 'speech_metadata'; style: string }>;
-      } = {
-        type: 'text',
-        text: cleanText,
-      };
-      if (requestedStyle) {
-        inputItem.annotations = [
-          { type: 'speech_metadata', style: requestedStyle },
-        ];
+      let audioBase64: string | undefined;
+      let audioMimeType = 'audio/wav';
+      let resolvedModel = normalizedModel;
+
+      // 1. Try generateContent with normalizedModel (gemini-3.8-flash-lite-tts or gemini-3.8-flash-tts)
+      try {
+        const response = await ai.models.generateContent({
+          model: normalizedModel,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: cleanText,
+                  ...(requestedStyle
+                    ? { speechMetadata: { style: requestedStyle } }
+                    : {}),
+                },
+              ],
+            },
+          ],
+          config: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: normalizedVoice },
+              },
+            },
+          },
+        });
+
+        const part = response.candidates?.[0]?.content?.parts?.[0];
+        if (part?.inlineData?.data) {
+          audioBase64 = part.inlineData.data;
+          audioMimeType = part.inlineData.mimeType || 'audio/wav';
+          resolvedModel = normalizedModel;
+        }
+      } catch (genErr) {
+        console.warn(`[TTS generateContent ${normalizedModel} failed]`, genErr);
       }
 
-      const interaction = await ai.interactions.create(
-        {
-          model: requestedModel,
-          input: [inputItem],
-          response_format: { type: 'audio' },
-          generation_config: {
-            speech_config: [
+      // 2. Fallback to gemini-3.8-flash-tts if primary failed
+      if (!audioBase64 && normalizedModel !== 'gemini-3.8-flash-tts') {
+        try {
+          const fbResponse = await ai.models.generateContent({
+            model: 'gemini-3.8-flash-tts',
+            contents: [
               {
-                language: 'ru-RU',
-                voice: requestedVoice,
+                role: 'user',
+                parts: [
+                  {
+                    text: cleanText,
+                    ...(requestedStyle
+                      ? { speechMetadata: { style: requestedStyle } }
+                      : {}),
+                  },
+                ],
               },
             ],
-          },
-        },
-        { timeout: 50000 }
-      );
+            config: {
+              responseModalities: ['AUDIO'],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: normalizedVoice },
+                },
+              },
+            },
+          });
+          const fbPart = fbResponse.candidates?.[0]?.content?.parts?.[0];
+          if (fbPart?.inlineData?.data) {
+            audioBase64 = fbPart.inlineData.data;
+            audioMimeType = fbPart.inlineData.mimeType || 'audio/wav';
+            resolvedModel = 'gemini-3.8-flash-tts';
+          }
+        } catch (fbErr) {
+          console.warn('[TTS fallback gemini-3.8-flash-tts failed]', fbErr);
+        }
+      }
 
-      const audio = interaction.output_audio;
-      if (!audio?.data) {
+      // 3. Fallback to interactions.create with gemini-3.8-flash-tts
+      if (!audioBase64) {
+        try {
+          const interaction = await ai.interactions.create(
+            {
+              model: 'gemini-3.8-flash-tts',
+              input: [
+                {
+                  type: 'text',
+                  text: cleanText,
+                  ...(requestedStyle
+                    ? { annotations: [{ type: 'speech_metadata', style: requestedStyle }] }
+                    : {}),
+                },
+              ],
+              response_format: { type: 'audio' },
+              generation_config: {
+                speech_config: [
+                  {
+                    language: 'ru-RU',
+                    voice: normalizedVoice,
+                  },
+                ],
+              },
+            },
+            { timeout: 50000 }
+          );
+
+          if (interaction.output_audio?.data) {
+            audioBase64 = interaction.output_audio.data;
+            audioMimeType = interaction.output_audio.mime_type || 'audio/wav';
+            resolvedModel = interaction.model || 'gemini-3.8-flash-tts';
+          }
+        } catch (interactErr) {
+          console.warn('[TTS interactions.create fallback failed]', interactErr);
+        }
+      }
+
+      if (!audioBase64) {
         return res.status(502).json({
           error: 'Модель Gemini TTS вернула пустой аудио-ответ',
         });
       }
 
       const payload: TtsCacheItem = {
-        audioBase64: audio.data,
-        mimeType: audio.mime_type || 'audio/wav',
-        model: interaction.model || requestedModel,
+        audioBase64,
+        mimeType: audioMimeType,
+        model: resolvedModel,
         voice: requestedVoice,
         timbre: requestedTimbre,
-        serviceTier: interaction.service_tier || 'standard',
+        serviceTier: 'standard',
         createdAt: now,
       };
 
@@ -3605,7 +3709,7 @@ export async function startServer(
     const isConfigured = isGeminiApiKeyConfigured();
     res.json({
       configured: isConfigured,
-      model: 'gemini-2.5-flash-live',
+      model: 'gemini-3.8-live',
       defaultVoice: 'Kore',
       availableVoices: [
         { id: 'Kore', name: 'Kore', gender: 'female', recommended: true },
@@ -3690,11 +3794,11 @@ export async function startServer(
             return;
           }
 
-          const requestedVoice = (msg.voiceName || 'Kore').trim();
+          const requestedVoice = normalizeVoiceForGemini(msg.voiceName || 'Kore');
           const schoolId: SchoolId =
             msg.schoolId === 'renderia' ? 'renderia' : 'kiberone';
           const pixelContext = msg.pixelContext as IncomingPixelContext | undefined;
-          const liveModel = 'gemini-2.5-flash-live';
+          const liveModel = 'gemini-3.8-live';
 
           const systemInstruction = buildSystemInstruction({
             schoolId,

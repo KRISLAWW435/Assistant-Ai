@@ -125,7 +125,7 @@ export class GeminiTtsOutputProvider implements ISpeechOutputProvider {
 
     const voiceId = this.extractVoiceId(options?.voiceURI) || 'Aoede';
     const style = options?.style || GEMINI_TTS_STANDARD_STYLE;
-    const model = options?.model || 'gemini-2.5-flash-tts';
+    const model = options?.model || 'gemini-3.8-flash-lite-tts';
 
     const fetchChunkAudio = async (chunkText: string) => {
       const response = await fetch('/api/voice/tts', {
