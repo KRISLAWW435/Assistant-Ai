@@ -363,25 +363,17 @@ function syncVaultKeysToServer(): void {
 
 function getAppIconPath(): string {
   const candidates = [
-    path.join(__dirname, '../build/icon.ico'),
-    path.join(app.getAppPath(), 'build', 'icon.ico'),
-    path.join(__dirname, 'build', 'icon.ico'),
-    path.join(process.resourcesPath, 'build', 'icon.ico'),
-    path.join(process.resourcesPath, 'app', 'build', 'icon.ico'),
-    path.join(__dirname, '../build/icon.png'),
-    path.join(app.getAppPath(), 'build', 'icon.png'),
-    path.join(__dirname, 'build', 'icon.png'),
-    path.join(__dirname, '../public/icon.ico'),
-    path.join(__dirname, '../public/icon.png'),
-    path.join(app.getAppPath(), 'public', 'icon.ico'),
-    path.join(app.getAppPath(), 'public', 'icon.png'),
+    path.join(__dirname, '../build/app-icon.ico'),
+    path.join(app.getAppPath(), 'build', 'app-icon.ico'),
+    path.join(process.resourcesPath, 'build', 'app-icon.ico'),
+    path.join(process.resourcesPath, 'app', 'build', 'app-icon.ico'),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
   }
   return app.isPackaged
-    ? path.join(app.getAppPath(), 'build', 'icon.ico')
-    : path.join(__dirname, '../build/icon.ico');
+    ? path.join(app.getAppPath(), 'build', 'app-icon.ico')
+    : path.join(__dirname, '../build/app-icon.ico');
 }
 
 async function startEmbeddedServer(): Promise<number> {
@@ -1531,8 +1523,8 @@ async function createMainWindow(port: number): Promise<void> {
   const iconPath =
     getAppIconPath() ||
     (app.isPackaged
-      ? path.join(app.getAppPath(), 'build', 'icon.ico')
-      : path.join(__dirname, '../build/icon.ico'));
+      ? path.join(app.getAppPath(), 'build', 'app-icon.ico')
+      : path.join(__dirname, '../build/app-icon.ico'));
 
   console.log(`[Electron] Using window icon: ${iconPath} (exists: ${fs.existsSync(iconPath)})`);
 

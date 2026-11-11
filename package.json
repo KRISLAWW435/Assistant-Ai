@@ -4,7 +4,7 @@
   "description": "Внутренний рабочий ИИ-кабинет для управляющей двух детских образовательных школ: KIBERone и Renderia.",
   "author": "KIBERone & RENDERIA",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.2",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
@@ -14,9 +14,8 @@
     "clean:build": "rm -rf release dist dist-electron",
     "clean": "rm -rf dist dist-electron release server.js",
     "build:electron": "tsx scripts/build-electron.ts",
-    "build:icons": "tsx scripts/generate-icon.ts",
-    "electron:build": "npm run clean:build && npm run build:icons && npm run build && npm run build:electron && electron-builder --win",
-    "electron:pack": "npm run clean:build && npm run build:icons && npm run build && npm run build:electron && electron-builder --win --dir",
+    "electron:build": "npm run clean:build && npm run build && npm run build:electron && electron-builder --win",
+    "electron:pack": "npm run clean:build && npm run build && npm run build:electron && electron-builder --win --dir",
     "electron:dev": "npm run build:electron && electron dist-electron/main.cjs",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
@@ -83,7 +82,7 @@
           ]
         }
       ],
-      "icon": "build/icon.ico",
+      "icon": "build/app-icon.ico",
       "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
@@ -92,8 +91,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "KIBERone & RENDERIA Assistant",
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico",
+      "installerIcon": "build/app-icon.ico",
+      "uninstallerIcon": "build/app-icon.ico",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     }
   }
