@@ -5,6 +5,7 @@ import {
   ChatMessage,
   ChatSession,
   CompanionMessage,
+  CompanionTaskPriority,
   CompanionTaskRecord,
   CoordinatorTaskStatus,
   KnowledgeBaseBySchool,
@@ -40,7 +41,7 @@ import {
 } from './storageProvider';
 import { voiceManager } from './voice/voiceManager';
 import { geminiLiveClient } from './voice/geminiLiveClient';
-import { getSyzranNow } from '../utils/syzranTime';
+import { formatSyzranIsoDateRu, getSyzranNow } from '../utils/syzranTime';
 import { showToast } from '../components/ToastNotification';
 
 export const PIXEL_DELEGATION_STATUS_LABELS: Record<
@@ -683,22 +684,47 @@ export class PixelAgentCoordinator {
   ): Promise<CompanionTaskRecord> {
     const nowMs = Date.now();
     const syzranNow = getSyzranNow(new Date(nowMs));
+    const formattedNow = formatSyzranIsoDateRu(syzranNow.isoDate);
+
+    // Clean and normalize dueDate strictly to YYYY-MM-DD
+    let cleanDueDate = (draft.dueDate || syzranNow.isoDate).trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(cleanDueDate)) {
+      cleanDueDate = cleanDueDate.slice(0, 10);
+    } else if (cleanDueDate.includes('T')) {
+      cleanDueDate = cleanDueDate.split('T')[0];
+    }
+
+    // Clean dueTime to HH:mm
+    let cleanDueTime = draft.dueTime ? draft.dueTime.trim() : undefined;
+    if (cleanDueTime && !/^\d{1,2}:\d{2}$/.test(cleanDueTime)) {
+      const timeMatch = cleanDueTime.match(/(\d{1,2}):(\d{2})/);
+      if (timeMatch) {
+        cleanDueTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
+      }
+    }
+
+    // Priority: default to 'low' ("Обычный")
+    const resolvedPriority: CompanionTaskPriority =
+      draft.priority === 'high' || draft.priority === 'medium'
+        ? draft.priority
+        : 'low';
+
     const newTask: CompanionTaskRecord = {
       id: `task-manual-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
       title: (draft.title || 'Новая задача').trim(),
       description: (draft.description || '').trim(),
-      dueDate: draft.dueDate || syzranNow.isoDate,
-      dueTime: draft.dueTime || undefined,
-      priority: draft.priority || 'low',
-      priorityReason: `Приоритет выбран Анной: ${
-        draft.priority === 'high'
+      dueDate: cleanDueDate,
+      dueTime: cleanDueTime,
+      priority: resolvedPriority,
+      priorityReason: `Приоритет: ${
+        resolvedPriority === 'high'
           ? 'высокий'
-          : draft.priority === 'medium'
+          : resolvedPriority === 'medium'
           ? 'средний'
           : 'обычный'
       }`,
-      urgencyScore: draft.priority === 'high' ? 9 : draft.priority === 'medium' ? 6 : 3,
-      importanceScore: draft.priority === 'high' ? 9 : draft.priority === 'medium' ? 6 : 4,
+      urgencyScore: resolvedPriority === 'high' ? 9 : resolvedPriority === 'medium' ? 6 : 3,
+      importanceScore: resolvedPriority === 'high' ? 9 : resolvedPriority === 'medium' ? 6 : 4,
       estimatedMinutes: 30,
       status: 'new',
       schoolId: draft.schoolId || 'both',
@@ -707,7 +733,7 @@ export class PixelAgentCoordinator {
       reminderTime: draft.wantsReminder ? (draft.reminderTime || '09:00') : undefined,
       reminderAt: draft.wantsReminder ? draft.reminderAt : undefined,
       reminderRepeat: draft.wantsReminder && draft.reminderAt ? 'none' : undefined,
-      createdAt: syzranNow.time24,
+      createdAt: formattedNow,
       createdAtMs: nowMs,
     };
 
@@ -715,6 +741,12 @@ export class PixelAgentCoordinator {
       await this.deps.onSaveCompanionTask(newTask);
     } else {
       await storageProvider.saveCompanionTask(newTask);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('tasksUpdated', { detail: { task: newTask } })
+      );
     }
 
     return newTask;

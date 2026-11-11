@@ -649,6 +649,26 @@ export default function App() {
     companionTasksRef.current = companionTasks;
   }, [companionTasks]);
 
+  const reloadCompanionTasks = async () => {
+    try {
+      const freshTasks = await storageProvider.getAllCompanionTasks();
+      setCompanionTasks(freshTasks);
+      companionTasksRef.current = freshTasks;
+    } catch (err) {
+      console.warn('[App] Failed to reload companion tasks:', err);
+    }
+  };
+
+  useEffect(() => {
+    const handleTasksUpdated = () => {
+      void reloadCompanionTasks();
+    };
+    window.addEventListener('tasksUpdated', handleTasksUpdated);
+    return () => {
+      window.removeEventListener('tasksUpdated', handleTasksUpdated);
+    };
+  }, []);
+
   const companionMessagesRef = useRef<CompanionMessage[]>(companionMessages);
   useEffect(() => {
     companionMessagesRef.current = companionMessages;
@@ -3598,6 +3618,13 @@ export default function App() {
         companionTasksRef.current = next;
         return next;
       });
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('tasksUpdated', {
+            detail: { action: 'saved', taskId: task.id },
+          })
+        );
+      }
       setStorageError(null);
     } catch (err) {
       const message =
@@ -3617,6 +3644,13 @@ export default function App() {
         companionTasksRef.current = next;
         return next;
       });
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('tasksUpdated', {
+            detail: { action: 'deleted', taskId },
+          })
+        );
+      }
       setStorageError(null);
     } catch (err) {
       setStorageError(
@@ -3805,6 +3839,7 @@ export default function App() {
                   activeSchool={activeSchool}
                   onSaveTask={handleSaveCompanionTask}
                   onDeleteTask={handleDeleteCompanionTask}
+                  onReloadTasks={reloadCompanionTasks}
                   onNavigate={handleSelectSection}
                   onOpenSpecialistChat={(mode, schoolId, sessionId) => {
                     handleSelectSchool(schoolId);

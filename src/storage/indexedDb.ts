@@ -1212,6 +1212,26 @@ export async function clearAllCompanionMemoryInDb(): Promise<void> {
   });
 }
 
+export async function getAllCompanionTasksFromDb(): Promise<CompanionTaskRecord[]> {
+  const db = await openAssistantDatabase();
+  const tx = db.transaction(STORE_COMPANION_TASKS, 'readonly');
+  const store = tx.objectStore(STORE_COMPANION_TASKS);
+  const tasks = await getAllFromStore<CompanionTaskRecord>(store);
+  return tasks.sort((a, b) => {
+    const aFinished = a.status === 'done' || a.status === 'cancelled';
+    const bFinished = b.status === 'done' || b.status === 'cancelled';
+    if (aFinished !== bFinished) return aFinished ? 1 : -1;
+    const aDate = (a.dueDate || '').slice(0, 10);
+    const bDate = (b.dueDate || '').slice(0, 10);
+    if (aDate && bDate && aDate !== bDate) {
+      return aDate.localeCompare(bDate);
+    }
+    if (aDate && !bDate) return -1;
+    if (!aDate && bDate) return 1;
+    return (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0);
+  });
+}
+
 export async function saveCompanionTaskInDb(
   task: CompanionTaskRecord
 ): Promise<void> {
@@ -1258,6 +1278,10 @@ export async function saveCompanionTaskInDb(
       // IndexedDB is primary; ignore secondary Electron mirror error
     }
   }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('tasksUpdated', { detail: { task } }));
+  }
 }
 
 export async function deleteCompanionTaskInDb(taskId: string): Promise<void> {
@@ -1279,6 +1303,10 @@ export async function deleteCompanionTaskInDb(taskId: string): Promise<void> {
     } catch {
       // ignore secondary Electron mirror error
     }
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('tasksUpdated', { detail: { taskId } }));
   }
 }
 

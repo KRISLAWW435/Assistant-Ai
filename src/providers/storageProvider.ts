@@ -24,6 +24,7 @@ import {
   deleteDocumentInDb,
   deleteSessionCascadeInDb,
   exportWorkspaceBackupFromDb,
+  getAllCompanionTasksFromDb,
   initAndLoadWorkspaceData,
   LoadedWorkspaceData,
   removeSessionAttachmentInDb,
@@ -94,6 +95,7 @@ export interface IStorageProvider {
   clearAllCompanionMemory(): Promise<void>;
   saveCompanionTask(task: CompanionTaskRecord): Promise<void>;
   deleteCompanionTask(id: string): Promise<void>;
+  getAllCompanionTasks(): Promise<CompanionTaskRecord[]>;
   saveCompanionPreferences(prefs: CompanionPreferencesRecord): Promise<void>;
   exportBackup(settings: WorkspaceBackupSettings): Promise<BackupArchiveV1>;
   validateBackupJson(rawJson: string): ValidatedBackupSummary;
@@ -135,6 +137,7 @@ export const storageProvider: IStorageProvider = {
   clearAllCompanionMemory: () => clearAllCompanionMemoryInDb(),
   saveCompanionTask: (task) => saveCompanionTaskInDb(task),
   deleteCompanionTask: (id) => deleteCompanionTaskInDb(id),
+  getAllCompanionTasks: () => getAllCompanionTasksFromDb(),
   saveCompanionPreferences: (prefs) => saveCompanionPreferencesInDb(prefs),
   exportBackup: (settings) => exportWorkspaceBackupFromDb(settings),
   validateBackupJson: (rawJson) => validateBackupArchiveJson(rawJson),

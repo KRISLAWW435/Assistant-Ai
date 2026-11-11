@@ -849,111 +849,14 @@ export function cleanExtractedTaskTitle(raw: string): string {
  * or «Мне нужно в среду подготовиться к мероприятию Мафия»
  */
 export function extractAutoTaskFromConversation(
-  userText: string,
-  activeSchool: SchoolId,
-  existingTasks: CompanionTaskRecord[],
-  sourceMessageId?: string
+  _userText: string,
+  _activeSchool: SchoolId,
+  _existingTasks: CompanionTaskRecord[],
+  _sourceMessageId?: string
 ): AutoExtractedTaskResult | null {
-  const trimmed = userText.trim();
-  if (trimmed.length < 8 || trimmed.length > 360) return null;
-  if (trimmed.includes('?')) return null;
-  if (SPECIALIST_DELEGATION_PATTERN.test(trimmed)) return null;
-  if (HYPOTHETICAL_OR_QUOTE_PATTERN.test(trimmed)) return null;
-
-  // Match personal obligation statements or weekday+time+infinitive statements by Anna
-  const obligationPatterns = [
-    /^(?:мне\s+)?(?:сегодня|завтра|послезавтра|(?:в|во|на)\s+[а-яё]+|на\s+следующей\s+неделе)\s+(?:мне\s+)?(?:нужно\s+не\s+забыть|надо\s+не\s+забыть|не\s+забыть|нужно|надо|необходимо|предстоит|важно)\s+(?:будет\s+)?([\s\S]{4,240})$/i,
-    /^(?:мне\s+)?(?:нужно\s+не\s+забыть|надо\s+не\s+забыть|не\s+забыть(?:\s+бы)?|нужно|надо|необходимо|предстоит|важно|хочу\s+не\s+забыть)\s+(?:будет\s+)?(?:(?:сегодня|завтра|послезавтра|когда-нибудь|до\s+вечера|до\s+обеда|(?:в|во|на)\s+[а-яё]+)\s+)?([\s\S]{4,240})$/i,
-    /^(?:(?:в|во|на)\s+(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|сегодня|завтра|послезавтра)\s+(?:(?:в|к)\s*\d{1,2}(?:[:.]\d{2})?\s*)?((?:провести|сделать|написать|позвонить|подготовить|подготовиться|отправить|проверить|собрать|обновить|согласовать|встретиться|запустить|оплатить|выгрузить|составить|организовать|напомнить|заказать|купить|передать|разработать)(?=\s|$|[.,!?;:])[\s\S]{3,240})$/i,
-  ];
-
-  let matchedRawAction: string | null = null;
-  for (const pattern of obligationPatterns) {
-    const match = trimmed.match(pattern);
-    if (match && match[1]) {
-      matchedRawAction = match[1].trim();
-      break;
-    }
-  }
-
-  if (!matchedRawAction) return null;
-
-  // Avoid extracting AI meta-requests like "Мне нужно чтобы ты ответила..." or "Мне нужно узнать..."
-  if (/^(?:чтобы\s+ты|узнать\s+у\s+тебя|спросить\s+тебя|понять\s+как\s+ты|поговорить\s+с\s+тобой)/i.test(matchedRawAction)) {
-    return null;
-  }
-
-  const title = cleanExtractedTaskTitle(matchedRawAction) || cleanExtractedTaskTitle(trimmed);
-  if (!title || title.length < 4) return null;
-
-  // Deduplicate against active tasks
-  const normalizedTitle = title.toLowerCase();
-  const alreadyExists = existingTasks.some(
-    (t) =>
-      t.status !== 'done' &&
-      (t.title.toLowerCase() === normalizedTitle ||
-        t.title.toLowerCase().includes(normalizedTitle) ||
-        normalizedTitle.includes(t.title.toLowerCase()))
-  );
-  if (alreadyExists) return null;
-
-  const syzranNow = getSyzranNow();
-  const { dueDate, dueTime, dateLabelRu, isDateAmbiguous, ambiguityPromptRu } =
-    parseRelativeDateAndTimeFromRuText(trimmed, syzranNow.isoDate);
-
-  const evaluation = evaluateTaskPriorityMultiCriteria(
-    title,
-    trimmed,
-    dueDate,
-    syzranNow.isoDate
-  );
-
-  const schoolId = detectSchoolFromTaskText(trimmed, activeSchool);
-  const nowMs = Date.now();
-  const explicitReminder = hasExplicitReminderRequest(trimmed);
-  const autoReminderIso = explicitReminder
-    ? buildSyzranReminderIso(dueDate, dueTime)
-    : undefined;
-  const validReminderIso =
-    autoReminderIso && new Date(autoReminderIso).getTime() > nowMs
-      ? autoReminderIso
-      : undefined;
-
-  const taskRecord: CompanionTaskRecord = {
-    id: `ctask_auto_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
-    title,
-    description: `Создано автоматически из сообщения Анны: «${trimmed}»`,
-    dueDate,
-    dueTime,
-    reminderAt: validReminderIso,
-    reminderRepeat: validReminderIso ? 'none' : undefined,
-    priority: evaluation.priority,
-    priorityReason: evaluation.priorityReason,
-    urgencyScore: evaluation.urgencyScore,
-    importanceScore: evaluation.importanceScore,
-    estimatedMinutes: evaluation.estimatedMinutes,
-    consequencesIfDelayed: evaluation.consequencesIfDelayed,
-    dependencyNote: evaluation.dependencyNote,
-    status: 'new',
-    schoolId,
-    sourceType: 'conversation_auto',
-    sourceExcerpt: trimmed,
-    sourceMessageId,
-    createdAt: syzranNow.time24,
-    createdAtMs: nowMs,
-  };
-
-  const timePartRu = dueTime ? ` в ${dueTime}` : '';
-  const ambiguitySuffix =
-    isDateAmbiguous && ambiguityPromptRu ? ` ⚠️ ${ambiguityPromptRu}` : '';
-  const shortConfirmationText = dueDate
-    ? `Добавила задачу ${dateLabelRu}${timePartRu}: «${title}» (${evaluation.priorityReason}).${ambiguitySuffix}`
-    : `Добавила задачу без жёсткой даты: «${title}» (${evaluation.priorityReason}).${ambiguitySuffix}`;
-
-  return {
-    taskRecord,
-    shortConfirmationText,
-  };
+  // Automatic task extraction from casual conversation («Создано автоматически из сообщения Анны...»)
+  // is strictly disabled as per user instruction. Tasks are created ONLY via manual modal or through the completed wizard.
+  return null;
 }
 
 /**
@@ -1156,61 +1059,13 @@ export function buildWorkdayPlanReport(
 }
 
 export function buildFallbackTaskFromUserRequest(
-  userText: string,
-  activeSchool: SchoolId,
-  todayIso: string = toSyzranIsoDate()
+  _userText: string,
+  _activeSchool: SchoolId,
+  _todayIso: string = toSyzranIsoDate()
 ): CompanionTaskRecord | null {
-  const trimmed = userText.trim();
-  if (!trimmed || trimmed.length < 4) return null;
-  const syzranNow = getSyzranNow();
-  const { dueDate, dueTime, dateLabelRu } = parseRelativeDateAndTimeFromRuText(
-    trimmed,
-    todayIso
-  );
-  const fallbackDateTitle = dueDate
-    ? `Задача ${dateLabelRu.replace(/\s*\([^)]*\)/, '')}${dueTime ? ` в ${dueTime}` : ''}`
-    : 'Новая задача';
-  const title =
-    cleanExtractedTaskTitle(trimmed) || fallbackDateTitle;
-  const evaluation = evaluateTaskPriorityMultiCriteria(
-    title,
-    trimmed,
-    dueDate,
-    todayIso
-  );
-  const schoolId = detectSchoolFromTaskText(trimmed, activeSchool);
-  const nowMs = Date.now();
-  const explicitReminder = hasExplicitReminderRequest(trimmed);
-  const autoReminderIso = explicitReminder
-    ? buildSyzranReminderIso(dueDate, dueTime)
-    : undefined;
-  const validReminderIso =
-    autoReminderIso && new Date(autoReminderIso).getTime() > nowMs
-      ? autoReminderIso
-      : undefined;
-
-  return {
-    id: `ctask_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
-    title,
-    description: `Поставлено командой Анны: «${trimmed}»`,
-    dueDate,
-    dueTime,
-    reminderAt: validReminderIso,
-    reminderRepeat: validReminderIso ? 'none' : undefined,
-    priority: evaluation.priority,
-    priorityReason: evaluation.priorityReason,
-    urgencyScore: evaluation.urgencyScore,
-    importanceScore: evaluation.importanceScore,
-    estimatedMinutes: evaluation.estimatedMinutes,
-    consequencesIfDelayed: evaluation.consequencesIfDelayed,
-    dependencyNote: evaluation.dependencyNote,
-    status: 'new',
-    schoolId,
-    sourceType: 'voice_command',
-    sourceExcerpt: trimmed,
-    createdAt: syzranNow.time24,
-    createdAtMs: nowMs,
-  };
+  // Disabled: automatic task generation from user messages is removed.
+  // Tasks are created exclusively via manual task modal or through the completed step-by-step wizard.
+  return null;
 }
 
 /**
@@ -2112,6 +1967,31 @@ export async function processPersonalTaskDraftInput(
     if (isConfirm) {
       const nowMs = Date.now();
       const syzranNow = getSyzranNow(new Date(nowMs));
+      const formattedNow = formatSyzranIsoDateRu(todayIso);
+
+      // Clean and normalize dueDate strictly to YYYY-MM-DD for reliable date comparison
+      let cleanDueDate = (draft.dueDate || todayIso).trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(cleanDueDate)) {
+        cleanDueDate = cleanDueDate.slice(0, 10);
+      } else if (cleanDueDate.includes('T')) {
+        cleanDueDate = cleanDueDate.split('T')[0];
+      }
+
+      // Clean dueTime to HH:mm
+      let cleanDueTime = draft.dueTime ? draft.dueTime.trim() : undefined;
+      if (cleanDueTime && !/^\d{1,2}:\d{2}$/.test(cleanDueTime)) {
+        const timeMatch = cleanDueTime.match(/(\d{1,2}):(\d{2})/);
+        if (timeMatch) {
+          cleanDueTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
+        }
+      }
+
+      // Priority: if "не указывать", empty, or not high/medium, default strictly to 'low' ("Обычный")
+      const resolvedPriority: CompanionTaskPriority =
+        draft.priority === 'high' || draft.priority === 'medium'
+          ? draft.priority
+          : 'low';
+
       const reminderAt =
         draft.wantsReminder && draft.reminderDate && draft.reminderTime
           ? buildSyzranReminderIso(draft.reminderDate, draft.reminderTime)
@@ -2124,18 +2004,18 @@ export async function processPersonalTaskDraftInput(
         id: `task-manual-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
         title: (draft.title || 'Новая задача').trim(),
         description: (draft.description || '').trim(),
-        dueDate: draft.dueDate || todayIso,
-        dueTime: draft.dueTime || undefined,
-        priority: draft.priority || 'low',
-        priorityReason: `Приоритет выбран Анной: ${
-          draft.priority === 'high'
+        dueDate: cleanDueDate,
+        dueTime: cleanDueTime,
+        priority: resolvedPriority,
+        priorityReason: `Приоритет: ${
+          resolvedPriority === 'high'
             ? 'высокий'
-            : draft.priority === 'medium'
+            : resolvedPriority === 'medium'
             ? 'средний'
             : 'обычный'
         }`,
-        urgencyScore: draft.priority === 'high' ? 9 : draft.priority === 'medium' ? 6 : 3,
-        importanceScore: draft.priority === 'high' ? 9 : draft.priority === 'medium' ? 6 : 4,
+        urgencyScore: resolvedPriority === 'high' ? 9 : resolvedPriority === 'medium' ? 6 : 3,
+        importanceScore: resolvedPriority === 'high' ? 9 : resolvedPriority === 'medium' ? 6 : 4,
         estimatedMinutes: 30,
         status: 'new',
         schoolId: draft.schoolId || 'both',
@@ -2144,7 +2024,7 @@ export async function processPersonalTaskDraftInput(
         reminderTime: draft.wantsReminder ? (draft.reminderTime || '09:00') : undefined,
         reminderAt,
         reminderRepeat: reminderAt ? 'none' : undefined,
-        createdAt: syzranNow.time24,
+        createdAt: formattedNow,
         createdAtMs: nowMs,
       };
 
@@ -2154,6 +2034,12 @@ export async function processPersonalTaskDraftInput(
           await onSaveTaskDirectly(readyTask);
         } else {
           await storageProvider.saveCompanionTask(readyTask);
+        }
+
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('tasksUpdated', { detail: { task: readyTask } })
+          );
         }
       } catch (saveErr) {
         const errDetail =
@@ -2410,15 +2296,47 @@ export function parseAndExecuteTaskCommand(
       trimmed
     );
 
-  // 0. Unified Task Wizard Triggers: «Поставь задачу», «Создай задачу», «Добавь задачу», «Запиши задачу», «Новая задача», «Напомни мне»
+  // 0. Unified Task Wizard Triggers: «Поставь задачу», «Создай задачу», «Добавь задачу», «Надо добавить задачу», «Поставить задачу» и др.
   const isTaskWizardTrigger =
     !isTimerCommand &&
-    /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:поставь\s+задачу|создай\s+задачу|добавь\s+задачу|запиши\s+задачу|запланируй\s+задачу|сделай\s+задачу|напомни(?:те)?(?:\s+мне)?|поставь\s+напоминание|создай\s+напоминание|сделай\s+напоминание|новая\s+задача|нужно\s+не\s+забыть|надо\s+не\s+забыть)(?=$|[^а-яёa-z0-9])/i.test(
-      trimmed
+    (
+      /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:мне\s+)?(?:надо|нужно|необходимо|хочу|давай(?:те)?\s+)?(?:поставь(?:те)?|поставить|создай(?:те)?|создать|добавь(?:те)?|добавить|запиши(?:те)?|записать|запланируй(?:те)?|запланировать|сделай(?:те)?|сделать)\s+(?:мне\s+)?(?:в\s+список\s+дел\s+|в\s+задачи\s+)?(?:новую\s+)?задач[уи](?:$|[\s:.!?,—-])/i.test(
+        trimmed
+      ) ||
+      /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:новая\s+задача|нужно\s+не\s+забыть|надо\s+не\s+забыть)(?:$|[\s:.!?,—-])/i.test(
+        trimmed
+      ) ||
+      /^(?:добавить\s+задачу|поставить\s+задачу|создать\s+задачу|надо\s+добавить\s+задачу|нужно\s+добавить\s+задачу|поставь\s+задачу|добавь\s+задачу|создай\s+задачу)(?:$|[\s:.!?,—-])/i.test(
+        trimmed
+      )
     );
 
   if (isTaskWizardTrigger) {
     const wizardInit = createEmptyPersonalTaskWizardDraft(activeSchool);
+
+    // Check if there is extra content after the trigger phrase (e.g. «Добавить задачу: проверить приложение»)
+    const contentAfterTrigger = trimmed
+      .replace(
+        /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:мне\s+)?(?:надо|нужно|необходимо|хочу|давай(?:те)?\s+)?(?:поставь(?:те)?|поставить|создай(?:те)?|создать|добавь(?:те)?|добавить|запиши(?:те)?|записать|запланируй(?:те)?|запланировать|сделай(?:те)?|сделать)\s+(?:мне\s+)?(?:в\s+список\s+дел\s+|в\s+задачи\s+)?(?:новую\s+)?задач[уи][:—-]?\s*/i,
+        ''
+      )
+      .replace(
+        /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:новая\s+задача|нужно\s+не\s+забыть|надо\s+не\s+забыть)[:—-]?\s*/i,
+        ''
+      )
+      .replace(/^[«"„“]+|[»"”]+$/g, '')
+      .trim();
+
+    // If extra content is present and meaningful, pre-seed title into the wizard draft
+    if (
+      contentAfterTrigger.length >= 3 &&
+      !/^(?:задач[уи]|новую\s+задачу)$/i.test(contentAfterTrigger)
+    ) {
+      const extractedTitle =
+        cleanExtractedTaskTitle(contentAfterTrigger) || contentAfterTrigger;
+      wizardInit.draft.title = extractedTitle;
+    }
+
     return {
       handled: true,
       personalTaskDraft: wizardInit.draft,

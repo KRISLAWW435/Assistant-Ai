@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -48,6 +48,28 @@ import {
   toSyzranIsoDate,
 } from '../utils/syzranTime';
 import { buildSyzranReminderIso } from '../utils/pixelTaskManagerEngine';
+import { storageProvider } from '../providers/storageProvider';
+
+/**
+ * Normalizes any task dueDate string, ISO timestamp, or timestamp number into strictly 'YYYY-MM-DD'.
+ * Guaranteed to match todayIso (e.g. '2026-11-11') regardless of whether time or ISO format was attached.
+ */
+export function normalizeTaskIsoDate(rawDate?: string | number | null): string {
+  if (!rawDate) return '';
+  if (typeof rawDate === 'number') {
+    return toSyzranIsoDate(new Date(rawDate));
+  }
+  const s = String(rawDate).trim();
+  const match = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) {
+    return match[1];
+  }
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    return toSyzranIsoDate(parsed);
+  }
+  return s;
+}
 
 export interface TasksViewProps {
   tasks: CompanionTaskRecord[];
@@ -60,6 +82,7 @@ export interface TasksViewProps {
     schoolId: SchoolId,
     sessionId?: string
   ) => void;
+  onReloadTasks?: () => Promise<void>;
 }
 
 export const REAL_TASK_STATUS_LABELS: Record<CompanionTaskStatus, string> = {
@@ -194,10 +217,43 @@ export const TasksView: React.FC<TasksViewProps> = ({
   onDeleteTask,
   onNavigate,
   onOpenSpecialistChat,
+  onReloadTasks,
 }) => {
   const todayIso = toSyzranIsoDate();
   const tomorrowIso = addDaysToIsoDate(todayIso, 1);
   const weekEndIso = addDaysToIsoDate(todayIso, 7);
+
+  // Synchronized state with props and real-time database updates
+  const [internalTasks, setInternalTasks] = useState<CompanionTaskRecord[]>(tasks);
+
+  // Keep in sync when parent passes new tasks prop
+  useEffect(() => {
+    setInternalTasks(tasks);
+  }, [tasks]);
+
+  // Global event listener for 'tasksUpdated' to immediately reload from IndexedDB
+  useEffect(() => {
+    let isMounted = true;
+    const handleTasksUpdated = async () => {
+      try {
+        const fresh = await storageProvider.getAllCompanionTasks();
+        if (isMounted) {
+          setInternalTasks(fresh);
+        }
+      } catch (err) {
+        console.warn('[TasksView] Error loading tasks on tasksUpdated:', err);
+      }
+    };
+
+    window.addEventListener('tasksUpdated', handleTasksUpdated);
+    // Sanity check on mount to ensure fresh state
+    void handleTasksUpdated();
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('tasksUpdated', handleTasksUpdated);
+    };
+  }, []);
 
   // View state
   const [viewMode, setViewMode] = useState<TaskViewMode>('list');
@@ -274,6 +330,11 @@ export const TasksView: React.FC<TasksViewProps> = ({
     setShowCreateModal(true);
   };
 
+  const handleDeleteTask = async (taskId: string) => {
+    setInternalTasks((prev) => prev.filter((t) => t.id !== taskId));
+    await onDeleteTask(taskId);
+  };
+
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formTitle.trim()) return;
@@ -290,6 +351,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
       );
     }
 
+    const cleanDueDate = normalizeTaskIsoDate(formDueDate);
+
     if (editingTask) {
       const isNowDone = formStatus === 'done';
       const wasDone = editingTask.status === 'done';
@@ -297,9 +360,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
         ...editingTask,
         title: formTitle.trim(),
         description: formDescription.trim(),
-        dueDate: formDueDate,
+        dueDate: cleanDueDate,
         dueTime: formDueTime || undefined,
-        priority: formPriority,
+        priority: formPriority || 'low',
         status: formStatus,
         schoolId: formSchool,
         reminderDate: formReminderDate || undefined,
@@ -317,15 +380,18 @@ export const TasksView: React.FC<TasksViewProps> = ({
             : now.getTime()
           : undefined,
       };
+      setInternalTasks((prev) =>
+        prev.map((t) => (t.id === updated.id ? updated : t))
+      );
       await onSaveTask(updated);
     } else {
       const newTask: CompanionTaskRecord = {
         id: `task-manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         title: formTitle.trim(),
         description: formDescription.trim(),
-        dueDate: formDueDate,
+        dueDate: cleanDueDate,
         dueTime: formDueTime || undefined,
-        priority: formPriority,
+        priority: formPriority || 'low',
         status: formStatus,
         schoolId: formSchool,
         sourceType: 'manual',
@@ -336,6 +402,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         createdAt: formattedNow,
         createdAtMs: now.getTime(),
       };
+      setInternalTasks((prev) => [newTask, ...prev]);
       await onSaveTask(newTask);
     }
 
@@ -356,6 +423,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
       completedAt: isNowDone ? formatSyzranIsoDateRu(todayIso) : undefined,
       completedAtMs: isNowDone ? now.getTime() : undefined,
     };
+    setInternalTasks((prev) =>
+      prev.map((t) => (t.id === updated.id ? updated : t))
+    );
     await onSaveTask(updated);
   };
 
@@ -373,15 +443,20 @@ export const TasksView: React.FC<TasksViewProps> = ({
     task: CompanionTaskRecord,
     targetDate: string
   ) => {
-    await onSaveTask({
+    const cleanDate = normalizeTaskIsoDate(targetDate);
+    const updated: CompanionTaskRecord = {
       ...task,
-      dueDate: targetDate,
-    });
+      dueDate: cleanDate,
+    };
+    setInternalTasks((prev) =>
+      prev.map((t) => (t.id === updated.id ? updated : t))
+    );
+    await onSaveTask(updated);
   };
 
   // Filter tasks
   const filteredTasks = useMemo(() => {
-    return tasks.filter((t) => {
+    return internalTasks.filter((t) => {
       // 1. Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -434,33 +509,31 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
       return true;
     });
-  }, [tasks, searchQuery, schoolFilter, statusFilter, typeFilter]);
+  }, [internalTasks, searchQuery, schoolFilter, statusFilter, typeFilter]);
 
   // Metrics
   const metrics = useMemo(() => {
-    const total = tasks.length;
-    const active = tasks.filter(
+    const total = internalTasks.length;
+    const active = internalTasks.filter(
       (t) => t.status !== 'done' && t.status !== 'cancelled'
     ).length;
-    const waitingAnna = tasks.filter(
+    const waitingAnna = internalTasks.filter(
       (t) => t.status === 'waiting_anna_action' || t.status === 'postponed'
     ).length;
-    const waitingResponse = tasks.filter(
+    const waitingResponse = internalTasks.filter(
       (t) => t.status === 'waiting_response'
     ).length;
-    const undated = tasks.filter(
-      (t) =>
-        !t.dueDate && (t.status !== 'done' && t.status !== 'cancelled')
-    ).length;
-    const completed = tasks.filter((t) => t.status === 'done').length;
-    const cancelled = tasks.filter((t) => t.status === 'cancelled').length;
-    const overdue = tasks.filter(
-      (t) =>
-        t.status !== 'done' &&
-        t.status !== 'cancelled' &&
-        t.dueDate &&
-        t.dueDate < todayIso
-    ).length;
+    const undated = internalTasks.filter((t) => {
+      const d = normalizeTaskIsoDate(t.dueDate);
+      return !d && t.status !== 'done' && t.status !== 'cancelled';
+    }).length;
+    const completed = internalTasks.filter((t) => t.status === 'done').length;
+    const cancelled = internalTasks.filter((t) => t.status === 'cancelled').length;
+    const overdue = internalTasks.filter((t) => {
+      if (t.status === 'done' || t.status === 'cancelled') return false;
+      const d = normalizeTaskIsoDate(t.dueDate);
+      return Boolean(d && d < todayIso);
+    }).length;
 
     return {
       total,
@@ -472,7 +545,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       cancelled,
       overdue,
     };
-  }, [tasks, todayIso]);
+  }, [internalTasks, todayIso]);
 
   // Grouped tasks for List View
   const groupedList = useMemo(() => {
@@ -490,25 +563,26 @@ export const TasksView: React.FC<TasksViewProps> = ({
         continue;
       }
 
-      if (!t.dueDate) {
+      const dateIso = normalizeTaskIsoDate(t.dueDate);
+      if (!dateIso) {
         undated.push(t);
         continue;
       }
 
-      if (t.dueDate < todayIso) {
+      if (dateIso < todayIso) {
         overdue.push(t);
-      } else if (t.dueDate === todayIso) {
+      } else if (dateIso === todayIso) {
         today.push(t);
-      } else if (t.dueDate === tomorrowIso) {
+      } else if (dateIso === tomorrowIso) {
         tomorrow.push(t);
-      } else if (t.dueDate <= weekEndIso) {
+      } else if (dateIso <= weekEndIso) {
         thisWeek.push(t);
       } else {
         upcoming.push(t);
       }
     }
 
-    // Sort function: by time if present, then priority
+    // Sort function: by time if present, then priority (with safe default for priority)
     const sortGroup = (arr: CompanionTaskRecord[]) =>
       arr.sort((a, b) => {
         if (a.dueTime && b.dueTime && a.dueTime !== b.dueTime) {
@@ -516,8 +590,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
         }
         if (a.dueTime && !b.dueTime) return -1;
         if (!a.dueTime && b.dueTime) return 1;
-        const priorityWeight = { high: 0, medium: 1, low: 2 };
-        return priorityWeight[a.priority] - priorityWeight[b.priority];
+        const priorityWeight: Record<string, number> = { high: 0, medium: 1, low: 2 };
+        const aW = priorityWeight[a.priority] ?? 2;
+        const bW = priorityWeight[b.priority] ?? 2;
+        return aW - bW;
       });
 
     return {
@@ -564,7 +640,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
         dayNumber: d,
         isCurrentMonth: false,
         isToday: dateIso === todayIso,
-        tasks: filteredTasks.filter((t) => t.dueDate === dateIso),
+        tasks: filteredTasks.filter(
+          (t) => normalizeTaskIsoDate(t.dueDate) === dateIso
+        ),
       });
     }
 
@@ -577,7 +655,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
         dayNumber: d,
         isCurrentMonth: true,
         isToday: dateIso === todayIso,
-        tasks: filteredTasks.filter((t) => t.dueDate === dateIso),
+        tasks: filteredTasks.filter(
+          (t) => normalizeTaskIsoDate(t.dueDate) === dateIso
+        ),
       });
     }
 
@@ -594,7 +674,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
         dayNumber: d,
         isCurrentMonth: false,
         isToday: dateIso === todayIso,
-        tasks: filteredTasks.filter((t) => t.dueDate === dateIso),
+        tasks: filteredTasks.filter(
+          (t) => normalizeTaskIsoDate(t.dueDate) === dateIso
+        ),
       });
     }
 
@@ -918,7 +1000,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     onToggleDone={handleToggleDone}
                     onUpdateStatus={handleUpdateStatus}
                     onEdit={handleOpenEditModal}
-                    onDelete={onDeleteTask}
+                    onDelete={handleDeleteTask}
                     onNavigateToChat={onOpenSpecialistChat}
                   />
                 ))}
@@ -958,7 +1040,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     onToggleDone={handleToggleDone}
                     onUpdateStatus={handleUpdateStatus}
                     onEdit={handleOpenEditModal}
-                    onDelete={onDeleteTask}
+                    onDelete={handleDeleteTask}
                     onNavigateToChat={onOpenSpecialistChat}
                   />
                 ))}
@@ -984,7 +1066,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     onToggleDone={handleToggleDone}
                     onUpdateStatus={handleUpdateStatus}
                     onEdit={handleOpenEditModal}
-                    onDelete={onDeleteTask}
+                    onDelete={handleDeleteTask}
                     onNavigateToChat={onOpenSpecialistChat}
                   />
                 ))}
@@ -1010,7 +1092,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     onToggleDone={handleToggleDone}
                     onUpdateStatus={handleUpdateStatus}
                     onEdit={handleOpenEditModal}
-                    onDelete={onDeleteTask}
+                    onDelete={handleDeleteTask}
                     onNavigateToChat={onOpenSpecialistChat}
                   />
                 ))}
@@ -1036,7 +1118,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     onToggleDone={handleToggleDone}
                     onUpdateStatus={handleUpdateStatus}
                     onEdit={handleOpenEditModal}
-                    onDelete={onDeleteTask}
+                    onDelete={handleDeleteTask}
                     onNavigateToChat={onOpenSpecialistChat}
                   />
                 ))}
@@ -1081,7 +1163,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     onToggleDone={handleToggleDone}
                     onUpdateStatus={handleUpdateStatus}
                     onEdit={handleOpenEditModal}
-                    onDelete={onDeleteTask}
+                    onDelete={handleDeleteTask}
                     onNavigateToChat={onOpenSpecialistChat}
                   />
                 ))}
@@ -1109,7 +1191,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     onToggleDone={handleToggleDone}
                     onUpdateStatus={handleUpdateStatus}
                     onEdit={handleOpenEditModal}
-                    onDelete={onDeleteTask}
+                    onDelete={handleDeleteTask}
                     onNavigateToChat={onOpenSpecialistChat}
                   />
                 ))}
@@ -1663,8 +1745,9 @@ const TaskCardItem: React.FC<TaskCardItemProps> = ({
 }) => {
   const isDone = task.status === 'done';
   const isCancelled = task.status === 'cancelled';
+  const normalizedDueDate = normalizeTaskIsoDate(task.dueDate);
   const isOverdue =
-    !isDone && !isCancelled && task.dueDate && task.dueDate < todayIso;
+    !isDone && !isCancelled && Boolean(normalizedDueDate && normalizedDueDate < todayIso);
 
   const typeInfo = getTaskTypeInfo(task);
   const TypeIcon = typeInfo.icon;
@@ -1798,12 +1881,12 @@ const TaskCardItem: React.FC<TaskCardItemProps> = ({
                     className={
                       isOverdue
                         ? 'text-rose-600 font-bold'
-                        : task.dueDate === todayIso
+                        : normalizedDueDate === todayIso
                         ? 'text-cyan-800 font-bold'
                         : 'text-slate-700'
                     }
                   >
-                    {formatSyzranIsoDateRu(task.dueDate)}
+                    {formatSyzranIsoDateRu(normalizedDueDate || task.dueDate)}
                   </span>
                 </span>
               ) : (
