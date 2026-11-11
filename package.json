@@ -11,13 +11,14 @@
     "dev": "tsx server.ts",
     "start": "node server.ts",
     "build": "vite build",
+    "clean:build": "rm -rf release dist dist-electron",
+    "clean": "rm -rf dist dist-electron release server.js",
     "build:electron": "tsx scripts/build-electron.ts",
     "build:icons": "tsx scripts/generate-icon.ts",
-    "electron:build": "npm run build:icons && npm run build && npm run build:electron && electron-builder --win",
-    "electron:pack": "npm run build:icons && npm run build && npm run build:electron && electron-builder --win --dir",
+    "electron:build": "npm run clean:build && npm run build:icons && npm run build && npm run build:electron && electron-builder --win",
+    "electron:pack": "npm run clean:build && npm run build:icons && npm run build && npm run build:electron && electron-builder --win --dir",
     "electron:dev": "npm run build:electron && electron dist-electron/main.cjs",
     "preview": "vite preview",
-    "clean": "rm -rf dist dist-electron release server.js",
     "lint": "tsc --noEmit",
     "test:dates": "tsx scripts/test-date-parser.ts"
   },
@@ -67,8 +68,7 @@
       "dist/**/*",
       "dist-electron/**/*",
       "public/**/*",
-      "build/icon.ico",
-      "build/icon.png",
+      "build/**/*",
       "package.json"
     ],
     "extraMetadata": {

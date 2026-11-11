@@ -363,17 +363,24 @@ function syncVaultKeysToServer(): void {
 
 function getAppIconPath(): string {
   const candidates = [
-    path.join(_mainDir, '../build/icon.ico'),
-    path.join(_mainDir, '../public/icon.ico'),
-    path.join(process.resourcesPath, 'build/icon.ico'),
-    path.join(process.resourcesPath, 'app/build/icon.ico'),
-    path.join(_mainDir, '../build/icon.png'),
-    path.join(_mainDir, '../public/icon.png'),
+    path.join(__dirname, '../build/icon.ico'),
+    path.join(app.getAppPath(), 'build', 'icon.ico'),
+    path.join(__dirname, 'build', 'icon.ico'),
+    path.join(process.resourcesPath, 'build', 'icon.ico'),
+    path.join(process.resourcesPath, 'app', 'build', 'icon.ico'),
+    path.join(__dirname, '../build/icon.png'),
+    path.join(app.getAppPath(), 'build', 'icon.png'),
+    path.join(__dirname, 'build', 'icon.png'),
+    path.join(__dirname, '../public/icon.ico'),
+    path.join(__dirname, '../public/icon.png'),
+    path.join(app.getAppPath(), 'public', 'icon.ico'),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
   }
-  return '';
+  return app.isPackaged
+    ? path.join(app.getAppPath(), 'build', 'icon.ico')
+    : path.join(__dirname, '../build/icon.ico');
 }
 
 async function startEmbeddedServer(): Promise<number> {
@@ -1520,7 +1527,13 @@ function insertPromptIntoFlow(promptText: string): { success: boolean; error?: s
 }
 
 async function createMainWindow(port: number): Promise<void> {
-  const iconPath = getAppIconPath();
+  const iconPath =
+    getAppIconPath() ||
+    (app.isPackaged
+      ? path.join(app.getAppPath(), 'build', 'icon.ico')
+      : path.join(__dirname, '../build/icon.ico'));
+
+  console.log(`[Electron] Using window icon: ${iconPath} (exists: ${fs.existsSync(iconPath)})`);
 
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -1528,7 +1541,7 @@ async function createMainWindow(port: number): Promise<void> {
     minWidth: 1024,
     minHeight: 700,
     title: 'KIBERone & RENDERIA Business Assistant',
-    icon: iconPath || undefined,
+    icon: iconPath,
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -1540,6 +1553,17 @@ async function createMainWindow(port: number): Promise<void> {
       backgroundThrottling: false,
     },
   });
+
+  if (fs.existsSync(iconPath)) {
+    try {
+      const nIcon = nativeImage.createFromPath(iconPath);
+      if (!nIcon.isEmpty()) {
+        mainWindow.setIcon(nIcon);
+      }
+    } catch (iconErr) {
+      console.warn('[Electron] setIcon warning:', iconErr);
+    }
+  }
 
   // Handle external links safely in OS browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

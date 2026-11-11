@@ -56,6 +56,44 @@ async function buildElectron() {
   });
   // ----------------------------------------
 
+  // Ensure build/ folder with icons is present and populated
+  const buildDir = path.join(rootDir, 'build');
+  const iconIcoPath = path.join(buildDir, 'icon.ico');
+  const iconPngPath = path.join(buildDir, 'icon.png');
+
+  if (!fs.existsSync(iconIcoPath) || !fs.existsSync(iconPngPath)) {
+    console.log('[BuildElectron] build/ icons not found. Generating default icons...');
+    const { writeDefaultIcons } = await import('./generate-icon.ts');
+    writeDefaultIcons(buildDir);
+  }
+
+  // Sync icons to dist-electron/build and dist/ (if exists) so relative lookups always succeed
+  const distElectronBuildDir = path.join(outDir, 'build');
+  if (!fs.existsSync(distElectronBuildDir)) {
+    fs.mkdirSync(distElectronBuildDir, { recursive: true });
+  }
+  if (fs.existsSync(iconIcoPath)) {
+    fs.copyFileSync(iconIcoPath, path.join(distElectronBuildDir, 'icon.ico'));
+  }
+  if (fs.existsSync(iconPngPath)) {
+    fs.copyFileSync(iconPngPath, path.join(distElectronBuildDir, 'icon.png'));
+  }
+
+  const distDir = path.join(rootDir, 'dist');
+  if (fs.existsSync(distDir)) {
+    const distBuildDir = path.join(distDir, 'build');
+    if (!fs.existsSync(distBuildDir)) {
+      fs.mkdirSync(distBuildDir, { recursive: true });
+    }
+    if (fs.existsSync(iconIcoPath)) {
+      fs.copyFileSync(iconIcoPath, path.join(distBuildDir, 'icon.ico'));
+    }
+    if (fs.existsSync(iconPngPath)) {
+      fs.copyFileSync(iconPngPath, path.join(distBuildDir, 'icon.png'));
+    }
+  }
+
+  console.log('[BuildElectron] Verified build/ icons and synced to dist-electron/build');
   console.log('[BuildElectron] Successfully built Electron artifacts in dist-electron/');
 }
 
