@@ -2096,7 +2096,7 @@ export default function App() {
       usedContextSummary.push(`Без текстового слоя: «${skippedName}»`);
     }
 
-    // Default primary provider is Gemini with gemini-3.1-flash-lite
+    // Default primary provider is Gemini with gemini-3.8-flash
     const initialEstimatedProvider: AIProviderId =
       contextOptions.providerSelection === 'openrouter'
         ? 'openrouter'
@@ -2109,7 +2109,7 @@ export default function App() {
         ? 'openrouter/auto'
         : initialEstimatedProvider === 'ollama'
           ? 'llama3.2'
-          : (geminiStatus?.model || 'gemini-3.1-flash-lite');
+          : (geminiStatus?.model || 'gemini-3.8-flash');
 
     const initialAssistantReply: ChatMessage = {
       id: assistantMsgId,

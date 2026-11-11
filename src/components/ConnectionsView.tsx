@@ -135,7 +135,7 @@ const INITIAL_MODAL_STATE: ModalFormState = {
   providerId: 'gemini',
   userDefinedName: '',
   rawApiKey: '',
-  selectedModel: 'gemini-3.1-flash',
+  selectedModel: 'gemini-3.8-flash',
   isDefault: false,
   showRawKey: false,
 };
@@ -152,42 +152,42 @@ const SPECIALIST_CONFIGS: Array<{
     label: 'Маркетолог',
     tagline: 'Контент-планы, рекламные посты VK, офферы и рассылки',
     icon: Megaphone,
-    defaultModel: 'gemini-3.1-flash',
+    defaultModel: 'gemini-3.8-flash',
   },
   {
     key: 'manager',
     label: 'Менеджер по родителям',
     tagline: 'Скрипты диалогов, обработка возражений, запись на пробные уроки',
     icon: MessageSquareHeart,
-    defaultModel: 'gemini-3.1-flash',
+    defaultModel: 'gemini-3.8-flash',
   },
   {
     key: 'methodist',
     label: 'Методист',
     tagline: 'Структура модулей, практические задания и результаты учеников',
     icon: GraduationCap,
-    defaultModel: 'gemini-3.1-flash',
+    defaultModel: 'gemini-3.8-flash',
   },
   {
     key: 'analyst',
     label: 'Бизнес-аналитик',
     tagline: 'Воронка заявок, конверсии, удержание и разбор отчётов',
     icon: BarChart3,
-    defaultModel: 'gemini-3.1-flash',
+    defaultModel: 'gemini-3.8-flash',
   },
   {
     key: 'designer',
     label: 'Дизайнер',
     tagline: 'Визуальные концепции, баннеры, креативы и макеты по брендбуку',
     icon: Palette,
-    defaultModel: 'gemini-3.1-flash',
+    defaultModel: 'gemini-3.8-flash',
   },
   {
     key: 'pixel',
     label: 'Помощник Пиксель',
     tagline: 'Личный компаньон Анны: задачи, память, быстрые заметки',
     icon: Sparkles,
-    defaultModel: 'gemini-3.1-flash',
+    defaultModel: 'gemini-3.8-flash',
   },
 ];
 
@@ -1017,7 +1017,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
       rawApiKey: '',
       selectedModel:
         providerId === 'gemini'
-          ? 'gemini-3.1-flash'
+          ? 'gemini-3.8-flash'
           : providerId === 'openrouter'
             ? 'openrouter/free'
             : 'llama3.2:3b',
@@ -1169,7 +1169,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
       } else if (providerSelection === 'ollama') {
         resolvedModel = 'llama3.2:3b';
       } else {
-        resolvedModel = 'gemini-3.1-flash';
+        resolvedModel = 'gemini-3.8-flash';
       }
     }
 
@@ -2338,7 +2338,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                               const newProvider = e.target.value as
                                 | 'auto'
                                 | AIProviderId;
-                              let defModel = 'gemini-3.1-flash';
+                              let defModel = 'gemini-3.8-flash';
                               if (newProvider === 'openrouter') {
                                 defModel = 'openrouter/free';
                               } else if (newProvider === 'ollama') {
@@ -2394,7 +2394,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                             </label>
                             <select
                               value={
-                                currentSetting.specificModel || 'gemini-3.1-flash'
+                                currentSetting.specificModel || 'gemini-3.8-flash'
                               }
                               onChange={(e) =>
                                 handleSpecialistChange(
@@ -3880,7 +3880,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                       providerId: e.target.value as AIProviderId,
                       selectedModel:
                         e.target.value === 'gemini'
-                          ? 'gemini-3.1-flash'
+                          ? 'gemini-3.8-flash'
                           : e.target.value === 'openrouter'
                             ? 'openrouter/free'
                             : 'llama3.2:3b',

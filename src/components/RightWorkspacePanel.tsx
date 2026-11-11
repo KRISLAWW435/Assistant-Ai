@@ -3676,7 +3676,7 @@ export const RightWorkspacePanel: React.FC<RightWorkspacePanelProps> = ({
               ) : (
                 <p className="text-[11px] text-slate-600 leading-relaxed">
                   Основная модель:{' '}
-                  <strong>{geminiStatus?.model || 'gemini-3.1-flash'}</strong>.
+                  <strong>{geminiStatus?.model || 'gemini-3.8-flash'}</strong>.
                   {activeSchool === 'all' ? (
                     <> В запрос передаются разделы Баз знаний обеих школ и явно выбранные вами документы.</>
                   ) : (

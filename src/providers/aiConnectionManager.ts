@@ -28,27 +28,27 @@ export function getDefaultSpecialistAssignments(): SpecialistModelAssignments {
   return {
     marketer: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.1-flash',
+      specificModel: 'gemini-3.8-flash',
     },
     manager: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.1-flash',
+      specificModel: 'gemini-3.8-flash',
     },
     methodist: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.1-flash',
+      specificModel: 'gemini-3.8-flash',
     },
     analyst: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.1-flash',
+      specificModel: 'gemini-3.8-flash',
     },
     designer: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.1-flash',
+      specificModel: 'gemini-3.8-flash',
     },
     pixel: {
       providerSelection: 'auto',
-      specificModel: 'gemini-3.1-flash',
+      specificModel: 'gemini-3.8-flash',
     },
   };
 }
@@ -96,12 +96,9 @@ export const RECOMMENDED_OLLAMA_MODELS: RecommendedOllamaModel[] = [
 ];
 
 export const GEMINI_AVAILABLE_MODELS = [
-  { id: 'gemini-3.1-flash', name: 'Gemini 3.1 Flash (Основная модель)', description: 'Быстрая, актуальная и стабильная модель по умолчанию' },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Стабильная резервная модель (Waterfall #2)' },
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'Быстрая резервная модель (Waterfall #3)' },
-  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', description: 'Классическая стабильная модель (Waterfall #4)' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Для сложных аналитических разборов' },
-  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash-Lite', description: 'Экономичная резервная модель' },
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (Основная модель)', description: 'Быстрая, актуальная и мультимодальная модель по умолчанию' },
+  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash-Lite', description: 'Экономичная быстрая модель (Waterfall #2)' },
+  { id: 'gemini-flash-latest', name: 'Gemini Flash Latest', description: 'Автоматически актуализируемая модель (Waterfall #3)' },
 ];
 
 class AIConnectionManager {

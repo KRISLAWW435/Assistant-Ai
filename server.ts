@@ -40,9 +40,9 @@ export interface RunningAssistantServer {
 const PORT = 3000;
 const rawEnvGeminiModel = (process.env.GEMINI_MODEL || '').trim();
 export const GEMINI_MODEL =
-  rawEnvGeminiModel && !rawEnvGeminiModel.startsWith('gemini-2.5')
+  rawEnvGeminiModel && !rawEnvGeminiModel.startsWith('gemini-2.5') && !rawEnvGeminiModel.startsWith('gemini-3.1-flash')
     ? rawEnvGeminiModel
-    : 'gemini-3.1-flash';
+    : 'gemini-3.8-flash';
 export const GEMINI_FILES_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 const GEMINI_QUOTA_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 const rawEnvOpenRouterModel = (process.env.OPENROUTER_MODEL || '').trim();
@@ -432,12 +432,12 @@ let serverSpecialistModelAssignments: Record<
   string,
   { providerSelection: 'auto' | AIProviderId; specificModel?: string }
 > = {
-  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  manager: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  designer: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
-  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.1-flash' },
+  marketer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  manager: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  methodist: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  analyst: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  designer: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
+  pixel: { providerSelection: 'auto', specificModel: 'gemini-3.8-flash' },
 };
 
 let serverFailoverSettings = {
@@ -1448,7 +1448,7 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
   if (norm.includes('3.1-flash-lite') || norm.includes('flash-lite')) {
     return { thinkingLevel: ThinkingLevel.MINIMAL };
   }
-  if (norm.includes('3.1-flash') || norm.includes('flash-latest') || norm.startsWith('gemini-3')) {
+  if (norm.includes('3.8-flash') || norm.includes('flash-latest') || norm.startsWith('gemini-3')) {
     return { thinkingLevel: ThinkingLevel.LOW };
   }
   return undefined;
@@ -1456,23 +1456,22 @@ function getThinkingConfigForGeminiModel(modelName: string): Record<string, unkn
 
 /**
  * Strict Waterfall Fallback chain for Google Gemini models:
- * 1. gemini-3.1-flash (основная)
- * 2. gemini-2.5-flash
- * 3. gemini-2.0-flash
- * 4. gemini-1.5-flash
+ * 1. gemini-3.8-flash (основная)
+ * 2. gemini-3.1-flash-lite (резервная 1)
+ * 3. gemini-flash-latest (резервная 2)
  * And only if all of them are unavailable, waterfalls to OpenRouter (nvidia/nemotron-3.5-super-vl:free).
  */
 export const GEMINI_WATERFALL_FALLBACK_MODELS = [
   'gemini-3.8-flash',
-  'gemini-3.1-flash',
   'gemini-3.1-flash-lite',
+  'gemini-flash-latest',
 ] as const;
 
 let lastHealthyGeminiModel: string = 'gemini-3.8-flash';
 
 /**
  * Provider 1: Google Gemini Free execution with strict Waterfall Fallback
- * (gemini-3.8-flash -> gemini-3.1-flash -> gemini-3.1-flash-lite)
+ * (gemini-3.8-flash -> gemini-3.1-flash-lite -> gemini-flash-latest)
  */
 async function executeGeminiGeneration(params: {
   systemInstruction: string;
@@ -1494,8 +1493,8 @@ async function executeGeminiGeneration(params: {
   // Strict Waterfall Fallback model cascade
   const candidateModels = [
     'gemini-3.8-flash',
-    'gemini-3.1-flash',
     'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
   ];
 
   let lastErr: unknown = null;
@@ -1928,7 +1927,7 @@ export async function startServer(
         try {
           const ai = getGenAIClient();
           await ai.models.generateContent({
-            model: 'gemini-3.1-flash',
+            model: 'gemini-3.8-flash',
             contents: 'ping',
           });
           providerHealthRegistry.gemini.status = 'connected';

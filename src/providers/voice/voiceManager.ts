@@ -441,7 +441,7 @@ export class VoiceManager {
       PIXEL_TIMBRE_OPTIONS[1]; // default: bright
 
     const voiceId = s.selectedGeminiVoice || 'Aoede';
-    const ttsModel = s.ttsModel || 'gemini-2.5-flash-tts';
+    const ttsModel = s.ttsModel || 'gemini-3.8-flash-lite-tts';
 
     this.updatePlaybackState({
       messageId,
@@ -822,7 +822,7 @@ export class VoiceManager {
           ttsModel:
             typeof parsed.ttsModel === 'string' && parsed.ttsModel
               ? parsed.ttsModel
-              : 'gemini-2.5-flash-tts',
+              : 'gemini-3.8-flash-lite-tts',
         };
       }
     } catch {

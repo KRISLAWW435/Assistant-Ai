@@ -34,19 +34,17 @@ export type OpenRouterMultimodalModelId =
 
 /**
  * Strict Waterfall Fallback chain for Google Gemini models.
- * If primary model gemini-3.1-flash encounters 503, 429, timeout, or server overload,
+ * If primary model gemini-3.8-flash encounters 503, 429, timeout, or server overload,
  * system automatically cascades sequentially down:
- * 1. gemini-3.1-flash (основная)
- * 2. gemini-2.5-flash
- * 3. gemini-2.0-flash
- * 4. gemini-1.5-flash
+ * 1. gemini-3.8-flash (основная)
+ * 2. gemini-3.1-flash-lite
+ * 3. gemini-flash-latest
  * And only if all of them are unavailable, switches to OpenRouter (nvidia/nemotron-3.5-super-vl:free).
  */
 export const GEMINI_WATERFALL_FALLBACK_MODELS = [
-  'gemini-3.1-flash',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
+  'gemini-3.8-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-flash-latest',
 ] as const;
 
 export type GeminiWaterfallModelId =
@@ -190,9 +188,10 @@ export function formatMessageProviderAttribution(
     return cleanModel ? `Ollama · ${cleanModel}` : 'Ollama · локальная модель';
   }
   // Default / Gemini
-  if (!cleanModel) return 'Gemini 3.1 Flash';
-  if (cleanModel === 'gemini-3.1-flash') return 'Gemini 3.1 Flash';
+  if (!cleanModel) return 'Gemini 3.8 Flash';
+  if (cleanModel === 'gemini-3.8-flash') return 'Gemini 3.8 Flash';
   if (cleanModel === 'gemini-3.1-flash-lite') return 'Gemini 3.1 Flash-Lite';
+  if (cleanModel === 'gemini-flash-latest') return 'Gemini Flash Latest';
   if (cleanModel.toLowerCase().startsWith('gemini')) {
     return `Gemini · ${cleanModel}`;
   }
@@ -318,7 +317,7 @@ class ServerBackedProviderAdapter implements AIProvider {
 export const geminiFreeProvider: AIProvider = new ServerBackedProviderAdapter(
   'gemini',
   PROVIDER_LABELS_RU.gemini,
-  'gemini-3.1-flash'
+  'gemini-3.8-flash'
 );
 
 export const openRouterFreeProvider: AIProvider = new ServerBackedProviderAdapter(
