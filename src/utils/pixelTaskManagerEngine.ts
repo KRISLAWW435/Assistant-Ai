@@ -1344,15 +1344,23 @@ export function createEmptyPersonalTaskWizardDraft(
   const draftId = `draft_${nowMs}_${Math.random().toString(36).slice(2, 6)}`;
   const draft: PixelPendingPersonalTaskDraft = {
     draftId,
-    target: 'undecided',
+    target: null,
+    specialistId: null,
+    targetSpecialistMode: undefined,
+    targetSpecialistNameRu: undefined,
     title: '',
     description: '',
+    taskDescription: '',
+    specialistInstruction: '',
     schoolId: activeSchool || 'both',
+    dueDate: null,
+    dueTime: null,
+    reminder: null,
+    priority: 'low',
+    wantsReminder: false,
     hasExplicitDate: false,
     hasExplicitDueTime: false,
-    priority: 'low',
     hasExplicitPriority: false,
-    wantsReminder: false,
     hasExplicitReminder: false,
     step: 'ask_target',
     status: 'drafting',
@@ -1420,6 +1428,8 @@ export function initPersonalTaskDraft(
 
   const draft: PixelPendingPersonalTaskDraft = {
     draftId,
+    target: 'personal',
+    specialistId: null,
     title,
     description: `Поставлено Анной: «${trimmed}»`,
     schoolId,
@@ -1498,7 +1508,7 @@ export interface ReadySpecialistDelegation {
 
 export interface ProcessPersonalTaskDraftResult {
   action: 'updated' | 'confirmed' | 'cancelled';
-  draft: PixelPendingPersonalTaskDraft;
+  draft: PixelPendingPersonalTaskDraft | null;
   responseRu: string;
   spokenSummary: string;
   readyTask?: CompanionTaskRecord;
@@ -1528,6 +1538,11 @@ export function getStepQuestionRu(
     case 'clarifying_priority':
       return 'Укажем приоритет: обычный, средний, высокий? Или не указывать?';
     case 'ready_for_confirmation':
+    case 'confirmation':
+      if (draft?.target === 'specialist') {
+        const specName = draft?.targetSpecialistNameRu || 'специалиста';
+        return `Отправляем поручение для ${specName} или нужно что-то исправить?`;
+      }
       return 'Подтверждаем или что-то исправить?';
     case 'clarifying_specialist':
       return 'Какому специалисту ставим задачу? (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер)';
@@ -1616,7 +1631,7 @@ export function formatScenarioAFinalReadback(
   markdownText: string;
   spokenText: string;
 } {
-  const titleText = draft.title || 'Новая задача';
+  const titleText = (draft.title || draft.description || 'Личная задача Анны').trim();
   const descText =
     draft.description && draft.description.trim()
       ? draft.description.trim()
@@ -1669,7 +1684,8 @@ export function formatScenarioBFinalReadback(
   spokenText: string;
 } {
   const specName = draft.targetSpecialistNameRu || 'Специалист';
-  const instruction = draft.specialistInstruction || 'Без текста поручения';
+  const instruction =
+    draft.taskDescription || draft.specialistInstruction || 'Без текста поручения';
 
   const spokenText = `Зачитываю поручение для ${specName}: ${instruction}. Отправляем или нужно что-то исправить?`;
   const markdownText = `📋 **Зачитываю поручение для специалиста ${specName}:**\n\n«${instruction}»\n\nОтправляем или нужно что-то исправить?`;
@@ -1681,12 +1697,21 @@ export function formatScenarioBFinalReadback(
  * Strict Finite State Machine for creating tasks (both Personal and Specialist).
  */
 export async function processPersonalTaskDraftInput(
-  draft: PixelPendingPersonalTaskDraft,
+  draft: PixelPendingPersonalTaskDraft | null,
   userText: string,
   todayIso: string = toSyzranIsoDate(),
   onSaveTaskDirectly?: (task: CompanionTaskRecord) => Promise<void>
 ): Promise<ProcessPersonalTaskDraftResult> {
-  const trimmed = userText.trim();
+  if (!draft) {
+    return {
+      action: 'cancelled',
+      draft: null,
+      responseRu: 'Нет активного черновика задачи.',
+      spokenSummary: 'Нет активного черновика задачи.',
+    };
+  }
+
+  const trimmed = (userText || '').trim();
   const lower = trimmed.toLowerCase();
 
   // 1. Cancellation check at any step
@@ -1697,7 +1722,7 @@ export async function processPersonalTaskDraftInput(
   ) {
     return {
       action: 'cancelled',
-      draft: { ...draft, status: 'cancelled' },
+      draft: null,
       responseRu: 'Создание задачи отменено.',
       spokenSummary: 'Создание задачи отменено.',
     };
@@ -1714,7 +1739,28 @@ export async function processPersonalTaskDraftInput(
     };
   }
 
-  // 3. STEP 1: ask_target («Анна, для кого ставим задачу: для вас или для специалиста?»)
+  const isConfirm = /(?:^|[^а-яёa-z0-9])(?:да|подтвержда(?:ю|ем|й|йте|ть)|подтверждено|подтвердить|создава(?:й|йте)|создать|сохраня(?:й|йте)|сохранить|отправля(?:й|йте)|отправить|ок|окей|okay|хорошо|всё\s+верно|все\s+верно|всё\s+правильно|все\s+правильно|верно|правильно|давай|давайте|ага|точно|соглас(?:ен|на)|отлично)(?=$|[^а-яёa-z0-9])/i.test(
+    lower
+  );
+
+  // 3. Rule 4: If Anna says "Да/Подтверждаю" when NOT on confirmation step, do not falsely confirm
+  const isAtConfirmationStep =
+    (draft.target === 'personal' &&
+      (draft.step === 'ready_for_confirmation' || draft.step === 'confirmation')) ||
+    (draft.target === 'specialist' &&
+      (draft.step === 'specialist_confirmation' || draft.step === 'confirmation'));
+
+  if (isConfirm && !isAtConfirmationStep) {
+    const question = getStepQuestionRu(draft.step, draft);
+    return {
+      action: 'updated',
+      draft,
+      responseRu: `Сначала уточните данные для задачи. ${question}`,
+      spokenSummary: `Сначала уточните данные для задачи. ${question}`,
+    };
+  }
+
+  // 4. STEP 1: ask_target («Анна, для кого ставим задачу: для вас или для специалиста?»)
   if (draft.step === 'ask_target') {
     const isPersonal = /(?:^|[^а-яёa-z0-9])(?:для\s+меня|мне|для\s+себя|себе|личн[а-яё0-9]*|я|моя|мое|моему|себя)(?=$|[^а-яёa-z0-9])/i.test(
       lower
@@ -1724,34 +1770,34 @@ export async function processPersonalTaskDraftInput(
     );
 
     if (isPersonal) {
-      const nextDraft: PixelPendingPersonalTaskDraft = {
-        ...draft,
-        target: 'personal',
-        step: 'clarifying_title',
-      };
+      const refusalText =
+        'Анна, личные задачи лучше ставить через кнопку "Поставить задачу" в меню или в письменном виде, чтобы я точно все записал и не ошибся с датами.';
       return {
-        action: 'updated',
-        draft: nextDraft,
-        responseRu: 'Какое название (суть) задачи запишем?',
-        spokenSummary: 'Какое название (суть) задачи запишем?',
+        action: 'cancelled',
+        draft: null,
+        responseRu: refusalText,
+        spokenSummary: refusalText,
       };
     }
 
     if (isSpecialist) {
       const detected = detectSpecialistFromText(lower);
       if (detected.matched && detected.mode) {
+        const specName =
+          detected.nameRu || AGENT_MODES[detected.mode].shortTitle;
         const nextDraft: PixelPendingPersonalTaskDraft = {
           ...draft,
           target: 'specialist',
+          specialistId: detected.mode,
           targetSpecialistMode: detected.mode,
-          targetSpecialistNameRu: detected.nameRu || AGENT_MODES[detected.mode].shortTitle,
+          targetSpecialistNameRu: specName,
           step: 'clarifying_specialist_task',
         };
         return {
           action: 'updated',
           draft: nextDraft,
-          responseRu: `Специалист: **${nextDraft.targetSpecialistNameRu}**.\n\nЧто за задача? Напишите или продиктуйте суть и детали.`,
-          spokenSummary: 'Что за задача? Напишите или продиктуйте суть и детали.',
+          responseRu: `Специалист: **${specName}**.\n\nЧто за задача? Напишите или продиктуйте суть и детали (ТЗ).`,
+          spokenSummary: `Специалист ${specName}. Что за задача? Напишите или продиктуйте суть и детали.`,
         };
       }
 
@@ -1763,372 +1809,212 @@ export async function processPersonalTaskDraftInput(
       return {
         action: 'updated',
         draft: nextDraft,
-        responseRu: 'Какому специалисту ставим задачу? (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер)',
-        spokenSummary: 'Какому специалисту ставим задачу? Маркетолог, Менеджер, Методист, Аналитик, Дизайнер.',
+        responseRu:
+          'Какому специалисту ставим задачу? (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер)',
+        spokenSummary:
+          'Какому специалисту ставим задачу? Маркетолог, Менеджер, Методист, Аналитик, Дизайнер.',
       };
     }
 
-    // Unrecognized recipient answer -> reprompt
     return {
       action: 'updated',
       draft,
-      responseRu: 'Анна, для кого ставим задачу: для вас или для специалиста? Скажите «для меня» или «для специалиста».',
-      spokenSummary: 'Анна, для кого ставим задачу: для вас или для специалиста? Скажите для меня или для специалиста.',
+      responseRu:
+        'Анна, для кого ставим задачу: для вас или для специалиста? Скажите «для меня» или «для специалиста».',
+      spokenSummary:
+        'Анна, для кого ставим задачу: для вас или для специалиста? Скажите для меня или для специалиста.',
     };
   }
 
-  // 4. SCENARIO A: Personal Task Wizard
-  // 4.1 Step 1: clarifying_title («Какое название (суть) задачи запишем?»)
-  if (draft.step === 'clarifying_title') {
-    const rawTitle = trimmed.replace(/^[«"„“]+|[»"”]+$/g, '').trim();
-    const title = cleanExtractedTaskTitle(rawTitle) || rawTitle;
-    if (!title) {
-      return {
-        action: 'updated',
-        draft,
-        responseRu: 'Какое название (суть) задачи запишем?',
-        spokenSummary: 'Какое название задачи запишем?',
-      };
-    }
-
-    const nextDraft: PixelPendingPersonalTaskDraft = {
-      ...draft,
-      title,
-      step: 'clarifying_description',
-    };
-    return {
-      action: 'updated',
-      draft: nextDraft,
-      responseRu: `Записал название: **«${title}»**.\n\nДобавим описание или детали? Если нет, скажите "нет".`,
-      spokenSummary: 'Добавим описание или детали? Если нет, скажите нет.',
-    };
-  }
-
-  // 4.2 Step 2: clarifying_description («Добавим описание или детали? Если нет, скажите "нет".»)
-  if (draft.step === 'clarifying_description') {
-    const isSkip = /^(?:нет|не\s+надо|не\s+нужно|без\s+описания|без\s+деталей|пропусти|пропустить|минус|-)(?=$|[^а-яёa-z0-9])/i.test(
-      lower
-    );
-    const description = isSkip ? '' : trimmed;
-    const nextDraft: PixelPendingPersonalTaskDraft = {
-      ...draft,
-      description,
-      step: 'clarifying_date_time',
-    };
-    return {
-      action: 'updated',
-      draft: nextDraft,
-      responseRu: 'Какая дата и время? Назовите: сегодня, завтра или другой день, и время.',
-      spokenSummary: 'Какая дата и время? Назовите: сегодня, завтра или другой день, и время.',
-    };
-  }
-
-  // 4.3 Step 3: clarifying_date_time («Какая дата и время? Назовите: сегодня, завтра или другой день, и время.»)
-  if (
-    draft.step === 'clarifying_date_time' ||
-    draft.step === 'clarifying_date' ||
-    draft.step === 'clarifying_time'
-  ) {
-    const isSkip = /^(?:нет|не\s+надо|не\s+нужно|без\s+даты|без\s+времени|не\s+указывать|пропусти|пропустить|минус|-)(?=$|[^а-яёa-z0-9])/i.test(
-      lower
-    );
-
-    let resolvedDueDate = '';
-    let resolvedDueTime: string | undefined = undefined;
-
-    if (!isSkip) {
-      // Check explicit DD.MM.YYYY
-      const ddmmyyyyMatch = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4}|\d{2})/);
-      if (ddmmyyyyMatch) {
-        const day = parseInt(ddmmyyyyMatch[1], 10);
-        const month = parseInt(ddmmyyyyMatch[2], 10);
-        let year = parseInt(ddmmyyyyMatch[3], 10);
-        if (year < 100) year += 2000;
-        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-          resolvedDueDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        }
-      }
-
-      const parsed = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
-      if (!resolvedDueDate && parsed.dueDate) {
-        resolvedDueDate = parsed.dueDate;
-      }
-      if (parsed.dueTime) {
-        resolvedDueTime = parsed.dueTime;
-      }
-
-      // If time was specified but no date was parsed, assume today
-      if (!resolvedDueDate && resolvedDueTime) {
-        resolvedDueDate = todayIso;
-      }
-    }
-
-    const nextDraft: PixelPendingPersonalTaskDraft = {
-      ...draft,
-      dueDate: resolvedDueDate,
-      hasExplicitDate: Boolean(resolvedDueDate),
-      dueTime: resolvedDueTime,
-      hasExplicitDueTime: Boolean(resolvedDueTime),
-      step: 'clarifying_reminder',
-    };
-
-    return {
-      action: 'updated',
-      draft: nextDraft,
-      responseRu: 'Напомнить заранее? Если нет, скажите "нет".',
-      spokenSummary: 'Напомнить заранее? Если нет, скажите нет.',
-    };
-  }
-
-  // 4.4 Step 4: clarifying_reminder («Напомнить заранее? Если нет, скажите "нет".»)
-  if (draft.step === 'clarifying_reminder') {
-    const isSkip = /^(?:нет|не\s+надо|не\s+нужно|без\s+напоминания|без\s+него|пропусти|пропустить|минус|-)(?=$|[^а-яёa-z0-9])/i.test(
-      lower
-    );
-
-    let wantsReminder = false;
-    let reminderDate: string | undefined = undefined;
-    let reminderTime: string | undefined = undefined;
-    let reminderAt: string | undefined = undefined;
-
-    if (!isSkip) {
-      const parsedRem = parseExplicitReminderFromRuText(
-        trimmed,
-        draft.dueDate || todayIso,
-        draft.dueTime,
-        todayIso,
-        true
-      );
-      if (parsedRem.hasExplicitReminder && parsedRem.wantsReminder) {
-        wantsReminder = true;
-        reminderDate = parsedRem.reminderDate;
-        reminderTime = parsedRem.reminderTime;
-        reminderAt = parsedRem.reminderAt;
-      }
-    }
-
-    const nextDraft: PixelPendingPersonalTaskDraft = {
-      ...draft,
-      wantsReminder,
-      reminderDate,
-      reminderTime,
-      reminderAt,
-      hasExplicitReminder: true,
-      step: 'clarifying_priority',
-    };
-
-    return {
-      action: 'updated',
-      draft: nextDraft,
-      responseRu: 'Укажем приоритет: обычный, средний, высокий? Или не указывать?',
-      spokenSummary: 'Укажем приоритет: обычный, средний, высокий? Или не указывать?',
-    };
-  }
-
-  // 4.5 Step 5: clarifying_priority («Укажем приоритет: обычный, средний, высокий? Или не указывать?»)
-  if (draft.step === 'clarifying_priority') {
-    let chosenPriority: CompanionTaskPriority = 'low';
-    let hasExplicitPriority = true;
-
-    if (/(?:высокий|срочно|горит|критич)/i.test(lower)) {
-      chosenPriority = 'high';
-    } else if (/(?:средний)/i.test(lower)) {
-      chosenPriority = 'medium';
-    } else if (/(?:обычный|низкий|стандарт)/i.test(lower)) {
-      chosenPriority = 'low';
-    } else if (/(?:не\s+указывать|не\s+надо|нет|без\s+приоритета|пропусти)/i.test(lower)) {
-      chosenPriority = 'low';
-      hasExplicitPriority = false;
-    }
-
-    const nextDraft: PixelPendingPersonalTaskDraft = {
-      ...draft,
-      priority: chosenPriority,
-      hasExplicitPriority,
-      step: 'ready_for_confirmation',
-      status: 'awaiting_confirmation',
-    };
-
-    const readback = formatScenarioAFinalReadback(nextDraft);
-    return {
-      action: 'updated',
-      draft: nextDraft,
-      responseRu: readback.markdownText,
-      spokenSummary: readback.spokenText,
-    };
-  }
-
-  // 4.6 Step 6: ready_for_confirmation (Scenario A confirmation or correction)
-  if (draft.step === 'ready_for_confirmation' || draft.status === 'awaiting_confirmation') {
-    // Confirmation: handle «Да», «Подтверждаем», «Подтверждаю», «Подтвердить», «Создавай», «Сохраняй», «Все верно» etc.
-    const isConfirm = /(?:^|[^а-яёa-z0-9])(?:да|подтвержда(?:ю|ем|й|йте|ть)|подтверждено|подтвердить|создава(?:й|йте)|создать|сохраня(?:й|йте)|сохранить|ок|окей|okay|хорошо|всё\s+верно|все\s+верно|всё\s+правильно|все\s+правильно|верно|правильно|давай|давайте|ага|точно|соглас(?:ен|на)|отлично)(?=$|[^а-яёa-z0-9])/i.test(
-      lower
-    );
-    if (isConfirm) {
-      const nowMs = Date.now();
-      const syzranNow = getSyzranNow(new Date(nowMs));
-      const formattedNow = formatSyzranIsoDateRu(todayIso);
-
-      // Clean and normalize dueDate strictly to YYYY-MM-DD for reliable date comparison
-      let cleanDueDate = (draft.dueDate || todayIso).trim();
-      if (/^\d{4}-\d{2}-\d{2}/.test(cleanDueDate)) {
-        cleanDueDate = cleanDueDate.slice(0, 10);
-      } else if (cleanDueDate.includes('T')) {
-        cleanDueDate = cleanDueDate.split('T')[0];
-      }
-
-      // Clean dueTime to HH:mm
-      let cleanDueTime = draft.dueTime ? draft.dueTime.trim() : undefined;
-      if (cleanDueTime && !/^\d{1,2}:\d{2}$/.test(cleanDueTime)) {
-        const timeMatch = cleanDueTime.match(/(\d{1,2}):(\d{2})/);
-        if (timeMatch) {
-          cleanDueTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
-        }
-      }
-
-      // Priority: if "не указывать", empty, or not high/medium, default strictly to 'low' ("Обычный")
-      const resolvedPriority: CompanionTaskPriority =
-        draft.priority === 'high' || draft.priority === 'medium'
-          ? draft.priority
-          : 'low';
-
-      const reminderAt =
-        draft.wantsReminder && draft.reminderDate && draft.reminderTime
-          ? buildSyzranReminderIso(draft.reminderDate, draft.reminderTime)
-          : draft.wantsReminder
-          ? draft.reminderAt
-          : undefined;
-
-      // Exact structure used by manual task creation (matching TasksView.tsx)
-      const readyTask: CompanionTaskRecord = {
-        id: `task-manual-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
-        title: (draft.title || 'Новая задача').trim(),
-        description: (draft.description || '').trim(),
-        dueDate: cleanDueDate,
-        dueTime: cleanDueTime,
-        priority: resolvedPriority,
-        priorityReason: `Приоритет: ${
-          resolvedPriority === 'high'
-            ? 'высокий'
-            : resolvedPriority === 'medium'
-            ? 'средний'
-            : 'обычный'
-        }`,
-        urgencyScore: resolvedPriority === 'high' ? 9 : resolvedPriority === 'medium' ? 6 : 3,
-        importanceScore: resolvedPriority === 'high' ? 9 : resolvedPriority === 'medium' ? 6 : 4,
-        estimatedMinutes: 30,
-        status: 'new',
-        schoolId: draft.schoolId || 'both',
-        sourceType: 'manual',
-        reminderDate: draft.wantsReminder ? draft.reminderDate : undefined,
-        reminderTime: draft.wantsReminder ? (draft.reminderTime || '09:00') : undefined,
-        reminderAt,
-        reminderRepeat: reminderAt ? 'none' : undefined,
-        createdAt: formattedNow,
-        createdAtMs: nowMs,
-      };
-
-      try {
-        // ACTUALLY persist to database: call UI/App handler if provided, or storageProvider directly
-        if (onSaveTaskDirectly) {
-          await onSaveTaskDirectly(readyTask);
-        } else {
-          await storageProvider.saveCompanionTask(readyTask);
-        }
-
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(
-            new CustomEvent('tasksUpdated', { detail: { task: readyTask } })
-          );
-        }
-      } catch (saveErr) {
-        const errDetail =
-          saveErr instanceof Error
-            ? saveErr.message
-            : 'Не удалось сохранить задачу в IndexedDB.';
+  // =========================================================================
+  // ВЕТКА А: Если target === 'personal' (Для меня)
+  // Шаги: Название -> Описание -> Дата/Время -> Напоминание -> Приоритет -> Подтверждение
+  // =========================================================================
+  if (draft.target === 'personal') {
+    // A.1 Шаг: Название (clarifying_title)
+    if (draft.step === 'clarifying_title') {
+      const rawTitle = trimmed.replace(/^[«"„“]+|[»"”]+$/g, '').trim();
+      const title = cleanExtractedTaskTitle(rawTitle) || rawTitle;
+      if (!title) {
         return {
           action: 'updated',
           draft,
-          responseRu: `❌ **Не удалось сохранить задачу в базу:** ${errDetail}\n\nПожалуйста, скажите «Подтверждаю» ещё раз или проверьте доступность хранилища.`,
-          spokenSummary: 'Не удалось сохранить задачу в базу данных.',
+          responseRu:
+            'Какое название (суть) задачи запишем? Назовите или напишите тему дела.',
+          spokenSummary: 'Какое название задачи запишем?',
         };
       }
 
+      const nextDraft: PixelPendingPersonalTaskDraft = {
+        ...draft,
+        title,
+        step: 'clarifying_description',
+      };
       return {
-        action: 'confirmed',
-        draft: { ...draft, status: 'confirmed' },
-        readyTask,
-        responseRu: 'Отлично, задача успешно добавлена в ваш список дел!',
-        spokenSummary: 'Отлично, задача успешно добавлена в ваш список дел!',
+        action: 'updated',
+        draft: nextDraft,
+        responseRu: `Записал название: **«${title}»**.\n\nДобавим описание или детали? Если нет, скажите "нет".`,
+        spokenSummary: 'Добавим описание или детали? Если нет, скажите нет.',
       };
     }
 
-    // Correction check: «Исправить [что-то]»
-    const nextDraft = { ...draft };
-    let modified = false;
-
-    // Fix title
-    const titleCorrection = trimmed.match(
-      /(?:исправ(?:ить|ь)|измени(?:ть)?|название)\s+(?:название\s+)?(?:на\s+)?([^\n.,]+)/i
-    );
-    if (titleCorrection && /(?:названи|суть|имя)/i.test(trimmed)) {
-      nextDraft.title = titleCorrection[1].replace(/^[«"„“]+|[»"”]+$/g, '').trim();
-      modified = true;
+    // A.2 Шаг: Описание (clarifying_description)
+    if (draft.step === 'clarifying_description') {
+      const isSkip =
+        /^(?:нет|не\s+надо|не\s+нужно|без\s+описания|без\s+деталей|пропусти|пропустить|минус|-)(?=$|[^а-яёa-z0-9])/i.test(
+          lower
+        );
+      const description = isSkip ? '' : trimmed;
+      const nextDraft: PixelPendingPersonalTaskDraft = {
+        ...draft,
+        description,
+        step: 'clarifying_date_time',
+      };
+      return {
+        action: 'updated',
+        draft: nextDraft,
+        responseRu:
+          'Какая дата и время? Назовите: сегодня, завтра или другой день, и время. (Или скажите «нет», если без срока)',
+        spokenSummary:
+          'Какая дата и время? Назовите: сегодня, завтра или другой день, и время.',
+      };
     }
 
-    // Fix description
-    const descCorrection = trimmed.match(
-      /(?:исправ(?:ить|ь)|измени(?:ть)?)\s+описание\s+(?:на\s+)?([^\n]+)/i
-    );
-    if (descCorrection) {
-      nextDraft.description = descCorrection[1].trim();
-      modified = true;
-    } else if (/(?:без\s+описания|удали\s+описание)/i.test(lower)) {
-      nextDraft.description = '';
-      modified = true;
-    }
+    // A.3 Шаг: Дата и Время (clarifying_date_time / clarifying_date / clarifying_time)
+    if (
+      draft.step === 'clarifying_date_time' ||
+      draft.step === 'clarifying_date' ||
+      draft.step === 'clarifying_time'
+    ) {
+      const isSkip =
+        /^(?:нет|не\s+надо|не\s+нужно|без\s+даты|без\s+времени|не\s+указывать|пропусти|пропустить|минус|-)(?=$|[^а-яёa-z0-9])/i.test(
+          lower
+        );
 
-    // Fix priority
-    const prioParsed = parseExplicitPriorityFromRuText(trimmed);
-    if (prioParsed.hasExplicitPriority || /(?:приоритет)/i.test(lower)) {
-      if (/(?:высокий|срочн)/i.test(lower)) nextDraft.priority = 'high';
-      else if (/(?:средний)/i.test(lower)) nextDraft.priority = 'medium';
-      else if (/(?:обычный|низкий)/i.test(lower)) nextDraft.priority = 'low';
-      modified = true;
-    }
+      let resolvedDueDate: string | null = null;
+      let resolvedDueTime: string | null = null;
 
-    // Fix reminder
-    if (/(?:напомн|предупред)/i.test(lower)) {
-      const parsedRem = parseExplicitReminderFromRuText(
-        trimmed,
-        nextDraft.dueDate || todayIso,
-        nextDraft.dueTime,
-        todayIso,
-        true
-      );
-      if (parsedRem.hasExplicitReminder) {
-        nextDraft.wantsReminder = parsedRem.wantsReminder;
-        nextDraft.reminderDate = parsedRem.reminderDate;
-        nextDraft.reminderTime = parsedRem.reminderTime;
-        nextDraft.reminderAt = parsedRem.reminderAt;
-        modified = true;
+      if (!isSkip) {
+        const ddmmyyyyMatch = trimmed.match(
+          /^(\d{1,2})[./-](\d{1,2})[./-](\d{4}|\d{2})/
+        );
+        if (ddmmyyyyMatch) {
+          const day = parseInt(ddmmyyyyMatch[1], 10);
+          const month = parseInt(ddmmyyyyMatch[2], 10);
+          let year = parseInt(ddmmyyyyMatch[3], 10);
+          if (year < 100) year += 2000;
+          if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            resolvedDueDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          }
+        }
+
+        const parsed = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
+        if (!resolvedDueDate && parsed.dueDate) {
+          resolvedDueDate = parsed.dueDate;
+        }
+        if (parsed.dueTime) {
+          resolvedDueTime = parsed.dueTime;
+        }
+        if (!resolvedDueDate && resolvedDueTime) {
+          resolvedDueDate = todayIso;
+        }
       }
+
+      const nextDraft: PixelPendingPersonalTaskDraft = {
+        ...draft,
+        dueDate: resolvedDueDate,
+        hasExplicitDate: Boolean(resolvedDueDate),
+        dueTime: resolvedDueTime,
+        hasExplicitDueTime: Boolean(resolvedDueTime),
+        step: 'clarifying_reminder',
+      };
+
+      return {
+        action: 'updated',
+        draft: nextDraft,
+        responseRu:
+          'Напомнить заранее? Если да, когда (например: «за 15 минут», «за 1 час» или конкретное время), если нет — скажите «нет».',
+        spokenSummary: 'Напомнить заранее? Если нет, скажите нет.',
+      };
     }
 
-    // Fix date/time
-    if (/(?:дат|врем|перенес|сегодня|завтра|\d{1,2}[:.]\d{2})/i.test(lower)) {
-      const parsedDT = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
-      if (parsedDT.dueDate) {
-        nextDraft.dueDate = parsedDT.dueDate;
-        modified = true;
+    // A.4 Шаг: Напоминание (clarifying_reminder)
+    if (draft.step === 'clarifying_reminder') {
+      const isSkip =
+        /^(?:нет|не\s+надо|не\s+нужно|без\s+напоминания|без\s+него|пропусти|пропустить|минус|-)(?=$|[^а-яёa-z0-9])/i.test(
+          lower
+        );
+
+      let wantsReminder = false;
+      let reminderDate: string | undefined = undefined;
+      let reminderTime: string | undefined = undefined;
+      let reminderAt: string | undefined = undefined;
+      let reminderSummary: string | null = null;
+
+      if (!isSkip) {
+        const parsedRem = parseExplicitReminderFromRuText(
+          trimmed,
+          draft.dueDate || todayIso,
+          draft.dueTime || undefined,
+          todayIso,
+          true
+        );
+        if (parsedRem.hasExplicitReminder && parsedRem.wantsReminder) {
+          wantsReminder = true;
+          reminderDate = parsedRem.reminderDate;
+          reminderTime = parsedRem.reminderTime;
+          reminderAt = parsedRem.reminderAt;
+          reminderSummary = parsedRem.reminderTime || 'Да';
+        }
       }
-      if (parsedDT.dueTime) {
-        nextDraft.dueTime = parsedDT.dueTime;
-        modified = true;
-      }
+
+      const nextDraft: PixelPendingPersonalTaskDraft = {
+        ...draft,
+        reminder: reminderSummary,
+        wantsReminder,
+        reminderDate,
+        reminderTime,
+        reminderAt,
+        hasExplicitReminder: true,
+        step: 'clarifying_priority',
+      };
+
+      return {
+        action: 'updated',
+        draft: nextDraft,
+        responseRu:
+          'Укажем приоритет: обычный, средний, высокий? Или скажите «не указывать».',
+        spokenSummary:
+          'Укажем приоритет: обычный, средний, высокий? Или скажите не указывать.',
+      };
     }
 
-    if (modified) {
+    // A.5 Шаг: Приоритет (clarifying_priority)
+    if (draft.step === 'clarifying_priority') {
+      let chosenPriority: CompanionTaskPriority = 'low';
+      let hasExplicitPriority = true;
+
+      if (/(?:высокий|срочно|горит|критич)/i.test(lower)) {
+        chosenPriority = 'high';
+      } else if (/(?:средний)/i.test(lower)) {
+        chosenPriority = 'medium';
+      } else if (/(?:обычный|низкий|стандарт)/i.test(lower)) {
+        chosenPriority = 'low';
+      } else if (
+        /(?:не\s+указывать|не\s+надо|нет|без\s+приоритета|пропусти)/i.test(lower)
+      ) {
+        chosenPriority = 'low';
+        hasExplicitPriority = false;
+      }
+
+      const nextDraft: PixelPendingPersonalTaskDraft = {
+        ...draft,
+        priority: chosenPriority,
+        hasExplicitPriority,
+        step: 'ready_for_confirmation',
+        status: 'awaiting_confirmation',
+      };
+
       const readback = formatScenarioAFinalReadback(nextDraft);
       return {
         action: 'updated',
@@ -2138,113 +2024,269 @@ export async function processPersonalTaskDraftInput(
       };
     }
 
-    // Reprompt
-    const readback = formatScenarioAFinalReadback(draft);
-    return {
-      action: 'updated',
-      draft,
-      responseRu: `Подтверждаем или что-то исправить?\n\n${readback.markdownText}`,
-      spokenSummary: 'Подтверждаем создание задачи или что-то исправить?',
-    };
-  }
+    // A.6 Шаг: Подтверждение (ready_for_confirmation / confirmation)
+    if (
+      draft.step === 'ready_for_confirmation' ||
+      draft.step === 'confirmation'
+    ) {
+      if (isConfirm) {
+        const nowMs = Date.now();
+        const syzranNow = getSyzranNow(new Date(nowMs));
+        const formattedNow = formatSyzranIsoDateRu(todayIso);
 
-  // 5. SCENARIO B: Specialist Delegation
-  // 5.1 Step 1: clarifying_specialist («Какому специалисту ставим задачу?»)
-  if (draft.step === 'clarifying_specialist') {
-    const detected = detectSpecialistFromText(lower);
-    if (detected.matched && detected.mode) {
-      const nextDraft: PixelPendingPersonalTaskDraft = {
-        ...draft,
-        targetSpecialistMode: detected.mode,
-        targetSpecialistNameRu: detected.nameRu || AGENT_MODES[detected.mode].shortTitle,
-        step: 'clarifying_specialist_task',
-      };
+        let cleanDueDate = (draft.dueDate || todayIso).trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(cleanDueDate)) {
+          cleanDueDate = cleanDueDate.slice(0, 10);
+        } else if (cleanDueDate.includes('T')) {
+          cleanDueDate = cleanDueDate.split('T')[0];
+        }
+
+        let cleanDueTime = draft.dueTime ? draft.dueTime.trim() : undefined;
+        if (cleanDueTime && !/^\d{1,2}:\d{2}$/.test(cleanDueTime)) {
+          const timeMatch = cleanDueTime.match(/(\d{1,2}):(\d{2})/);
+          if (timeMatch) {
+            cleanDueTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
+          }
+        }
+
+        const resolvedPriority: CompanionTaskPriority =
+          draft.priority === 'high' || draft.priority === 'medium'
+            ? draft.priority
+            : 'low';
+
+        const reminderAt =
+          draft.wantsReminder && draft.reminderDate && draft.reminderTime
+            ? buildSyzranReminderIso(draft.reminderDate, draft.reminderTime)
+            : draft.wantsReminder
+            ? draft.reminderAt
+            : undefined;
+
+        // КРИТИЧЕСКИ ВАЖНО: В функцию сохранения передавай объект задачи, собранный ИЗ ЧЕРНОВИКА:
+        // title: draft.title, description: draft.description, dueDate: draft.dueDate, dueTime: draft.dueTime и т.д.
+        // НЕЛЬЗЯ использовать заглушку "Новая задача".
+        const finalTitle = (
+          draft.title ||
+          draft.description ||
+          'Личная задача Анны'
+        ).trim();
+
+        const readyTask: CompanionTaskRecord = {
+          id: `task-manual-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
+          title: finalTitle,
+          description: (draft.description || '').trim(),
+          dueDate: cleanDueDate,
+          dueTime: cleanDueTime,
+          priority: resolvedPriority,
+          priorityReason: `Приоритет: ${
+            resolvedPriority === 'high'
+              ? 'высокий'
+              : resolvedPriority === 'medium'
+              ? 'средний'
+              : 'обычный'
+          }`,
+          urgencyScore:
+            resolvedPriority === 'high'
+              ? 9
+              : resolvedPriority === 'medium'
+              ? 6
+              : 3,
+          importanceScore:
+            resolvedPriority === 'high'
+              ? 9
+              : resolvedPriority === 'medium'
+              ? 6
+              : 4,
+          estimatedMinutes: 30,
+          status: 'new',
+          schoolId: draft.schoolId || 'both',
+          sourceType: 'manual',
+          reminderDate: draft.wantsReminder ? draft.reminderDate : undefined,
+          reminderTime: draft.wantsReminder
+            ? draft.reminderTime || '09:00'
+            : undefined,
+          reminderAt,
+          reminderRepeat: reminderAt ? 'none' : undefined,
+          createdAt: formattedNow,
+          createdAtMs: nowMs,
+        };
+
+        // Сохранение задачи в базу данных (storageProvider)
+        try {
+          await storageProvider.saveCompanionTask(readyTask);
+          if (onSaveTaskDirectly) {
+            await onSaveTaskDirectly(readyTask);
+          }
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('tasksUpdated'));
+            window.dispatchEvent(
+              new CustomEvent('tasksUpdated', {
+                detail: { action: 'saved', task: readyTask },
+              })
+            );
+          }
+        } catch (saveErr) {
+          const errDetail =
+            saveErr instanceof Error
+              ? saveErr.message
+              : 'Не удалось сохранить задачу в IndexedDB.';
+          return {
+            action: 'updated',
+            draft,
+            responseRu: `❌ **Не удалось сохранить задачу в базу:** ${errDetail}\n\nПожалуйста, скажите «Подтверждаю» ещё раз или проверьте доступность хранилища.`,
+            spokenSummary: 'Не удалось сохранить задачу в базу данных.',
+          };
+        }
+
+        // После успешного сохранения очищаем draft = null
+        return {
+          action: 'confirmed',
+          draft: null,
+          readyTask,
+          responseRu: 'Отлично, задача успешно добавлена в ваш список дел!',
+          spokenSummary: 'Отлично, задача успешно добавлена в ваш список дел!',
+        };
+      }
+
+      // Check if user is correcting any parameter
+      const nextDraft = { ...draft };
+      let modified = false;
+
+      const titleCorrection = trimmed.match(
+        /(?:исправ(?:ить|ь)|измени(?:ть)?|название)\s+(?:название\s+)?(?:на\s+)?([^\n.,]+)/i
+      );
+      if (titleCorrection && /(?:названи|суть|имя)/i.test(trimmed)) {
+        nextDraft.title = titleCorrection[1]
+          .replace(/^[«"„“]+|[»"”]+$/g, '')
+          .trim();
+        modified = true;
+      }
+
+      const descCorrection = trimmed.match(
+        /(?:исправ(?:ить|ь)|измени(?:ть)?)\s+описание\s+(?:на\s+)?([^\n]+)/i
+      );
+      if (descCorrection) {
+        nextDraft.description = descCorrection[1].trim();
+        modified = true;
+      } else if (/(?:без\s+описания|удали\s+описание)/i.test(lower)) {
+        nextDraft.description = '';
+        modified = true;
+      }
+
+      const prioParsed = parseExplicitPriorityFromRuText(trimmed);
+      if (prioParsed.hasExplicitPriority || /(?:приоритет)/i.test(lower)) {
+        if (/(?:высокий|срочн)/i.test(lower)) nextDraft.priority = 'high';
+        else if (/(?:средний)/i.test(lower)) nextDraft.priority = 'medium';
+        else if (/(?:обычный|низкий)/i.test(lower)) nextDraft.priority = 'low';
+        modified = true;
+      }
+
+      if (/(?:напомн|предупред)/i.test(lower)) {
+        const parsedRem = parseExplicitReminderFromRuText(
+          trimmed,
+          nextDraft.dueDate || todayIso,
+          nextDraft.dueTime || undefined,
+          todayIso,
+          true
+        );
+        if (parsedRem.hasExplicitReminder) {
+          nextDraft.wantsReminder = parsedRem.wantsReminder;
+          nextDraft.reminder = parsedRem.reminderTime || 'Да';
+          nextDraft.reminderDate = parsedRem.reminderDate;
+          nextDraft.reminderTime = parsedRem.reminderTime;
+          nextDraft.reminderAt = parsedRem.reminderAt;
+          modified = true;
+        }
+      }
+
+      if (/(?:дат|врем|перенес|сегодня|завтра|\d{1,2}[:.]\d{2})/i.test(lower)) {
+        const parsedDT = parseRelativeDateAndTimeFromRuText(trimmed, todayIso);
+        if (parsedDT.dueDate) {
+          nextDraft.dueDate = parsedDT.dueDate;
+          modified = true;
+        }
+        if (parsedDT.dueTime) {
+          nextDraft.dueTime = parsedDT.dueTime;
+          modified = true;
+        }
+      }
+
+      if (modified) {
+        const readback = formatScenarioAFinalReadback(nextDraft);
+        return {
+          action: 'updated',
+          draft: nextDraft,
+          responseRu: readback.markdownText,
+          spokenSummary: readback.spokenText,
+        };
+      }
+
+      const readback = formatScenarioAFinalReadback(draft);
       return {
         action: 'updated',
-        draft: nextDraft,
-        responseRu: `Специалист: **${nextDraft.targetSpecialistNameRu}**.\n\nЧто за задача? Напишите или продиктуйте суть и детали.`,
-        spokenSummary: 'Что за задача? Напишите или продиктуйте суть и детали.',
+        draft,
+        responseRu: `Подтверждаем или что-то исправить?\n\n${readback.markdownText}`,
+        spokenSummary: 'Подтверждаем создание задачи или что-то исправить?',
       };
     }
-
-    return {
-      action: 'updated',
-      draft,
-      responseRu: 'Какому специалисту ставим задачу? (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер)',
-      spokenSummary: 'Какому специалисту ставим задачу? Маркетолог, Менеджер, Методист, Аналитик, Дизайнер.',
-    };
   }
 
-  // 5.2 Step 2 & 3: clarifying_specialist_task («Что за задача? Напишите или продиктуйте суть и детали.»)
-  if (draft.step === 'clarifying_specialist_task') {
-    const targetSchool: SchoolId =
-      draft.schoolId === 'both' || !draft.schoolId ? 'kiberone' : draft.schoolId;
-    const cleanInstruction = buildCleanBusinessInstruction(
-      trimmed,
-      targetSchool
-    );
-    const instruction = cleanInstruction || trimmed;
-
-    const nextDraft: PixelPendingPersonalTaskDraft = {
-      ...draft,
-      specialistInstruction: instruction,
-      step: 'specialist_confirmation',
-      status: 'awaiting_confirmation',
-    };
-
-    const readback = formatScenarioBFinalReadback(nextDraft);
-    return {
-      action: 'updated',
-      draft: nextDraft,
-      responseRu: readback.markdownText,
-      spokenSummary: readback.spokenText,
-    };
-  }
-
-  // 5.3 Step 4: specialist_confirmation («Зачитываю поручение для [Специалист]: [Текст ТЗ]. Отправляем или нужно что-то исправить?»)
-  if (draft.step === 'specialist_confirmation') {
-    const isConfirm = /(?:^|[^а-яёa-z0-9])(?:да|отправляй|отправляйте|отправить|подтвержда(?:ю|ем|й|йте|ть)|подтверждено|подтвердить|создава(?:й|йте)|создать|ок|окей|okay|хорошо|всё\s+верно|все\s+верно|всё\s+правильно|все\s+правильно|верно|правильно|давай|давайте|ага|точно|соглас(?:ен|на)|отлично)(?=$|[^а-яёa-z0-9])/i.test(
-      lower
-    );
-    if (isConfirm) {
-      const specMode = draft.targetSpecialistMode || 'marketer';
-      const specName = draft.targetSpecialistNameRu || AGENT_MODES[specMode].shortTitle;
-      const instruction = draft.specialistInstruction || '';
+  // =========================================================================
+  // ВЕТКА Б: Если target === 'specialist' (Для специалиста)
+  // Шаги: Выбор специалиста -> Суть задачи (ТЗ) -> Зачитка -> Подтверждение
+  // =========================================================================
+  if (draft.target === 'specialist') {
+    // Б.1 Шаг: Выбор специалиста (clarifying_specialist)
+    if (draft.step === 'clarifying_specialist') {
+      const detected = detectSpecialistFromText(lower);
+      if (detected.matched && detected.mode) {
+        const specName =
+          detected.nameRu || AGENT_MODES[detected.mode].shortTitle;
+        const nextDraft: PixelPendingPersonalTaskDraft = {
+          ...draft,
+          specialistId: detected.mode,
+          targetSpecialistMode: detected.mode,
+          targetSpecialistNameRu: specName,
+          step: 'clarifying_specialist_task',
+        };
+        return {
+          action: 'updated',
+          draft: nextDraft,
+          responseRu: `Специалист: **${specName}**.\n\nЧто за задача? Напишите или продиктуйте суть и детали (ТЗ).`,
+          spokenSummary: `Специалист ${specName}. Что за задача? Напишите или продиктуйте суть и детали.`,
+        };
+      }
 
       return {
-        action: 'confirmed',
-        draft: { ...draft, status: 'confirmed' },
-        readySpecialistDelegation: {
-          targetMode: specMode,
-          targetSpecialistNameRu: specName,
-          instruction,
-          cleanInstruction: instruction,
-          schoolId: draft.schoolId || 'both',
-        },
-        responseRu: `Поручение успешно передано специалисту ${specName}!`,
-        spokenSummary: `Поручение успешно передано специалисту ${specName}!`,
+        action: 'updated',
+        draft,
+        responseRu:
+          'Какому специалисту ставим задачу? (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер)',
+        spokenSummary:
+          'Какому специалисту ставим задачу? Маркетолог, Менеджер, Методист, Аналитик, Дизайнер.',
       };
     }
 
-    // Correction check: update instruction
-    const isCorrection = /(?:исправ(?:ить|ь)|измени(?:ть)?|добав(?:ить|ь)|замени(?:ть)?|перепиши|не\s+так)/i.test(
-      lower
-    );
-    if (isCorrection || trimmed.length > 5) {
-      const newRaw = trimmed.replace(
-        /^(?:исправ(?:ить|ь)|измени(?:ть)?|замени(?:ть)?)\s*(?:на\s*)?/i,
-        ''
-      );
+    // Б.2 Шаг: Суть задачи / ТЗ (clarifying_specialist_task)
+    if (draft.step === 'clarifying_specialist_task') {
       const targetSchool: SchoolId =
-        draft.schoolId === 'both' || !draft.schoolId ? 'kiberone' : draft.schoolId;
+        draft.schoolId === 'both' || !draft.schoolId
+          ? 'kiberone'
+          : draft.schoolId;
       const cleanInstruction = buildCleanBusinessInstruction(
-        newRaw,
+        trimmed,
         targetSchool
       );
+      const instruction = cleanInstruction || trimmed;
+
       const nextDraft: PixelPendingPersonalTaskDraft = {
         ...draft,
-        specialistInstruction: cleanInstruction || newRaw,
+        taskDescription: instruction,
+        specialistInstruction: instruction,
+        title: instruction,
+        step: 'specialist_confirmation',
+        status: 'awaiting_confirmation',
       };
+
       const readback = formatScenarioBFinalReadback(nextDraft);
       return {
         action: 'updated',
@@ -2254,13 +2296,84 @@ export async function processPersonalTaskDraftInput(
       };
     }
 
-    const readback = formatScenarioBFinalReadback(draft);
-    return {
-      action: 'updated',
-      draft,
-      responseRu: readback.markdownText,
-      spokenSummary: readback.spokenText,
-    };
+    // Б.3 Шаг: Подтверждение (specialist_confirmation / confirmation)
+    if (
+      draft.step === 'specialist_confirmation' ||
+      draft.step === 'confirmation'
+    ) {
+      if (isConfirm) {
+        // На шаге подтверждения, когда Анна говорит "Да/Отправляй", НЕЛЬЗЯ вызывать saveCompanionTask!
+        const specMode =
+          draft.targetSpecialistMode ||
+          (draft.specialistId as AgentMode) ||
+          'marketer';
+        const specName =
+          draft.targetSpecialistNameRu ||
+          AGENT_MODES[specMode]?.shortTitle ||
+          'Специалист';
+        const instruction =
+          draft.taskDescription ||
+          draft.specialistInstruction ||
+          draft.title ||
+          '';
+
+        return {
+          action: 'confirmed',
+          draft: null,
+          readySpecialistDelegation: {
+            targetMode: specMode,
+            targetSpecialistNameRu: specName,
+            instruction,
+            cleanInstruction: instruction,
+            schoolId: draft.schoolId || 'both',
+          },
+          responseRu: `Поручение отправлено специалисту ${specName}!`,
+          spokenSummary: `Поручение отправлено специалисту ${specName}!`,
+        };
+      }
+
+      // Correction of instruction
+      const isCorrection =
+        /(?:исправ(?:ить|ь)|измени(?:ть)?|добав(?:ить|ь)|замени(?:ть)?|перепиши|не\s+так)/i.test(
+          lower
+        );
+      if (isCorrection || trimmed.length > 5) {
+        const newRaw = trimmed.replace(
+          /^(?:исправ(?:ить|ь)|измени(?:ть)?|замени(?:ть)?)\s*(?:на\s*)?/i,
+          ''
+        );
+        const targetSchool: SchoolId =
+          draft.schoolId === 'both' || !draft.schoolId
+            ? 'kiberone'
+            : draft.schoolId;
+        const cleanInstruction = buildCleanBusinessInstruction(
+          newRaw,
+          targetSchool
+        );
+        const updatedInstruction = cleanInstruction || newRaw;
+        const nextDraft: PixelPendingPersonalTaskDraft = {
+          ...draft,
+          taskDescription: updatedInstruction,
+          specialistInstruction: updatedInstruction,
+          title: updatedInstruction,
+        };
+        const readback = formatScenarioBFinalReadback(nextDraft);
+        return {
+          action: 'updated',
+          draft: nextDraft,
+          responseRu: readback.markdownText,
+          spokenSummary: readback.spokenText,
+        };
+      }
+
+      const readback = formatScenarioBFinalReadback(draft);
+      return {
+        action: 'updated',
+        draft,
+        responseRu: readback.markdownText,
+        spokenSummary: readback.spokenText,
+      };
+    }
   }
 
   // Fallback
@@ -2312,6 +2425,21 @@ export function parseAndExecuteTaskCommand(
     );
 
   if (isTaskWizardTrigger) {
+    const isPersonalExplicit =
+      /(?:для\s+меня|мне\s+задачу|напомни\s+мне|поставь\s+мне|создай\s+мне|добавь\s+мне|задач[уи]\s+для\s+меня)/i.test(
+        trimmed
+      );
+
+    if (isPersonalExplicit) {
+      const refusalText =
+        'Анна, личные задачи лучше ставить через кнопку "Поставить задачу" в меню или в письменном виде, чтобы я точно все записал и не ошибся с датами.';
+      return {
+        handled: true,
+        responseText: refusalText,
+        spokenSummary: refusalText,
+      };
+    }
+
     const wizardInit = createEmptyPersonalTaskWizardDraft(activeSchool);
 
     // Check if there is extra content after the trigger phrase (e.g. «Добавить задачу: проверить приложение»)

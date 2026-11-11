@@ -802,7 +802,7 @@ export interface PixelPendingChatDeletion {
   createdAtMs: number;
 }
 
-export type TaskWizardTarget = 'undecided' | 'personal' | 'specialist';
+export type TaskWizardTarget = 'personal' | 'specialist' | 'undecided' | null;
 
 export type PersonalTaskDraftStep =
   | 'ask_target'
@@ -815,6 +815,7 @@ export type PersonalTaskDraftStep =
   | 'clarifying_reminder'
   | 'clarifying_priority'
   | 'ready_for_confirmation'
+  | 'confirmation'
   | 'clarifying_specialist'
   | 'clarifying_specialist_task'
   | 'specialist_confirmation';
@@ -822,23 +823,26 @@ export type PersonalTaskDraftStep =
 export interface PixelPendingPersonalTaskDraft {
   draftId: string;
   target?: TaskWizardTarget;
+  specialistId?: AgentMode | string | null;
   targetSpecialistMode?: AgentMode;
   targetSpecialistNameRu?: string;
   specialistInstruction?: string;
+  taskDescription?: string;
   title: string;
   description: string;
   schoolId: SchoolId | 'both';
-  dueDate?: string; // YYYY-MM-DD
-  dueTime?: string; // HH:mm in Europe/Samara
-  hasExplicitDate: boolean;
-  hasExplicitDueTime: boolean;
+  dueDate?: string | null; // YYYY-MM-DD
+  dueTime?: string | null; // HH:mm in Europe/Samara
+  reminder?: string | null;
+  hasExplicitDate?: boolean;
+  hasExplicitDueTime?: boolean;
   priority?: CompanionTaskPriority;
-  hasExplicitPriority: boolean;
+  hasExplicitPriority?: boolean;
   wantsReminder?: boolean;
   reminderDate?: string;
   reminderTime?: string;
   reminderAt?: string; // ISO string in Europe/Samara
-  hasExplicitReminder: boolean;
+  hasExplicitReminder?: boolean;
   step: PersonalTaskDraftStep;
   status: 'drafting' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
   createdAtMs: number;
@@ -861,7 +865,7 @@ export interface CompanionMessage {
   pendingDelegationDraft?: PixelPendingDelegationDraft;
   pendingRevisionDraft?: PixelPendingRevisionDraft;
   pendingChatDeletion?: PixelPendingChatDeletion;
-  pendingPersonalTaskDraft?: PixelPendingPersonalTaskDraft;
+  pendingPersonalTaskDraft?: PixelPendingPersonalTaskDraft | null;
   deletableChatsList?: PixelChatNavigationItem[];
   chatDisambiguationList?: PixelChatNavigationItem[];
   delegatedTask?: PixelDelegatedTaskState;

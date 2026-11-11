@@ -648,8 +648,14 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         setSpeechInputError(null);
       }
       if (status === 'idle' || status === 'error') {
+        const textToSend = latestStabilizedInputRef.current.trim();
         speechSessionBaseTextRef.current = '';
         lastSpeechResultIsFinalRef.current = true;
+        if (textToSend) {
+          latestStabilizedInputRef.current = '';
+          setChatInput(textToSend);
+          void executePixelChatRequest(textToSend);
+        }
       }
     });
 
@@ -733,7 +739,13 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
   const handleToggleVoiceRecord = async () => {
     if (speechInputStatus === 'listening' || speechInputStatus === 'recognizing') {
       browserSpeechInput.stop();
+      const textToSend = latestStabilizedInputRef.current.trim();
       speechSessionBaseTextRef.current = '';
+      if (textToSend) {
+        latestStabilizedInputRef.current = '';
+        setChatInput(textToSend);
+        await executePixelChatRequest(textToSend);
+      }
       return;
     }
     setSpeechInputError(null);
@@ -1811,6 +1823,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       ) {
         setPendingPersonalTaskDraft(null);
         pendingPersonalTaskDraftRef.current = null;
+        pixelAgentCoordinator.setPendingPersonalTaskDraft(null);
         const spec = draftResult.readySpecialistDelegation;
         const targetSchool =
           spec.schoolId === 'both' ? activeSchool : spec.schoolId;
@@ -1850,6 +1863,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       if (draftResult.action === 'confirmed' && draftResult.readyTask) {
         setPendingPersonalTaskDraft(null);
         pendingPersonalTaskDraftRef.current = null;
+        pixelAgentCoordinator.setPendingPersonalTaskDraft(null);
         try {
           await onSaveCompanionTask(draftResult.readyTask);
           if (
@@ -1910,6 +1924,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       if (draftResult.action === 'cancelled') {
         setPendingPersonalTaskDraft(null);
         pendingPersonalTaskDraftRef.current = null;
+        pixelAgentCoordinator.setPendingPersonalTaskDraft(null);
         const cancelReplyMsg: CompanionMessage = {
           id: `comp-pixel-taskcancel-${nowMs + 1}`,
           role: 'pixel',
@@ -1926,6 +1941,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       // Step in progress: update draft state and reply with next sequential question or confirmation card
       setPendingPersonalTaskDraft(draftResult.draft);
       pendingPersonalTaskDraftRef.current = draftResult.draft;
+      pixelAgentCoordinator.setPendingPersonalTaskDraft(draftResult.draft);
       const updateReplyMsg: CompanionMessage = {
         id: `comp-pixel-taskdraft-${nowMs + 1}`,
         role: 'pixel',
@@ -2228,6 +2244,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       if (taskCmdResult.personalTaskDraft) {
         setPendingPersonalTaskDraft(taskCmdResult.personalTaskDraft);
         pendingPersonalTaskDraftRef.current = taskCmdResult.personalTaskDraft;
+        pixelAgentCoordinator.setPendingPersonalTaskDraft(
+          taskCmdResult.personalTaskDraft
+        );
       }
 
       const cmdReplyMsg: CompanionMessage = {
@@ -4078,7 +4097,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                 </div>
                               )}
 
-                              {msg.pendingPersonalTaskDraft.step === 'specialist_confirmation' && (
+                              {(msg.pendingPersonalTaskDraft.step === 'specialist_confirmation' ||
+                                (msg.pendingPersonalTaskDraft.step === 'confirmation' &&
+                                  msg.pendingPersonalTaskDraft.target === 'specialist')) && (
                                 <div className="flex flex-wrap items-center gap-2 pt-1">
                                   <button
                                     type="button"
@@ -4100,7 +4121,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                 </div>
                               )}
 
-                              {msg.pendingPersonalTaskDraft.step === 'ready_for_confirmation' && (
+                              {(msg.pendingPersonalTaskDraft.step === 'ready_for_confirmation' ||
+                                (msg.pendingPersonalTaskDraft.step === 'confirmation' &&
+                                  msg.pendingPersonalTaskDraft.target !== 'specialist')) && (
                                 <div className="flex flex-wrap items-center gap-2 pt-1">
                                   <button
                                     type="button"
@@ -4402,7 +4425,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                             )}
 
                             {/* Read Aloud Button (Stage 6) */}
-                            {msg.delegatedTask.resultText && (
+                            {msg.delegatedTask.resultText && msg.delegatedTask.status === 'completed' && (
                               <button
                                 type="button"
                                 onClick={() => {
@@ -4917,6 +4940,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                         const wizardInit = createEmptyPersonalTaskWizardDraft(activeSchool);
                         setPendingPersonalTaskDraft(wizardInit.draft);
                         pendingPersonalTaskDraftRef.current = wizardInit.draft;
+                        pixelAgentCoordinator.setPendingPersonalTaskDraft(wizardInit.draft);
 
                         const wizardMsg: CompanionMessage = {
                           id: `comp-pixel-wiz-${Date.now()}`,

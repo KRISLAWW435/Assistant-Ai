@@ -41,7 +41,12 @@ import {
 } from './storageProvider';
 import { voiceManager } from './voice/voiceManager';
 import { geminiLiveClient } from './voice/geminiLiveClient';
-import { formatSyzranIsoDateRu, getSyzranNow } from '../utils/syzranTime';
+import {
+  formatSyzranIsoDateRu,
+  getSyzranNow,
+  toSyzranIsoDate,
+} from '../utils/syzranTime';
+import { processPersonalTaskDraftInput } from '../utils/pixelTaskManagerEngine';
 import { showToast } from '../components/ToastNotification';
 
 export const PIXEL_DELEGATION_STATUS_LABELS: Record<
@@ -669,10 +674,67 @@ export class PixelAgentCoordinator {
   private pendingConfirmationDraft: PixelPendingDelegationDraft | null = null;
   private pendingRevisionDraft: PixelPendingRevisionDraft | null = null;
   private pendingChatDeletion: PixelPendingChatDeletion | null = null;
+  private pendingPersonalTaskDraft: PixelPendingPersonalTaskDraft | null = null;
 
   public init(deps: PixelAgentCoordinatorDeps): void {
     this.deps = deps;
     this.loadTasksFromStorage();
+  }
+
+  public getPendingPersonalTaskDraft(): PixelPendingPersonalTaskDraft | null {
+    return this.pendingPersonalTaskDraft;
+  }
+
+  public setPendingPersonalTaskDraft(
+    draft: PixelPendingPersonalTaskDraft | null
+  ): void {
+    this.pendingPersonalTaskDraft = draft;
+  }
+
+  /**
+   * Delegates a task to a specialist chat and registers a delegated task.
+   * Strictly used for Specialist branch execution (Branch B).
+   */
+  public async delegateTaskToSpecialist(params: {
+    specialistMode: AgentMode;
+    taskDescription: string;
+    specialistNameRu?: string;
+    schoolId?: SchoolId | 'both';
+    sourceMode?: 'text' | 'voice';
+    skipAddingUserCompanionMessage?: boolean;
+    userCompanionMessage?: CompanionMessage;
+  }): Promise<PixelDelegatedTaskState> {
+    const targetSchool: SchoolId =
+      params.schoolId === 'renderia'
+        ? 'renderia'
+        : params.schoolId === 'kiberone'
+        ? 'kiberone'
+        : this.deps?.getActiveSchool() || 'kiberone';
+
+    const targetBothSchools = params.schoolId === 'both';
+    const specName =
+      params.specialistNameRu ||
+      AGENT_MODES[params.specialistMode]?.shortTitle ||
+      params.specialistMode;
+
+    const intent: ParsedDelegationIntent = {
+      isDelegation: true,
+      isSupportedSpecialist: true,
+      targetMode: params.specialistMode,
+      targetSpecialistNameRu: specName,
+      targetSchool,
+      targetBothSchools,
+      instruction: params.taskDescription,
+      cleanInstruction: params.taskDescription,
+      originalText: params.taskDescription,
+    };
+
+    return await this.executeDelegation({
+      intent,
+      sourceMode: params.sourceMode || 'text',
+      userCompanionMessage: params.userCompanionMessage,
+      skipAddingUserCompanionMessage: params.skipAddingUserCompanionMessage,
+    });
   }
 
   /**
@@ -711,7 +773,7 @@ export class PixelAgentCoordinator {
 
     const newTask: CompanionTaskRecord = {
       id: `task-manual-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
-      title: (draft.title || 'Новая задача').trim(),
+      title: (draft.title || draft.description || 'Личная задача Анны').trim(),
       description: (draft.description || '').trim(),
       dueDate: cleanDueDate,
       dueTime: cleanDueTime,
@@ -909,8 +971,15 @@ export class PixelAgentCoordinator {
    */
   public async readTaskResult(taskId: string): Promise<boolean> {
     const task = this.getTaskById(taskId);
-    if (!task || !task.resultText) {
-      this.showBubble('У этого поручения пока нет текста ответа для озвучивания.');
+    if (
+      !task ||
+      task.status !== 'completed' ||
+      !task.resultText ||
+      !task.resultMessageId
+    ) {
+      this.showBubble(
+        'Поручение ещё выполняется специалистом. Ответ пока готовится.'
+      );
       return false;
     }
 
@@ -1456,7 +1525,27 @@ export class PixelAgentCoordinator {
       }
     }
 
-    // 1. Look up completed task directly in coordinator registry (independent of open UI chat!)
+    // 1. Check if there is an active in-progress task for this specialist
+    const tasks = Array.from(this.tasks.values());
+    const inProgressTask = tasks.find(
+      (t) =>
+        t.targetMode === targetMode &&
+        (t.status === 'in_progress' ||
+          t.status === 'sent' ||
+          t.status === 'created' ||
+          t.status === 'waiting_for_reply')
+    );
+    if (inProgressTask) {
+      const waitMsg = `Поручение успешно передано специалисту «${modeCfg.shortTitle}». Ответ ещё готовится, я сообщу, когда он будет готов.`;
+      this.showBubble(waitMsg);
+      return {
+        success: false,
+        specialistTitleRu: modeCfg.shortTitle,
+        reason: waitMsg,
+      };
+    }
+
+    // 2. Look up completed task directly in coordinator registry
     let textToRead = '';
     let messageIdToUse = '';
     let finalSchool = resolvedSchool;
@@ -1465,9 +1554,14 @@ export class PixelAgentCoordinator {
       this.getLatestCompletedTask(targetMode, intent.targetSchool ? resolvedSchool : undefined) ||
       (!intent.targetSchool ? this.getLatestCompletedTask(targetMode) : undefined);
 
-    if (completedTask && completedTask.resultText) {
+    if (
+      completedTask &&
+      completedTask.status === 'completed' &&
+      completedTask.resultText &&
+      completedTask.resultMessageId
+    ) {
       textToRead = completedTask.resultText;
-      messageIdToUse = completedTask.resultMessageId || `task-${completedTask.taskId}`;
+      messageIdToUse = completedTask.resultMessageId;
       finalSchool = completedTask.schoolId;
     } else {
       // 2. Look up specialist messages in all sessions for targetMode
@@ -1557,9 +1651,17 @@ export class PixelAgentCoordinator {
   public parseReadPendingTaskResponseIntent(
     rawText: string
   ): PixelDelegatedTaskState | null {
+    if (this.pendingPersonalTaskDraft || this.pendingConfirmationDraft) {
+      return null;
+    }
     const text = (rawText || '').trim();
     if (!text) return null;
     const lower = text.toLowerCase();
+
+    // Prevent matching on delegation or creation confirmation phrases
+    if (/(?:отправляй|создавай|отправь|создай|запиши|добавь|удали|для\s+меня|для\s+специалиста)/i.test(lower)) {
+      return null;
+    }
 
     const isAffirmative =
       /^(?:да|давай|прочитай|зачитай|прочти|покажи|прочитать|показать|хорошо|да,?\s*прочитай|да,?\s*покажи|да,?\s*давай|покажи\s+ответ|прочитай\s+ответ|выведи\s+ответ|хочу\s+прочитать|конечно)[\s.!]*$/i.test(
@@ -1568,27 +1670,20 @@ export class PixelAgentCoordinator {
 
     if (!isAffirmative) return null;
 
-    // Check if the latest companion message from Pixel was asking "ответил на вашу задачу. Прочитать?"
+    // Check if the latest companion message from Pixel was explicitly asking "ответил на вашу задачу. Прочитать?"
     const msgs = this.deps?.getCompanionMessages() || [];
     const lastPixelMsg = [...msgs].reverse().find((m) => m.role === 'pixel');
     if (
       lastPixelMsg &&
       lastPixelMsg.delegatedTask &&
+      lastPixelMsg.delegatedTask.status === 'completed' &&
       lastPixelMsg.delegatedTask.resultText &&
+      lastPixelMsg.delegatedTask.resultMessageId &&
       lastPixelMsg.content.includes('Прочитать?')
     ) {
       return lastPixelMsg.delegatedTask;
     }
 
-    // Or check latest completed task within 15 minutes
-    const latest = this.getLatestCompletedTask();
-    if (latest && latest.resultText && latest.resultMessageId) {
-      const timeDiff =
-        Date.now() - (latest.completedAtMs || latest.updatedAtMs);
-      if (timeDiff < 15 * 60 * 1000) {
-        return latest;
-      }
-    }
     return null;
   }
 
@@ -4023,6 +4118,113 @@ export class PixelAgentCoordinator {
         continue;
       }
 
+      // 1.5. Check multi-turn personal or specialist task draft wizard («Для меня», «Да, отправляй», etc.)
+      if (this.pendingPersonalTaskDraft) {
+        this.processedSpokenTurnIds.add(msg.id);
+        const activeDraft = this.pendingPersonalTaskDraft;
+        const todayIso = toSyzranIsoDate();
+        void (async () => {
+          const draftResult = await processPersonalTaskDraftInput(
+            activeDraft,
+            msg.content,
+            todayIso,
+            this.deps?.onSaveCompanionTask
+          );
+
+          if (draftResult.action === 'confirmed') {
+            this.pendingPersonalTaskDraft = null;
+            if (draftResult.readySpecialistDelegation) {
+              const spec = draftResult.readySpecialistDelegation;
+              const targetSchool =
+                spec.schoolId === 'both' ? activeSchool : spec.schoolId;
+
+              const confirmReplyMsg: CompanionMessage = {
+                id: `comp-voice-specconfirm-${Date.now()}`,
+                role: 'pixel',
+                content: draftResult.responseRu,
+                createdAt: formatTimeNow(new Date()),
+                createdAtMs: Date.now(),
+                schoolId: activeSchool,
+              };
+              if (this.deps) {
+                const cur = this.deps.getCompanionMessages();
+                await this.deps.onSaveCompanionMessages([...cur, confirmReplyMsg]);
+              }
+              this.showBubble(draftResult.spokenSummary || draftResult.responseRu);
+              await this.executeDelegation({
+                intent: {
+                  isDelegation: true,
+                  isSupportedSpecialist: true,
+                  targetMode: spec.targetMode,
+                  targetSpecialistNameRu: spec.targetSpecialistNameRu,
+                  targetSchool,
+                  instruction: spec.instruction,
+                  cleanInstruction: spec.cleanInstruction,
+                  originalText: msg.content,
+                },
+                sourceMode: 'voice',
+                skipAddingUserCompanionMessage: true,
+              });
+            } else if (draftResult.readyTask) {
+              if (this.deps?.onSaveCompanionTask) {
+                await this.deps.onSaveCompanionTask(draftResult.readyTask);
+              }
+              const confirmReplyMsg: CompanionMessage = {
+                id: `comp-voice-taskconfirm-${Date.now()}`,
+                role: 'pixel',
+                content: draftResult.responseRu,
+                createdAt: formatTimeNow(new Date()),
+                createdAtMs: Date.now(),
+                schoolId: activeSchool,
+                autoCreatedTask: draftResult.readyTask,
+              };
+              if (this.deps) {
+                const cur = this.deps.getCompanionMessages();
+                await this.deps.onSaveCompanionMessages([...cur, confirmReplyMsg]);
+              }
+              this.showBubble(draftResult.spokenSummary || draftResult.responseRu);
+            }
+            return;
+          }
+
+          if (draftResult.action === 'cancelled') {
+            this.pendingPersonalTaskDraft = null;
+            const cancelReplyMsg: CompanionMessage = {
+              id: `comp-voice-taskcancel-${Date.now()}`,
+              role: 'pixel',
+              content: draftResult.responseRu,
+              createdAt: formatTimeNow(new Date()),
+              createdAtMs: Date.now(),
+              schoolId: activeSchool,
+            };
+            if (this.deps) {
+              const cur = this.deps.getCompanionMessages();
+              await this.deps.onSaveCompanionMessages([...cur, cancelReplyMsg]);
+            }
+            this.showBubble(draftResult.spokenSummary || draftResult.responseRu);
+            return;
+          }
+
+          // Action === 'updated': continue wizard steps
+          this.pendingPersonalTaskDraft = draftResult.draft;
+          const updateReplyMsg: CompanionMessage = {
+            id: `comp-voice-taskdraft-${Date.now()}`,
+            role: 'pixel',
+            content: draftResult.responseRu,
+            createdAt: formatTimeNow(new Date()),
+            createdAtMs: Date.now(),
+            schoolId: activeSchool,
+            pendingPersonalTaskDraft: draftResult.draft,
+          };
+          if (this.deps) {
+            const cur = this.deps.getCompanionMessages();
+            await this.deps.onSaveCompanionMessages([...cur, updateReplyMsg]);
+          }
+          this.showBubble(draftResult.spokenSummary || draftResult.responseRu);
+        })();
+        continue;
+      }
+
       // 2. Check pending chat deletion confirmation/cancellation
       const deletionAction = this.parsePendingChatDeletionAction(msg.content);
       if (deletionAction.action !== 'none' && deletionAction.pending) {
@@ -4519,12 +4721,13 @@ export class PixelAgentCoordinator {
           sessionTitle: sessionWithStreaming.title,
           specialistId: targetMode,
           messageId: pixelMsgId,
-          resultMessageId: specialistMsgId,
         },
         isNewChatCreated
           ? `✅ **Создан новый чат** «*${sessionWithStreaming.title}*» (${modeCfg.shortTitle} · ${schoolCfg.name}).\n📨 **Сообщение отправлено** (${pixelMsgId}). Специалист готовит ответ…`
           : `📨 **Сообщение отправлено** в чат «*${sessionWithStreaming.title}*» (${modeCfg.shortTitle} · ${schoolCfg.name}).\n⏳ **Выполняется:** специалист готовит ответ по запросу «*${intent.instruction}*»…`
       );
+
+      this.showBubble(`Поручение успешно передано специалисту ${modeCfg.shortTitle}!`);
 
       await updateTaskAndCompanionMessage({
         status: 'in_progress',
@@ -4537,7 +4740,6 @@ export class PixelAgentCoordinator {
         sessionTitle: sessionWithStreaming.title,
         specialistId: targetMode,
         messageId: pixelMsgId,
-        resultMessageId: specialistMsgId,
       });
 
       this.deps.onSpecialistGenerationStateChange?.({

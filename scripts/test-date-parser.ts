@@ -187,6 +187,7 @@ if (
 console.log('Шаг 2: Анна отвечает на вопрос о приоритете («Обычный»)...');
 await (async () => {
   const step2 = await processPersonalTaskDraftInput(cmd1!.personalTaskDraft!, 'Обычный', todayIso);
+  if (!step2.draft) throw new Error('step2.draft is null');
   console.log(`- Приоритет в черновике: ${step2.draft.priority}`);
   console.log(`- Следующий шаг: ${step2.draft.step}`);
   console.log(`- Вопрос Пикселя: ${step2.responseRu}`);
@@ -201,6 +202,7 @@ await (async () => {
   // Тест шага 3: указание времени напоминания отдельно от времени выполнения
   console.log('Шаг 3: Анна задаёт напоминание («Напомни 4 ноября в 14:00»)...');
   const step3 = await processPersonalTaskDraftInput(step2.draft, 'Напомни 4 ноября в 14:00', todayIso);
+  if (!step3.draft) throw new Error('step3.draft is null');
   console.log(`- Время выполнения события (dueTime): ${step3.draft.dueTime}`);
   console.log(`- Дата напоминания (reminderDate): ${step3.draft.reminderDate}`);
   console.log(`- Время напоминания (reminderTime): ${step3.draft.reminderTime}`);

@@ -887,6 +887,24 @@ export default function App() {
               companionTasksRef.current
             );
             if (cmd?.handled) {
+              if (cmd.personalTaskDraft) {
+                pixelAgentCoordinator.setPendingPersonalTaskDraft(
+                  cmd.personalTaskDraft
+                );
+                const replyMsg: CompanionMessage = {
+                  id: `comp-voice-wizstart-${Date.now()}`,
+                  role: 'pixel',
+                  content: cmd.responseText,
+                  createdAt: formatTimeNow(new Date()),
+                  createdAtMs: Date.now(),
+                  schoolId: activeSchoolRef.current,
+                  pendingPersonalTaskDraft: cmd.personalTaskDraft,
+                };
+                await handleSaveCompanionMessages([
+                  ...companionMessagesRef.current,
+                  replyMsg,
+                ]);
+              }
               if (cmd.createdTask) {
                 try {
                   await handleSaveCompanionTask(cmd.createdTask);
