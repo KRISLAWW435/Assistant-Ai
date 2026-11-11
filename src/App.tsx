@@ -122,7 +122,7 @@ import {
 import { useAutumnTheme } from './utils/autumnTheme';
 import { AutumnLeafFall } from './components/autumn/AutumnLeafFall';
 import { BackgroundMusic } from './components/BackgroundMusic';
-import { ToastNotification } from './components/ToastNotification';
+import { ToastNotification, GlobalToast } from './components/ToastNotification';
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'kiber_renderia_sidebar_collapsed';
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'kiber_renderia_right_panel_collapsed';
@@ -737,6 +737,9 @@ export default function App() {
       getCompanionMessages: () => companionMessagesRef.current,
       onSaveCompanionMessages: async (msgs) => {
         await handleSaveCompanionMessages(msgs);
+      },
+      onSaveCompanionTask: async (task) => {
+        await handleSaveCompanionTask(task);
       },
       onSpecialistGenerationStateChange: ({
         isGenerating,
@@ -4021,9 +4024,6 @@ export default function App() {
         onNavigate={handleSelectSection}
       />
 
-      {/* Floating Toast Notifications for Anna */}
-      <ToastNotification />
-
       {/* MODAL 1: Chat File Preview & Manager Confirmation Modal */}
       {stagedChatFileModal && (
         <div
@@ -4384,6 +4384,9 @@ export default function App() {
           setIsLiveVoiceOpen(true);
         }}
       />
+
+      {/* Global Toast Notifications (stays on top of all windows and modals) */}
+      <GlobalToast />
     </div>
   );
 }

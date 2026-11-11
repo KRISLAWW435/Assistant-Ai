@@ -627,6 +627,8 @@ export interface CompanionTaskRecord {
   linkedDelegationTaskId?: string;
   linkedSpecialistId?: AgentMode;
   linkedChatId?: string;
+  reminderDate?: string; // YYYY-MM-DD
+  reminderTime?: string; // HH:mm in Europe/Samara
   reminderAt?: string; // ISO string or YYYY-MM-DDTHH:mm
   reminderRepeat?: CompanionTaskReminderRepeat;
   lastReminderFiredAtMs?: number;
@@ -800,18 +802,29 @@ export interface PixelPendingChatDeletion {
   createdAtMs: number;
 }
 
+export type TaskWizardTarget = 'undecided' | 'personal' | 'specialist';
+
 export type PersonalTaskDraftStep =
+  | 'ask_target'
   | 'clarifying_title'
   | 'clarifying_description'
   | 'clarifying_school'
   | 'clarifying_date'
   | 'clarifying_time'
-  | 'clarifying_priority'
+  | 'clarifying_date_time'
   | 'clarifying_reminder'
-  | 'ready_for_confirmation';
+  | 'clarifying_priority'
+  | 'ready_for_confirmation'
+  | 'clarifying_specialist'
+  | 'clarifying_specialist_task'
+  | 'specialist_confirmation';
 
 export interface PixelPendingPersonalTaskDraft {
   draftId: string;
+  target?: TaskWizardTarget;
+  targetSpecialistMode?: AgentMode;
+  targetSpecialistNameRu?: string;
+  specialistInstruction?: string;
   title: string;
   description: string;
   schoolId: SchoolId | 'both';

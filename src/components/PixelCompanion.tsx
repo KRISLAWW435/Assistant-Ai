@@ -1184,10 +1184,17 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                   `Сызрань: ${syzranSnap.timeHHMMSS}`,
                 ],
               };
+              const timeStr = updatedTaskRecord?.dueTime
+                ? `${updatedTaskRecord.dueTime} (по Сызрани)`
+                : `${syzranSnap.timeHHMM} (по Сызрани)`;
               showToast({
-                title: 'Оповещаю вас, Анна',
-                message: alert.message,
+                id: `rem-toast-${alert.id}`,
+                title: 'Оповещаю вас, Анна 🔔',
+                message: `${updatedTaskRecord?.title || alert.title} — ${timeStr}`,
+                taskTitle: updatedTaskRecord?.title || alert.title,
+                taskTime: timeStr,
                 type: 'reminder',
+                persistent: true,
                 actionLabel: 'Посмотреть задачи',
                 onAction: () => {
                   setActiveTab('tasks');
@@ -1791,11 +1798,54 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     if (pendingPersonalTaskDraftRef.current) {
       const activeDraft = pendingPersonalTaskDraftRef.current;
       const todayIso = toSyzranIsoDate();
-      const draftResult = processPersonalTaskDraftInput(
+      const draftResult = await processPersonalTaskDraftInput(
         activeDraft,
         text,
-        todayIso
+        todayIso,
+        onSaveCompanionTask
       );
+
+      if (
+        draftResult.action === 'confirmed' &&
+        draftResult.readySpecialistDelegation
+      ) {
+        setPendingPersonalTaskDraft(null);
+        pendingPersonalTaskDraftRef.current = null;
+        const spec = draftResult.readySpecialistDelegation;
+        const targetSchool =
+          spec.schoolId === 'both' ? activeSchool : spec.schoolId;
+
+        const confirmReplyMsg: CompanionMessage = {
+          id: `comp-pixel-specconfirm-${nowMs + 1}`,
+          role: 'pixel',
+          content: draftResult.responseRu,
+          createdAt: formatTimeOnly(new Date(nowMs + 1)),
+          createdAtMs: nowMs + 1,
+          schoolId: activeSchool,
+          usedContextLabels: [
+            `Специалист: ${spec.targetSpecialistNameRu}`,
+            `Сызрань: ${getSyzranNow().time24}`,
+          ],
+        };
+        await onSaveCompanionMessages([...historyWithUser, confirmReplyMsg]);
+        updatePreferences({ mood: 'happy' });
+
+        await pixelAgentCoordinator.executeDelegation({
+          intent: {
+            isDelegation: true,
+            isSupportedSpecialist: true,
+            targetMode: spec.targetMode,
+            targetSpecialistNameRu: spec.targetSpecialistNameRu,
+            targetSchool,
+            instruction: spec.instruction,
+            cleanInstruction: spec.cleanInstruction,
+            originalText: text,
+          },
+          sourceMode: 'text',
+          skipAddingUserCompanionMessage: true,
+        });
+        return;
+      }
 
       if (draftResult.action === 'confirmed' && draftResult.readyTask) {
         setPendingPersonalTaskDraft(null);
@@ -3795,52 +3845,59 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                           ) : (
                             <div className="space-y-2">
                               {/* Quick action buttons depending on draft step */}
+                              {msg.pendingPersonalTaskDraft.step === 'ask_target' && (
+                                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Для меня')}
+                                    className="px-2.5 py-1 rounded-lg bg-sky-50 text-sky-900 border border-sky-200 text-[11px] font-semibold hover:bg-sky-100 transition-colors cursor-pointer"
+                                  >
+                                    👤 Для меня
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Для специалиста')}
+                                    className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-[11px] font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
+                                  >
+                                    👥 Для специалиста
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Отмена')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-medium hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    Отмена
+                                  </button>
+                                </div>
+                              )}
+
                               {msg.pendingPersonalTaskDraft.step === 'clarifying_description' && (
                                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('Без описания')}
+                                    onClick={() => void executePixelChatRequest('Нет')}
                                     className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
                                   >
-                                    Без описания
+                                    Без описания (нет)
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Отмена')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-medium hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    Отмена
                                   </button>
                                 </div>
                               )}
 
-                              {msg.pendingPersonalTaskDraft.step === 'clarifying_school' && (
-                                <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                                  <span className="text-[10px] text-slate-500 font-medium">
-                                    Выберите школу:
-                                  </span>
-                                  <button
-                                    type="button"
-                                    disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('KIBERone')}
-                                    className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-[11px] font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
-                                  >
-                                    🟠 KIBERone
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('RENDERIA')}
-                                    className="px-2.5 py-1 rounded-lg bg-lime-50 text-lime-900 border border-lime-200 text-[11px] font-semibold hover:bg-lime-100 transition-colors cursor-pointer"
-                                  >
-                                    🟢 RENDERIA
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('Обе')}
-                                    className="px-2.5 py-1 rounded-lg bg-teal-50 text-teal-900 border border-teal-200 text-[11px] font-semibold hover:bg-teal-100 transition-colors cursor-pointer"
-                                  >
-                                    🌐 Обе школы
-                                  </button>
-                                </div>
-                              )}
-
-                              {msg.pendingPersonalTaskDraft.step === 'clarifying_date' && (
+                              {(msg.pendingPersonalTaskDraft.step === 'clarifying_date_time' ||
+                                msg.pendingPersonalTaskDraft.step === 'clarifying_date' ||
+                                msg.pendingPersonalTaskDraft.step === 'clarifying_time') && (
                                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
                                   <span className="text-[10px] text-slate-500 font-medium">
                                     Быстрый выбор:
@@ -3848,8 +3905,24 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('Сегодня')}
+                                    onClick={() => void executePixelChatRequest('Сегодня в 15:00')}
                                     className="px-2.5 py-1 rounded-lg bg-sky-50 text-sky-800 border border-sky-200 text-[11px] font-semibold hover:bg-sky-100 transition-colors cursor-pointer"
+                                  >
+                                    Сегодня в 15:00
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Завтра в 10:00')}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+                                  >
+                                    Завтра в 10:00
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Сегодня')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
                                   >
                                     Сегодня
                                   </button>
@@ -3857,49 +3930,57 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                     type="button"
                                     disabled={isPixelGenerating}
                                     onClick={() => void executePixelChatRequest('Завтра')}
-                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
                                   >
                                     Завтра
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Нет')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    Без даты и времени
                                   </button>
                                 </div>
                               )}
 
-                              {msg.pendingPersonalTaskDraft.step === 'clarifying_time' && (
+                              {msg.pendingPersonalTaskDraft.step === 'clarifying_reminder' && (
                                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
                                   <span className="text-[10px] text-slate-500 font-medium">
-                                    Время:
+                                    Варианты напоминания:
                                   </span>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('10:00')}
+                                    onClick={() => void executePixelChatRequest('Нет')}
                                     className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
                                   >
-                                    10:00
+                                    Без напоминания
                                   </button>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('14:00')}
-                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                    onClick={() => void executePixelChatRequest('За 15 минут')}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
                                   >
-                                    14:00
+                                    За 15 минут
                                   </button>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('18:00')}
-                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                    onClick={() => void executePixelChatRequest('За 30 минут')}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
                                   >
-                                    18:00
+                                    За 30 минут
                                   </button>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('Без времени')}
-                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-500 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                    onClick={() => void executePixelChatRequest('За 1 час')}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
                                   >
-                                    Без времени
+                                    За 1 час
                                   </button>
                                 </div>
                               )}
@@ -3933,45 +4014,88 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                   >
                                     🔴 Высокий
                                   </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Не указывать')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    Не указывать
+                                  </button>
                                 </div>
                               )}
 
-                              {msg.pendingPersonalTaskDraft.step === 'clarifying_reminder' && (
+                              {msg.pendingPersonalTaskDraft.step === 'clarifying_specialist' && (
                                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                                  <span className="text-[10px] text-slate-500 font-medium">
-                                    Варианты напоминания:
-                                  </span>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('Без напоминания')}
-                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                                    onClick={() => void executePixelChatRequest('Маркетолог')}
+                                    className="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-900 border border-rose-200 text-[11px] font-semibold hover:bg-rose-100 transition-colors cursor-pointer"
                                   >
-                                    Без напоминания
+                                    📣 Маркетолог
                                   </button>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('За 15 минут')}
-                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+                                    onClick={() => void executePixelChatRequest('Менеджер')}
+                                    className="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-900 border border-blue-200 text-[11px] font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
                                   >
-                                    За 15 минут
+                                    🤝 Менеджер
                                   </button>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('За 30 минут')}
-                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+                                    onClick={() => void executePixelChatRequest('Методист')}
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 text-[11px] font-semibold hover:bg-emerald-100 transition-colors cursor-pointer"
                                   >
-                                    За 30 минут
+                                    📚 Методист
                                   </button>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('За 1 час')}
-                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+                                    onClick={() => void executePixelChatRequest('Аналитик')}
+                                    className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-[11px] font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
                                   >
-                                    За 1 час
+                                    📊 Аналитик
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Дизайнер')}
+                                    className="px-2.5 py-1 rounded-lg bg-purple-50 text-purple-900 border border-purple-200 text-[11px] font-semibold hover:bg-purple-100 transition-colors cursor-pointer"
+                                  >
+                                    🎨 Дизайнер
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Отмена')}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-medium hover:bg-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    Отмена
+                                  </button>
+                                </div>
+                              )}
+
+                              {msg.pendingPersonalTaskDraft.step === 'specialist_confirmation' && (
+                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Да, отправляй')}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-bold hover:bg-slate-800 disabled:opacity-40 transition-colors cursor-pointer"
+                                  >
+                                    <Check className="w-3.5 h-3.5 text-[#FFD700]" />
+                                    <span>Отправить поручение</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isPixelGenerating}
+                                    onClick={() => void executePixelChatRequest('Отмена')}
+                                    className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-700 text-[11px] font-medium hover:bg-slate-200 disabled:opacity-40 transition-colors cursor-pointer"
+                                  >
+                                    Отменить
                                   </button>
                                 </div>
                               )}
@@ -3991,7 +4115,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                     type="button"
                                     disabled={isPixelGenerating}
                                     onClick={() => void executePixelChatRequest('Отмена')}
-                                    className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-[11px] font-medium hover:bg-slate-200 disabled:opacity-40 transition-colors cursor-pointer"
+                                    className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-700 text-[11px] font-medium hover:bg-slate-200 disabled:opacity-40 transition-colors cursor-pointer"
                                   >
                                     Отменить
                                   </button>
@@ -4758,7 +4882,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
               {/* ZONE 3: LOWER INPUT PANEL */}
               <div className="border-t border-slate-200/80 bg-white px-4 sm:px-6 py-3 space-y-2.5 shrink-0">
                 {/* Quick Action Chips & History Actions */}
-                <div className="flex items-center justify-between gap-2 overflow-x-auto pb-0.5">
+                <div className="flex items-center justify-between gap-2 overflow-visible pb-0.5">
                   <div className="flex items-center gap-1.5 flex-nowrap">
                     {activeChatCtx?.lastSpecialistMessage && (
                       <button
@@ -4807,7 +4931,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                       }}
                       className="px-2.5 py-1 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
                     >
-                      <span>📝 Поставить задачу (себе)</span>
+                      <span>📝 Поставить задачу</span>
                     </button>
 
                     <div className="relative inline-block">
@@ -4821,7 +4945,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                       </button>
 
                       {specialistDropdownOpen && (
-                        <div className="absolute left-0 bottom-full mb-1 z-50 w-56 bg-white rounded-2xl border border-slate-200 shadow-xl p-1.5 space-y-0.5 animate-in fade-in zoom-in-95 duration-100">
+                        <div className="absolute left-0 bottom-full mb-2 z-50 w-64 bg-white border border-gray-200 rounded-2xl shadow-2xl p-2 space-y-1">
                           {(['marketer', 'manager', 'methodist', 'analyst', 'designer'] as AgentMode[]).map((mode) => (
                             <button
                               key={mode}
@@ -4839,10 +4963,10 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                                 };
                                 void onSaveCompanionMessages([...companionMessages, promptMsg]);
                               }}
-                              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
                             >
-                              <span>{AGENT_MODES[mode].title}</span>
-                              <span className="text-[10px] text-slate-400 font-normal">
+                              <span className="text-slate-900 font-semibold">{AGENT_MODES[mode].title}</span>
+                              <span className="text-[10px] text-slate-500 font-normal">
                                 ({AGENT_MODES[mode].shortTitle})
                               </span>
                             </button>

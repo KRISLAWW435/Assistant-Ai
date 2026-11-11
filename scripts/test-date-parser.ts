@@ -185,65 +185,65 @@ if (
 
 // Тест шага 2: уточнение приоритета
 console.log('Шаг 2: Анна отвечает на вопрос о приоритете («Обычный»)...');
-const step2 = processPersonalTaskDraftInput(cmd1!.personalTaskDraft!, 'Обычный', todayIso);
-console.log(`- Приоритет в черновике: ${step2.draft.priority}`);
-console.log(`- Следующий шаг: ${step2.draft.step}`);
-console.log(`- Вопрос Пикселя: ${step2.responseRu}`);
+await (async () => {
+  const step2 = await processPersonalTaskDraftInput(cmd1!.personalTaskDraft!, 'Обычный', todayIso);
+  console.log(`- Приоритет в черновике: ${step2.draft.priority}`);
+  console.log(`- Следующий шаг: ${step2.draft.step}`);
+  console.log(`- Вопрос Пикселя: ${step2.responseRu}`);
 
-if (step2.draft.priority === 'low' && step2.draft.step === 'clarifying_reminder') {
-  console.log('✅ Приоритет «обычный» сохранён, Пиксель запросил дату и время напоминания!\n');
-} else {
-  console.error('❌ Ошибка на шаге уточнения приоритета:', step2);
-  allPassed = false;
-}
+  if (step2.draft.priority === 'low' && step2.draft.step === 'clarifying_reminder') {
+    console.log('✅ Приоритет «обычный» сохранён, Пиксель запросил дату и время напоминания!\n');
+  } else {
+    console.error('❌ Ошибка на шаге уточнения приоритета:', step2);
+    allPassed = false;
+  }
 
-// Тест шага 3: указание времени напоминания отдельно от времени выполнения
-console.log('Шаг 3: Анна задаёт напоминание («Напомни 4 ноября в 14:00»)...');
-const step3 = processPersonalTaskDraftInput(step2.draft, 'Напомни 4 ноября в 14:00', todayIso);
-console.log(`- Время выполнения события (dueTime): ${step3.draft.dueTime}`);
-console.log(`- Дата напоминания (reminderDate): ${step3.draft.reminderDate}`);
-console.log(`- Время напоминания (reminderTime): ${step3.draft.reminderTime}`);
-console.log(`- reminderAt ISO: ${step3.draft.reminderAt}`);
-console.log(`- Следующий шаг: ${step3.draft.step}`);
+  // Тест шага 3: указание времени напоминания отдельно от времени выполнения
+  console.log('Шаг 3: Анна задаёт напоминание («Напомни 4 ноября в 14:00»)...');
+  const step3 = await processPersonalTaskDraftInput(step2.draft, 'Напомни 4 ноября в 14:00', todayIso);
+  console.log(`- Время выполнения события (dueTime): ${step3.draft.dueTime}`);
+  console.log(`- Дата напоминания (reminderDate): ${step3.draft.reminderDate}`);
+  console.log(`- Время напоминания (reminderTime): ${step3.draft.reminderTime}`);
+  console.log(`- reminderAt ISO: ${step3.draft.reminderAt}`);
+  console.log(`- Следующий шаг: ${step3.draft.step}`);
 
-if (
-  step3.draft.dueTime === '15:00' &&
-  step3.draft.reminderTime === '14:00' &&
-  step3.draft.reminderDate === '2026-11-04' &&
-  step3.draft.step === 'ready_for_confirmation' &&
-  step3.responseRu.includes('Подтверждение создания задачи')
-) {
-  console.log('✅ Время выполнения (15:00) и время напоминания (14:00) сохранены отдельно! Показана итоговая карточка.\n');
-} else {
-  console.error('❌ Ошибка на шаге настройки напоминания:', step3);
-  allPassed = false;
-}
+  if (
+    step3.draft.dueTime === '15:00' &&
+    step3.draft.reminderTime === '14:00' &&
+    step3.draft.reminderDate === '2026-11-04' &&
+    step3.draft.step === 'ready_for_confirmation' &&
+    step3.responseRu.includes('Зачитываю задачу')
+  ) {
+    console.log('✅ Время выполнения (15:00) и время напоминания (14:00) сохранены отдельно! Показана итоговая карточка.\n');
+  } else {
+    console.error('❌ Ошибка на шаге настройки напоминания:', step3);
+    allPassed = false;
+  }
 
-// Тест шага 4: подтверждение создания задачи Анной («Да, создавай»)
-console.log('Шаг 4: Анна подтверждает создание («Создавай»)...');
-const step4 = processPersonalTaskDraftInput(step3.draft, 'Создавай', todayIso);
-console.log(`- Статус действия: ${step4.action}`);
-console.log(`- Созданная задача title: ${step4.readyTask?.title}`);
-console.log(`- Созданная задача dueDate: ${step4.readyTask?.dueDate}`);
-console.log(`- Созданная задача dueTime: ${step4.readyTask?.dueTime}`);
-console.log(`- Созданная задача priority: ${step4.readyTask?.priority}`);
-console.log(`- Созданная задача reminderAt: ${step4.readyTask?.reminderAt}`);
-console.log(`- Уведомление о доставке напоминания: ${step4.responseRu.includes('Напоминание установлено')}`);
+  // Тест шага 4: подтверждение создания задачи Анной («Да, создавай»)
+  console.log('Шаг 4: Анна подтверждает создание («Создавай»)...');
+  const step4 = await processPersonalTaskDraftInput(step3.draft, 'Создавай', todayIso);
+  console.log(`- Статус действия: ${step4.action}`);
+  console.log(`- Созданная задача title: ${step4.readyTask?.title}`);
+  console.log(`- Созданная задача dueDate: ${step4.readyTask?.dueDate}`);
+  console.log(`- Созданная задача dueTime: ${step4.readyTask?.dueTime}`);
+  console.log(`- Созданная задача priority: ${step4.readyTask?.priority}`);
+  console.log(`- Созданная задача reminderAt: ${step4.readyTask?.reminderAt}`);
 
-if (
-  step4.action === 'confirmed' &&
-  step4.readyTask?.title === 'Подготовить отчёт по школам' &&
-  step4.readyTask?.dueDate === '2026-11-04' &&
-  step4.readyTask?.dueTime === '15:00' &&
-  step4.readyTask?.priority === 'low' &&
-  step4.readyTask?.reminderAt &&
-  step4.responseRu.includes('Напоминание установлено')
-) {
-  console.log('✅ Задача подтверждена и подготовлена к сохранению в IndexedDB со всеми 7 полями!\n');
-} else {
-  console.error('❌ Ошибка при подтверждении задачи:', step4);
-  allPassed = false;
-}
+  if (
+    step4.action === 'confirmed' &&
+    step4.readyTask?.title === 'Подготовить отчёт по школам' &&
+    step4.readyTask?.dueDate === '2026-11-04' &&
+    step4.readyTask?.dueTime === '15:00' &&
+    step4.readyTask?.priority === 'low' &&
+    step4.readyTask?.reminderAt
+  ) {
+    console.log('✅ Задача подтверждена и подготовлена к сохранению в IndexedDB со всеми 7 полями!\n');
+  } else {
+    console.error('❌ Ошибка при подтверждении задачи:', step4);
+    allPassed = false;
+  }
+})();
 
 // Тест: если пользователь сразу назвал все параметры, повторные вопросы не задаются
 console.log('Тест: полное первичное указание («Добавь срочную задачу провести вебинар на 4 ноября в 18:00 без напоминания»)...');

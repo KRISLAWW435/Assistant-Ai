@@ -5,6 +5,7 @@ import {
   ChatMessage,
   ChatSession,
   CompanionMessage,
+  CompanionTaskRecord,
   CoordinatorTaskStatus,
   KnowledgeBaseBySchool,
   NavSection,
@@ -15,6 +16,7 @@ import {
   PixelDelegationStatus,
   PixelPendingChatDeletion,
   PixelPendingDelegationDraft,
+  PixelPendingPersonalTaskDraft,
   PixelPendingRevisionDraft,
   SchoolId,
   SpecialistAnalysisResult,
@@ -199,6 +201,7 @@ export interface PixelAgentCoordinatorDeps {
   onShowPixelBubble?: (text: string) => void;
   onNotifyLiveVoice?: (notificationText: string) => void;
   onDelegatedTaskSyncToAnnaTasks?: (taskState: PixelDelegatedTaskState) => void;
+  onSaveCompanionTask?: (task: CompanionTaskRecord) => Promise<void>;
   onNavigate?: (section: NavSection) => void;
 }
 
@@ -300,7 +303,7 @@ export function detectAllSpecialistsFromText(lower: string): AgentMode[] {
   return modes;
 }
 
-function detectSpecialistFromText(lower: string): {
+export function detectSpecialistFromText(lower: string): {
   matched: boolean;
   mode?: AgentMode;
   nameRu?: string;
@@ -669,6 +672,52 @@ export class PixelAgentCoordinator {
   public init(deps: PixelAgentCoordinatorDeps): void {
     this.deps = deps;
     this.loadTasksFromStorage();
+  }
+
+  /**
+   * Directly creates and saves a personal task for Anna from a completed wizard draft,
+   * guaranteeing real persistence in IndexedDB / storageProvider and immediate UI update.
+   */
+  public async createAndSavePersonalTask(
+    draft: PixelPendingPersonalTaskDraft
+  ): Promise<CompanionTaskRecord> {
+    const nowMs = Date.now();
+    const syzranNow = getSyzranNow(new Date(nowMs));
+    const newTask: CompanionTaskRecord = {
+      id: `task-manual-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
+      title: (draft.title || 'Новая задача').trim(),
+      description: (draft.description || '').trim(),
+      dueDate: draft.dueDate || syzranNow.isoDate,
+      dueTime: draft.dueTime || undefined,
+      priority: draft.priority || 'low',
+      priorityReason: `Приоритет выбран Анной: ${
+        draft.priority === 'high'
+          ? 'высокий'
+          : draft.priority === 'medium'
+          ? 'средний'
+          : 'обычный'
+      }`,
+      urgencyScore: draft.priority === 'high' ? 9 : draft.priority === 'medium' ? 6 : 3,
+      importanceScore: draft.priority === 'high' ? 9 : draft.priority === 'medium' ? 6 : 4,
+      estimatedMinutes: 30,
+      status: 'new',
+      schoolId: draft.schoolId || 'both',
+      sourceType: 'manual',
+      reminderDate: draft.wantsReminder ? draft.reminderDate : undefined,
+      reminderTime: draft.wantsReminder ? (draft.reminderTime || '09:00') : undefined,
+      reminderAt: draft.wantsReminder ? draft.reminderAt : undefined,
+      reminderRepeat: draft.wantsReminder && draft.reminderAt ? 'none' : undefined,
+      createdAt: syzranNow.time24,
+      createdAtMs: nowMs,
+    };
+
+    if (this.deps?.onSaveCompanionTask) {
+      await this.deps.onSaveCompanionTask(newTask);
+    } else {
+      await storageProvider.saveCompanionTask(newTask);
+    }
+
+    return newTask;
   }
 
   public setBubbleHandler(handler: ((text: string) => void) | null): void {
@@ -3738,15 +3787,12 @@ export class PixelAgentCoordinator {
 
     const lower = text.toLowerCase();
 
-    // Do not confuse personal reminder «напомни мне ...» unless explicitly asking to message/instruct a specialist
-    const isPersonalReminderOnly =
-      /^(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?напомни(?:те)?\s+мне(?=$|[^а-яёa-z0-9])/i.test(
-        text
-      ) &&
-      !/(?:^|[^а-яёa-z0-9])(?:попроси|поручи|напиши|передай|отправь|делегируй|спроси|уточни)(?=$|[^а-яёa-z0-9])/i.test(
+    // Task creation triggers («поставь задачу», «новая задача», «добавь задачу», «создай задачу», etc.) must ALWAYS start the Task Wizard instead of skipping to direct delegation
+    const isTaskWizardTrigger =
+      /^(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:поставь\s+задачу|создай\s+задачу|добавь\s+задачу|запиши\s+задачу|запланируй\s+задачу|сделай\s+задачу|напомни(?:те)?(?:\s+мне)?|поставь\s+напоминание|создай\s+напоминание|сделай\s+напоминание|новая\s+задача)(?=$|[^а-яёa-z0-9])/i.test(
         text
       );
-    if (isPersonalReminderOnly) {
+    if (isTaskWizardTrigger) {
       return null;
     }
 

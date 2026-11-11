@@ -47,6 +47,7 @@ import {
   getSyzranNow,
   toSyzranIsoDate,
 } from '../utils/syzranTime';
+import { buildSyzranReminderIso } from '../utils/pixelTaskManagerEngine';
 
 export interface TasksViewProps {
   tasks: CompanionTaskRecord[];
@@ -227,7 +228,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
     useState<CompanionTaskPriority>('medium');
   const [formStatus, setFormStatus] = useState<CompanionTaskStatus>('new');
   const [formSchool, setFormSchool] = useState<SchoolId | 'both'>(activeSchool);
-  const [formReminderAt, setFormReminderAt] = useState('');
+  const [formReminderDate, setFormReminderDate] = useState('');
+  const [formReminderTime, setFormReminderTime] = useState('');
 
   // Open modal for new task
   const handleOpenCreateModal = (prefillDueDate?: string) => {
@@ -239,7 +241,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
     setFormPriority('medium');
     setFormStatus('new');
     setFormSchool(activeSchool);
-    setFormReminderAt('');
+    setFormReminderDate('');
+    setFormReminderTime('');
     setShowCreateModal(true);
   };
 
@@ -253,7 +256,21 @@ export const TasksView: React.FC<TasksViewProps> = ({
     setFormPriority(task.priority);
     setFormStatus(task.status);
     setFormSchool(task.schoolId || 'both');
-    setFormReminderAt(task.reminderAt || '');
+
+    // Extract reminderDate and reminderTime, with fallback from reminderAt
+    let rDate = task.reminderDate || '';
+    let rTime = task.reminderTime || '';
+    if ((!rDate || !rTime) && task.reminderAt) {
+      try {
+        const snap = getSyzranNow(new Date(task.reminderAt));
+        if (!rDate) rDate = snap.isoDate;
+        if (!rTime) rTime = snap.timeHHMM;
+      } catch {
+        // ignore date parse errors
+      }
+    }
+    setFormReminderDate(rDate);
+    setFormReminderTime(rTime);
     setShowCreateModal(true);
   };
 
@@ -263,6 +280,15 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
     const now = new Date();
     const formattedNow = formatSyzranIsoDateRu(todayIso);
+
+    // Compute reminderAt if reminderDate is provided
+    let computedReminderAt: string | undefined = undefined;
+    if (formReminderDate) {
+      computedReminderAt = buildSyzranReminderIso(
+        formReminderDate,
+        formReminderTime || '09:00'
+      );
+    }
 
     if (editingTask) {
       const isNowDone = formStatus === 'done';
@@ -276,7 +302,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
         priority: formPriority,
         status: formStatus,
         schoolId: formSchool,
-        reminderAt: formReminderAt || undefined,
+        reminderDate: formReminderDate || undefined,
+        reminderTime: formReminderDate ? (formReminderTime || '09:00') : undefined,
+        reminderAt: computedReminderAt,
+        reminderRepeat: computedReminderAt ? (editingTask.reminderRepeat || 'none') : undefined,
         completedAt: isNowDone
           ? wasDone
             ? editingTask.completedAt
@@ -300,7 +329,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
         status: formStatus,
         schoolId: formSchool,
         sourceType: 'manual',
-        reminderAt: formReminderAt || undefined,
+        reminderDate: formReminderDate || undefined,
+        reminderTime: formReminderDate ? (formReminderTime || '09:00') : undefined,
+        reminderAt: computedReminderAt,
+        reminderRepeat: computedReminderAt ? 'none' : undefined,
         createdAt: formattedNow,
         createdAtMs: now.getTime(),
       };
@@ -1525,16 +1557,45 @@ export const TasksView: React.FC<TasksViewProps> = ({
               </div>
 
               {/* Reminder date / time */}
-              <div className="space-y-1 pt-1 border-t border-slate-100">
-                <label className="block text-slate-700 font-medium">
-                  Напоминание (дата и время)
-                </label>
-                <input
-                  type="datetime-local"
-                  value={formReminderAt}
-                  onChange={(e) => setFormReminderAt(e.target.value)}
-                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs font-mono-tabular"
-                />
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <label className="text-slate-700 font-medium text-xs flex items-center gap-1.5">
+                    <Bell className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Напоминание (дата и время)</span>
+                  </label>
+                  {(formReminderDate || formReminderTime) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormReminderDate('');
+                        setFormReminderTime('');
+                      }}
+                      className="text-[11px] text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                    >
+                      Очистить напоминание
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <span className="block text-[11px] text-slate-500 mb-1">Дата напоминания</span>
+                    <input
+                      type="date"
+                      value={formReminderDate}
+                      onChange={(e) => setFormReminderDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs font-mono-tabular bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <span className="block text-[11px] text-slate-500 mb-1">Время (Сызрань)</span>
+                    <input
+                      type="time"
+                      value={formReminderTime}
+                      onChange={(e) => setFormReminderTime(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs font-mono-tabular bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Form Action buttons */}
