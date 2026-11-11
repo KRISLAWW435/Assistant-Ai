@@ -4118,6 +4118,41 @@ export class PixelAgentCoordinator {
         continue;
       }
 
+      // 1.2 Check voice task trigger: task wizard via voice is disabled; voice acts as dictaphone only
+      const isVoiceTaskTrigger =
+        /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:мне\s+)?(?:надо|нужно|необходимо|хочу|давай(?:те)?\s+)?(?:поставь(?:те)?|поставить|создай(?:те)?|создать|добавь(?:те)?|добавить|запиши(?:те)?|записать|запланируй(?:те)?|запланировать|сделай(?:те)?|сделать)\s+(?:мне\s+)?(?:в\s+список\s+дел\s+|в\s+задачи\s+)?(?:новую\s+)?задач[уи](?:$|[\s:.!?,—-])/i.test(
+          msg.content
+        ) ||
+        /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:новая\s+задача|нужно\s+не\s+забыть|надо\s+не\s+забыть)(?:$|[\s:.!?,—-])/i.test(
+          msg.content
+        ) ||
+        /^(?:добавить\s+задачу|поставить\s+задачу|создать\s+задачу|надо\s+добавить\s+задачу|нужно\s+добавить\s+задачу|поставь\s+задачу|добавь\s+задачу|создай\s+задачу)(?:$|[\s:.!?,—-])/i.test(
+          msg.content
+        ) ||
+        /^(?:написать\s+специалисту|напиши\s+специалисту|поручение\s+специалисту|задача\s+специалисту)(?:$|[\s:.!?,—-])/i.test(
+          msg.content
+        );
+
+      if (isVoiceTaskTrigger) {
+        this.processedSpokenTurnIds.add(msg.id);
+        const refusalText =
+          'Анна, для постановки задачи, пожалуйста, нажмите кнопку «Поставить задачу» внизу экрана, чтобы я мог все заполнить без ошибок.';
+        const refusalMsg: CompanionMessage = {
+          id: `comp-voice-refuse-${Date.now()}`,
+          role: 'pixel',
+          content: refusalText,
+          createdAt: formatTimeNow(new Date()),
+          createdAtMs: Date.now(),
+          schoolId: activeSchool,
+        };
+        if (this.deps) {
+          const cur = this.deps.getCompanionMessages();
+          void this.deps.onSaveCompanionMessages([...cur, refusalMsg]);
+        }
+        this.showBubble(refusalText);
+        continue;
+      }
+
       // 1.5. Check multi-turn personal or specialist task draft wizard («Для меня», «Да, отправляй», etc.)
       if (this.pendingPersonalTaskDraft) {
         this.processedSpokenTurnIds.add(msg.id);

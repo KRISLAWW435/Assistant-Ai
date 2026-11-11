@@ -1331,7 +1331,7 @@ export function formatPersonalTaskConfirmationCard(
 
 /**
  * Starts a clean, step-by-step Personal Task Creation Wizard for Anna.
- * Step 1: "Анна, для кого ставим задачу: для вас или для специалиста?"
+ * Immediately starts personal task creation at Step 1: "Как назовем задачу?"
  */
 export function createEmptyPersonalTaskWizardDraft(
   activeSchool: SchoolId
@@ -1344,7 +1344,7 @@ export function createEmptyPersonalTaskWizardDraft(
   const draftId = `draft_${nowMs}_${Math.random().toString(36).slice(2, 6)}`;
   const draft: PixelPendingPersonalTaskDraft = {
     draftId,
-    target: null,
+    target: 'personal',
     specialistId: null,
     targetSpecialistMode: undefined,
     targetSpecialistNameRu: undefined,
@@ -1362,18 +1362,86 @@ export function createEmptyPersonalTaskWizardDraft(
     hasExplicitDueTime: false,
     hasExplicitPriority: false,
     hasExplicitReminder: false,
-    step: 'ask_target',
+    step: 'clarifying_title',
     status: 'drafting',
     createdAtMs: nowMs,
   };
 
-  const questionRu = 'Анна, для кого ставим задачу: для вас или для специалиста?';
+  const questionRu = 'Как назовем задачу?';
   return {
     draft,
     questionRu,
-    spokenSummary: 'Анна, для кого ставим задачу: для вас или для специалиста?',
+    spokenSummary: 'Как назовем задачу?',
   };
 }
+
+/**
+ * Starts a step-by-step Specialist Task Wizard for Anna's delegations.
+ * Steps: Choice of specialist -> TZ description -> Read-back & confirmation.
+ */
+export function createEmptySpecialistTaskWizardDraft(
+  activeSchool: SchoolId,
+  chosenMode?: AgentMode,
+  chosenNameRu?: string
+): {
+  draft: PixelPendingPersonalTaskDraft;
+  questionRu: string;
+  spokenSummary: string;
+} {
+  const nowMs = Date.now();
+  const draftId = `draft_${nowMs}_${Math.random().toString(36).slice(2, 6)}`;
+
+  if (chosenMode) {
+    const specName =
+      chosenNameRu || AGENT_MODES[chosenMode]?.shortTitle || 'Специалист';
+    const draft: PixelPendingPersonalTaskDraft = {
+      draftId,
+      target: 'specialist',
+      specialistId: chosenMode,
+      targetSpecialistMode: chosenMode,
+      targetSpecialistNameRu: specName,
+      title: '',
+      description: '',
+      taskDescription: '',
+      specialistInstruction: '',
+      schoolId: activeSchool || 'both',
+      step: 'clarifying_specialist_task',
+      status: 'drafting',
+      createdAtMs: nowMs,
+    };
+    const questionRu = `Специалист: **${specName}**.\n\nЧто за задача? Напишите или продиктуйте суть и детали (ТЗ).`;
+    return {
+      draft,
+      questionRu,
+      spokenSummary: `Специалист ${specName}. Что за задача? Напишите или продиктуйте суть и детали.`,
+    };
+  }
+
+  const draft: PixelPendingPersonalTaskDraft = {
+    draftId,
+    target: 'specialist',
+    specialistId: null,
+    targetSpecialistMode: undefined,
+    targetSpecialistNameRu: undefined,
+    title: '',
+    description: '',
+    taskDescription: '',
+    specialistInstruction: '',
+    schoolId: activeSchool || 'both',
+    step: 'clarifying_specialist',
+    status: 'drafting',
+    createdAtMs: nowMs,
+  };
+  const questionRu =
+    'Какому специалисту ставим задачу? (Маркетолог, Менеджер, Методист, Аналитик, Дизайнер)';
+  return {
+    draft,
+    questionRu,
+    spokenSummary:
+      'Какому специалисту ставим задачу? Маркетолог, Менеджер, Методист, Аналитик, Дизайнер.',
+  };
+}
+
 
 /**
  * Initializes a new personal task draft from Anna's request.
@@ -1524,9 +1592,8 @@ export function getStepQuestionRu(
 ): string {
   switch (step) {
     case 'ask_target':
-      return 'Анна, для кого ставим задачу: для вас или для специалиста?';
     case 'clarifying_title':
-      return 'Какое название (суть) задачи запишем?';
+      return 'Как назовем задачу?';
     case 'clarifying_description':
       return 'Добавим описание или детали? Если нет, скажите "нет".';
     case 'clarifying_date_time':
@@ -1760,25 +1827,11 @@ export async function processPersonalTaskDraftInput(
     };
   }
 
-  // 4. STEP 1: ask_target («Анна, для кого ставим задачу: для вас или для специалиста?»)
+  // 4. STEP 1: Legacy ask_target fallback
   if (draft.step === 'ask_target') {
-    const isPersonal = /(?:^|[^а-яёa-z0-9])(?:для\s+меня|мне|для\s+себя|себе|личн[а-яё0-9]*|я|моя|мое|моему|себя)(?=$|[^а-яёa-z0-9])/i.test(
-      lower
-    );
     const isSpecialist = /(?:^|[^а-яёa-z0-9])(?:для\s+специалиста|специалисту|специалист[а-яё0-9]*|команд[а-яё0-9]*|сотрудник[а-яё0-9]*|маркетолог|менеджер|методист|аналитик|дизайнер)/i.test(
       lower
     );
-
-    if (isPersonal) {
-      const refusalText =
-        'Анна, личные задачи лучше ставить через кнопку "Поставить задачу" в меню или в письменном виде, чтобы я точно все записал и не ошибся с датами.';
-      return {
-        action: 'cancelled',
-        draft: null,
-        responseRu: refusalText,
-        spokenSummary: refusalText,
-      };
-    }
 
     if (isSpecialist) {
       const detected = detectSpecialistFromText(lower);
@@ -1816,13 +1869,16 @@ export async function processPersonalTaskDraftInput(
       };
     }
 
+    const nextDraft: PixelPendingPersonalTaskDraft = {
+      ...draft,
+      target: 'personal',
+      step: 'clarifying_title',
+    };
     return {
       action: 'updated',
-      draft,
-      responseRu:
-        'Анна, для кого ставим задачу: для вас или для специалиста? Скажите «для меня» или «для специалиста».',
-      spokenSummary:
-        'Анна, для кого ставим задачу: для вас или для специалиста? Скажите для меня или для специалиста.',
+      draft: nextDraft,
+      responseRu: 'Как назовем задачу?',
+      spokenSummary: 'Как назовем задачу?',
     };
   }
 
@@ -2392,7 +2448,8 @@ export function parseAndExecuteTaskCommand(
   userText: string,
   activeSchool: SchoolId,
   existingTasks: CompanionTaskRecord[],
-  todayIsoOverride?: string
+  todayIsoOverride?: string,
+  isVoiceInput = false
 ): TaskCommandExecutionResult | null {
   const trimmed = userText.trim();
   const lower = trimmed.toLowerCase();
@@ -2424,19 +2481,26 @@ export function parseAndExecuteTaskCommand(
       )
     );
 
-  if (isTaskWizardTrigger) {
-    const isPersonalExplicit =
-      /(?:для\s+меня|мне\s+задачу|напомни\s+мне|поставь\s+мне|создай\s+мне|добавь\s+мне|задач[уи]\s+для\s+меня)/i.test(
+  const isSpecialistWizardTrigger =
+    !isTimerCommand &&
+    !isTaskWizardTrigger &&
+    (
+      /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:мне\s+)?(?:напиши(?:те)?|написать|поручи(?:те)?|поручить|передай(?:те)?|отправь(?:те)?|создай(?:те)?|поставь(?:те)?)\s+(?:задачу\s+|поручение\s+)?(?:специалисту|специалистам|команде)(?:$|[\s:.!?,—-])/i.test(
         trimmed
-      );
+      ) ||
+      /^(?:написать\s+специалисту|напиши\s+специалисту|поручение\s+специалисту|задача\s+специалисту)(?:$|[\s:.!?,—-])/i.test(
+        trimmed
+      )
+    );
 
-    if (isPersonalExplicit) {
-      const refusalText =
-        'Анна, личные задачи лучше ставить через кнопку "Поставить задачу" в меню или в письменном виде, чтобы я точно все записал и не ошибся с датами.';
+  if (isTaskWizardTrigger) {
+    if (isVoiceInput) {
+      const voiceTaskRefusal =
+        'Анна, для постановки задачи, пожалуйста, нажмите кнопку «Поставить задачу» внизу экрана, чтобы я мог все заполнить без ошибок.';
       return {
         handled: true,
-        responseText: refusalText,
-        spokenSummary: refusalText,
+        responseText: voiceTaskRefusal,
+        spokenSummary: voiceTaskRefusal,
       };
     }
 
@@ -2455,7 +2519,7 @@ export function parseAndExecuteTaskCommand(
       .replace(/^[«"„“]+|[»"”]+$/g, '')
       .trim();
 
-    // If extra content is present and meaningful, pre-seed title into the wizard draft
+    // If extra content is present and meaningful, pre-seed title into the wizard draft and move to description
     if (
       contentAfterTrigger.length >= 3 &&
       !/^(?:задач[уи]|новую\s+задачу)$/i.test(contentAfterTrigger)
@@ -2463,7 +2527,39 @@ export function parseAndExecuteTaskCommand(
       const extractedTitle =
         cleanExtractedTaskTitle(contentAfterTrigger) || contentAfterTrigger;
       wizardInit.draft.title = extractedTitle;
+      wizardInit.draft.step = 'clarifying_description';
+      wizardInit.questionRu = `Записал название: **«${extractedTitle}»**.\n\nДобавим описание или детали? Если нет, скажите "нет".`;
+      wizardInit.spokenSummary = `Записал название ${extractedTitle}. Добавим описание или детали?`;
     }
+
+    return {
+      handled: true,
+      personalTaskDraft: wizardInit.draft,
+      responseText: wizardInit.questionRu,
+      spokenSummary: wizardInit.spokenSummary,
+    };
+  }
+
+  if (isSpecialistWizardTrigger) {
+    if (isVoiceInput) {
+      const voiceTaskRefusal =
+        'Анна, для постановки задачи, пожалуйста, нажмите кнопку «Написать специалисту» внизу экрана, чтобы я мог все заполнить без ошибок.';
+      return {
+        handled: true,
+        responseText: voiceTaskRefusal,
+        spokenSummary: voiceTaskRefusal,
+      };
+    }
+
+    const detected = detectSpecialistFromText(lower);
+    const wizardInit =
+      detected.matched && detected.mode
+        ? createEmptySpecialistTaskWizardDraft(
+            activeSchool,
+            detected.mode,
+            detected.nameRu
+          )
+        : createEmptySpecialistTaskWizardDraft(activeSchool);
 
     return {
       handled: true,

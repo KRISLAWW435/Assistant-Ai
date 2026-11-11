@@ -87,6 +87,7 @@ import {
   buildSyzranReminderIso,
   checkDueTaskAndDelegationReminders,
   createEmptyPersonalTaskWizardDraft,
+  createEmptySpecialistTaskWizardDraft,
   evaluateTaskPriorityMultiCriteria,
   extractAutoTaskFromConversation,
   formatPersonalTaskConfirmationCard,
@@ -654,7 +655,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         if (textToSend) {
           latestStabilizedInputRef.current = '';
           setChatInput(textToSend);
-          void executePixelChatRequest(textToSend);
+          void executePixelChatRequest(textToSend, { isSpoken: true });
         }
       }
     });
@@ -744,7 +745,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       if (textToSend) {
         latestStabilizedInputRef.current = '';
         setChatInput(textToSend);
-        await executePixelChatRequest(textToSend);
+        await executePixelChatRequest(textToSend, { isSpoken: true });
       }
       return;
     }
@@ -1661,7 +1662,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
 
   const executePixelChatRequest = async (
     rawText: string,
-    options?: { replaceMessageId?: string }
+    options?: { replaceMessageId?: string; isSpoken?: boolean }
   ) => {
     // Stage 6.4 (3): If speech recognition was actively listening, stop and wait briefly for final text stabilization
     const wasListening =
@@ -1675,6 +1676,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
       wasListening && latestStabilizedInputRef.current.trim().length > rawText.trim().length
         ? latestStabilizedInputRef.current.trim()
         : rawText.trim();
+
+    const isSpokenInput = Boolean(options?.isSpoken || wasListening);
 
     const attachedImage = draftImage;
     const text =
@@ -1715,6 +1718,7 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         content: text,
         createdAt: formatTimeOnly(now),
         createdAtMs: nowMs,
+        isSpoken: isSpokenInput,
         imageAttachment: EffectiveImage,
       };
 
@@ -1734,6 +1738,41 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
         usedContextLabels: ['Защита конфиденциальности'],
       };
       await onSaveCompanionMessages([...historyWithUser, privacyReply]);
+      return;
+    }
+
+    // 1.1 Voice Task Wizard Guard: Voice mode acts only as dictaphone; wizard creation via speech is disabled
+    const isTaskCreationVoiceTrigger =
+      /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:мне\s+)?(?:надо|нужно|необходимо|хочу|давай(?:те)?\s+)?(?:поставь(?:те)?|поставить|создай(?:те)?|создать|добавь(?:те)?|добавить|запиши(?:те)?|записать|запланируй(?:те)?|запланировать|сделай(?:те)?|сделать)\s+(?:мне\s+)?(?:в\s+список\s+дел\s+|в\s+задачи\s+)?(?:новую\s+)?задач[уи](?:$|[\s:.!?,—-])/i.test(
+        text
+      ) ||
+      /^(?:[«"„“]+)?(?:пиксель[\s,:-]*)?(?:пожалуйста[\s,:-]*)?(?:новая\s+задача|нужно\s+не\s+забыть|надо\s+не\s+забыть)(?:$|[\s:.!?,—-])/i.test(
+        text
+      ) ||
+      /^(?:добавить\s+задачу|поставить\s+задачу|создать\s+задачу|надо\s+добавить\s+задачу|нужно\s+добавить\s+задачу|поставь\s+задачу|добавь\s+задачу|создай\s+задачу)(?:$|[\s:.!?,—-])/i.test(
+        text
+      ) ||
+      /^(?:написать\s+специалисту|напиши\s+специалисту|поручение\s+специалисту|задача\s+специалисту)(?:$|[\s:.!?,—-])/i.test(
+        text
+      );
+
+    if (isSpokenInput && isTaskCreationVoiceTrigger) {
+      const refusalContent =
+        'Анна, для постановки задачи, пожалуйста, нажмите кнопку «Поставить задачу» внизу экрана, чтобы я мог все заполнить без ошибок.';
+      const refusalMsg: CompanionMessage = {
+        id: `comp-pixel-voicerefuse-${nowMs + 1}`,
+        role: 'pixel',
+        content: refusalContent,
+        createdAt: formatTimeOnly(new Date(nowMs + 1)),
+        createdAtMs: nowMs + 1,
+        schoolId: activeSchool,
+      };
+      await onSaveCompanionMessages([...historyWithUser, refusalMsg]);
+      updatePreferences({ mood: 'curious' });
+      setSpeechBubble({ text: refusalContent });
+      if (!quietMode) {
+        void voiceManager.playMessage(refusalMsg.id, refusalContent);
+      }
       return;
     }
 
@@ -2196,7 +2235,9 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
     const taskCmdResult = parseAndExecuteTaskCommand(
       text,
       activeSchool,
-      currentTasksSnapshot
+      currentTasksSnapshot,
+      undefined,
+      isSpokenInput
     );
     if (taskCmdResult && taskCmdResult.handled) {
       try {
@@ -3864,24 +3905,8 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                           ) : (
                             <div className="space-y-2">
                               {/* Quick action buttons depending on draft step */}
-                              {msg.pendingPersonalTaskDraft.step === 'ask_target' && (
+                              {msg.pendingPersonalTaskDraft.step === 'clarifying_title' && (
                                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                                  <button
-                                    type="button"
-                                    disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('Для меня')}
-                                    className="px-2.5 py-1 rounded-lg bg-sky-50 text-sky-900 border border-sky-200 text-[11px] font-semibold hover:bg-sky-100 transition-colors cursor-pointer"
-                                  >
-                                    👤 Для меня
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={isPixelGenerating}
-                                    onClick={() => void executePixelChatRequest('Для специалиста')}
-                                    className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-[11px] font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
-                                  >
-                                    👥 Для специалиста
-                                  </button>
                                   <button
                                     type="button"
                                     disabled={isPixelGenerating}
@@ -4958,14 +4983,38 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                       <span>📝 Поставить задачу</span>
                     </button>
 
-                    <div className="relative inline-block">
+                    <div className="relative inline-flex items-center rounded-xl bg-sky-50 border border-sky-200/80 shadow-2xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSpecialistDropdownOpen(false);
+                          const wizardInit = createEmptySpecialistTaskWizardDraft(activeSchool);
+                          setPendingPersonalTaskDraft(wizardInit.draft);
+                          pendingPersonalTaskDraftRef.current = wizardInit.draft;
+                          pixelAgentCoordinator.setPendingPersonalTaskDraft(wizardInit.draft);
+
+                          const wizardMsg: CompanionMessage = {
+                            id: `comp-pixel-specwiz-${Date.now()}`,
+                            role: 'pixel',
+                            content: wizardInit.questionRu,
+                            createdAt: formatTimeOnly(),
+                            createdAtMs: Date.now(),
+                            schoolId: activeSchool,
+                            pendingPersonalTaskDraft: wizardInit.draft,
+                          };
+                          void onSaveCompanionMessages([...companionMessages, wizardMsg]);
+                        }}
+                        className="px-2.5 py-1 text-sky-900 hover:bg-sky-100 rounded-l-xl text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer inline-flex items-center gap-1"
+                      >
+                        <span>✉️ Написать специалисту</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => setSpecialistDropdownOpen((v) => !v)}
-                        className="px-2.5 py-1 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200/80 text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
+                        className="px-1.5 py-1 text-sky-700 hover:bg-sky-100 rounded-r-xl border-l border-sky-200/80 text-[11px] transition-colors cursor-pointer"
+                        title="Выбрать специалиста из списка"
                       >
-                        <span>✉️ Написать специалисту</span>
-                        <ChevronDown className="w-3 h-3 text-sky-700" />
+                        <ChevronDown className="w-3 h-3" />
                       </button>
 
                       {specialistDropdownOpen && (
@@ -4976,16 +5025,25 @@ export const PixelCompanion: React.FC<PixelCompanionProps> = ({
                               type="button"
                               onClick={() => {
                                 setSpecialistDropdownOpen(false);
-                                pixelAgentCoordinator.setPendingClarificationMode(mode, activeSchool);
-                                const promptMsg: CompanionMessage = {
-                                  id: `comp-pixel-spec-${Date.now()}`,
+                                const wizardInit = createEmptySpecialistTaskWizardDraft(
+                                  activeSchool,
+                                  mode,
+                                  AGENT_MODES[mode].shortTitle
+                                );
+                                setPendingPersonalTaskDraft(wizardInit.draft);
+                                pendingPersonalTaskDraftRef.current = wizardInit.draft;
+                                pixelAgentCoordinator.setPendingPersonalTaskDraft(wizardInit.draft);
+
+                                const wizardMsg: CompanionMessage = {
+                                  id: `comp-pixel-specwiz-${Date.now()}`,
                                   role: 'pixel',
-                                  content: `Что именно поручить ${SPECIALIST_NAMES_DATIVE_RU[mode]}? (Опишите задачу простыми словами, а я сформулирую её в четкий бизнес-текст и оформлю карточку поручения).`,
+                                  content: wizardInit.questionRu,
                                   createdAt: formatTimeOnly(),
                                   createdAtMs: Date.now(),
                                   schoolId: activeSchool,
+                                  pendingPersonalTaskDraft: wizardInit.draft,
                                 };
-                                void onSaveCompanionMessages([...companionMessages, promptMsg]);
+                                void onSaveCompanionMessages([...companionMessages, wizardMsg]);
                               }}
                               className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
                             >

@@ -884,27 +884,26 @@ export default function App() {
             const cmd = parseAndExecuteTaskCommand(
               msg.content,
               activeSchoolRef.current,
-              companionTasksRef.current
+              companionTasksRef.current,
+              undefined,
+              true // Voice mode: do not launch task wizard
             );
             if (cmd?.handled) {
-              if (cmd.personalTaskDraft) {
-                pixelAgentCoordinator.setPendingPersonalTaskDraft(
-                  cmd.personalTaskDraft
-                );
+              if (cmd.responseText && !cmd.personalTaskDraft && !cmd.createdTask && !cmd.updatedTasks) {
                 const replyMsg: CompanionMessage = {
-                  id: `comp-voice-wizstart-${Date.now()}`,
+                  id: `comp-voice-refuse-${Date.now()}`,
                   role: 'pixel',
                   content: cmd.responseText,
                   createdAt: formatTimeNow(new Date()),
                   createdAtMs: Date.now(),
                   schoolId: activeSchoolRef.current,
-                  pendingPersonalTaskDraft: cmd.personalTaskDraft,
                 };
                 await handleSaveCompanionMessages([
                   ...companionMessagesRef.current,
                   replyMsg,
                 ]);
               }
+
               if (cmd.createdTask) {
                 try {
                   await handleSaveCompanionTask(cmd.createdTask);
