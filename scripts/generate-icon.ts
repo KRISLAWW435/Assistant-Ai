@@ -178,16 +178,71 @@ export function generateAppIconIco(pngBuffer: Buffer): Buffer {
   return Buffer.concat([icoHeader, dirEntry, pngBuffer]);
 }
 
-export function writeDefaultIcons(targetDir: string): void {
+export function writeDefaultIcons(targetDir: string, force = false): void {
   fs.mkdirSync(targetDir, { recursive: true });
-  const png = generateAppIconPng(256, 256);
-  const ico = generateAppIconIco(png);
+  const icoPath = path.join(targetDir, 'icon.ico');
+  const pngPath = path.join(targetDir, 'icon.png');
 
-  fs.writeFileSync(path.join(targetDir, 'icon.png'), png);
-  fs.writeFileSync(path.join(targetDir, 'icon.ico'), ico);
-  console.log(`[IconGen] Successfully created icon.png and icon.ico in ${targetDir}`);
+  // If valid icon.ico or icon.png already exists, preserve it!
+  const icoExists = fs.existsSync(icoPath) && fs.statSync(icoPath).size > 0;
+  const pngExists = fs.existsSync(pngPath) && fs.statSync(pngPath).size > 0;
+
+  if (!force && icoExists && pngExists) {
+    console.log(`[IconGen] Preserving existing custom icons in ${targetDir}`);
+    return;
+  }
+
+  // Check alternative folder (build vs public) before generating from scratch
+  const rootDir = process.cwd();
+  const buildIco = path.join(rootDir, 'build', 'icon.ico');
+  const buildPng = path.join(rootDir, 'build', 'icon.png');
+  const publicIco = path.join(rootDir, 'public', 'icon.ico');
+  const publicPng = path.join(rootDir, 'public', 'icon.png');
+
+  if (!icoExists) {
+    if (fs.existsSync(buildIco) && fs.statSync(buildIco).size > 0) {
+      fs.copyFileSync(buildIco, icoPath);
+      console.log(`[IconGen] Copied existing icon.ico from build/ to ${targetDir}`);
+    } else if (fs.existsSync(publicIco) && fs.statSync(publicIco).size > 0) {
+      fs.copyFileSync(publicIco, icoPath);
+      console.log(`[IconGen] Copied existing icon.ico from public/ to ${targetDir}`);
+    }
+  }
+
+  if (!pngExists) {
+    if (fs.existsSync(buildPng) && fs.statSync(buildPng).size > 0) {
+      fs.copyFileSync(buildPng, pngPath);
+      console.log(`[IconGen] Copied existing icon.png from build/ to ${targetDir}`);
+    } else if (fs.existsSync(publicPng) && fs.statSync(publicPng).size > 0) {
+      fs.copyFileSync(publicPng, pngPath);
+      console.log(`[IconGen] Copied existing icon.png from public/ to ${targetDir}`);
+    }
+  }
+
+  // Only generate synthetic icons if still missing
+  const stillNeedsIco = !fs.existsSync(icoPath) || fs.statSync(icoPath).size === 0;
+  const stillNeedsPng = !fs.existsSync(pngPath) || fs.statSync(pngPath).size === 0;
+
+  if (force || stillNeedsIco || stillNeedsPng) {
+    const png = generateAppIconPng(256, 256);
+    const ico = generateAppIconIco(png);
+
+    if (force || stillNeedsPng) {
+      fs.writeFileSync(pngPath, png);
+    }
+    if (force || stillNeedsIco) {
+      fs.writeFileSync(icoPath, ico);
+    }
+    console.log(`[IconGen] Generated fallback icons in ${targetDir}`);
+  }
 }
 
-// Run directly when executed
-writeDefaultIcons(path.resolve(process.cwd(), 'build'));
-writeDefaultIcons(path.resolve(process.cwd(), 'public'));
+// Run only when directly invoked from CLI
+const isDirectRun =
+  typeof process !== 'undefined' &&
+  Boolean(process.argv[1]?.includes('generate-icon'));
+
+if (isDirectRun) {
+  writeDefaultIcons(path.resolve(process.cwd(), 'build'));
+  writeDefaultIcons(path.resolve(process.cwd(), 'public'));
+}

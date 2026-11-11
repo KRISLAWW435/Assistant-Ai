@@ -374,6 +374,7 @@ function getAppIconPath(): string {
     path.join(__dirname, '../public/icon.ico'),
     path.join(__dirname, '../public/icon.png'),
     path.join(app.getAppPath(), 'public', 'icon.ico'),
+    path.join(app.getAppPath(), 'public', 'icon.png'),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;

@@ -56,15 +56,43 @@ async function buildElectron() {
   });
   // ----------------------------------------
 
-  // Ensure build/ folder with icons is present and populated
+  // Ensure build/ folder with icons is present and populated from either build/ or public/
   const buildDir = path.join(rootDir, 'build');
+  const publicDir = path.join(rootDir, 'public');
+  if (!fs.existsSync(buildDir)) {
+    fs.mkdirSync(buildDir, { recursive: true });
+  }
+
   const iconIcoPath = path.join(buildDir, 'icon.ico');
   const iconPngPath = path.join(buildDir, 'icon.png');
+  const publicIcoPath = path.join(publicDir, 'icon.ico');
+  const publicPngPath = path.join(publicDir, 'icon.png');
+
+  // If icon is placed in public/ but missing in build/, take from public/
+  if (!fs.existsSync(iconIcoPath) && fs.existsSync(publicIcoPath)) {
+    fs.copyFileSync(publicIcoPath, iconIcoPath);
+    console.log('[BuildElectron] Sourced icon.ico from public/ -> build/');
+  }
+  if (!fs.existsSync(iconPngPath) && fs.existsSync(publicPngPath)) {
+    fs.copyFileSync(publicPngPath, iconPngPath);
+    console.log('[BuildElectron] Sourced icon.png from public/ -> build/');
+  }
+
+  // And vice-versa if icon is in build/ but missing in public/
+  if (!fs.existsSync(publicIcoPath) && fs.existsSync(iconIcoPath)) {
+    fs.copyFileSync(iconIcoPath, publicIcoPath);
+    console.log('[BuildElectron] Sourced icon.ico from build/ -> public/');
+  }
+  if (!fs.existsSync(publicPngPath) && fs.existsSync(iconPngPath)) {
+    fs.copyFileSync(iconPngPath, publicPngPath);
+    console.log('[BuildElectron] Sourced icon.png from build/ -> public/');
+  }
 
   if (!fs.existsSync(iconIcoPath) || !fs.existsSync(iconPngPath)) {
-    console.log('[BuildElectron] build/ icons not found. Generating default icons...');
+    console.log('[BuildElectron] No existing icon in build/ or public/. Generating fallback...');
     const { writeDefaultIcons } = await import('./generate-icon.ts');
     writeDefaultIcons(buildDir);
+    writeDefaultIcons(publicDir);
   }
 
   // Sync icons to dist-electron/build and dist/ (if exists) so relative lookups always succeed
